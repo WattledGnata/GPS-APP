@@ -53,9 +53,10 @@ class RealTimeDataActivity : ComponentActivity() {
     private lateinit var deviceName: String
     private lateinit var deviceAddress: String
     private var bluetoothGatt: BluetoothGatt? = null
-    private val TAG = "RealTimeDataActivity"
+    private val TAG = "RaceChronoGPS"
     private val RACECHRONO_SERVICE_UUID = "00001ff8-0000-1000-8000-00805f9b34fb"
-    private val RACECHRONO_CHARACTERISTIC_UUID = "00002ff8-0000-1000-8000-00805f9b34fb"
+    private val RACECHRONO_CHARACTERISTIC_UUID = "00000003-0000-1000-8000-00805f9b34fb"
+    private val RACECHRONO_TIME_CHARACTERISTIC_UUID = "00000004-0000-1000-8000-00805f9b34fb"
     
     // Real-time data state
     private val _realTimeData = mutableStateOf(RealTimeData())
@@ -70,6 +71,8 @@ class RealTimeDataActivity : ComponentActivity() {
 
         deviceName = intent.getStringExtra("device_name") ?: "Unknown Device"
         deviceAddress = intent.getStringExtra("device_address") ?: ""
+        
+        Log.d(TAG, "Starting RealTimeDataActivity for device: $deviceName ($deviceAddress)")
 
         setContent {
             // Add MaterialTheme with light color scheme for better visibility
@@ -97,8 +100,16 @@ class RealTimeDataActivity : ComponentActivity() {
 
     // BLE connection and GPS data handling
     private fun connectToDevice() {
+        Log.d(TAG, "Attempting to connect to device: $deviceAddress")
         val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        
+        if (!bluetoothAdapter.isEnabled) {
+            Log.e(TAG, "Bluetooth is not enabled, cannot connect to device")
+            return
+        }
+        
         val device = bluetoothAdapter.getRemoteDevice(deviceAddress)
+        Log.d(TAG, "Found remote device: ${device.name} (${device.address})")
         
         // Check BLUETOOTH_CONNECT permission
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -111,60 +122,108 @@ class RealTimeDataActivity : ComponentActivity() {
         Log.d(TAG, "Connecting to GATT server...")
     }
 
-    // Parse GPS data from BLE characteristic
+    // Parse GPS data from BLE characteristic (main characteristic - 00000003)
     private fun parseGpsData(data: ByteArray) {
-        if (data.size < 40) {
-            Log.d(TAG, "Invalid GPS data size: ${data.size}, expected 40")
+        Log.d(TAG, "Received GPS main data, size: ${data.size}")
+        
+        // According to ESP32 code, the main characteristic sends 20 bytes of data
+        if (data.size < 20) {
+            Log.d(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
             return
         }
 
-        // Check sync bits first
-        val syncBits = data[0].toInt() and 0x07
-        if (syncBits != 0x07) {
-            Log.d(TAG, "Invalid sync bits: $syncBits, expected 0x07")
-            return
+        // Extract sync bits (first 3 bits of first byte)
+        val syncBits = (data[0].toInt() shr 5) and 0x07
+        Log.d(TAG, "Sync bits: $syncBits")
+        
+        // Extract time since hour start (21 bits total)
+        val timeSinceHourStart = ((data[0].toInt() and 0x1F) shl 16) or 
+                                 (data[1].toInt() shl 8) or 
+                                 data[2].toInt()
+        Log.d(TAG, "Time since hour start: $timeSinceHourStart")
+        
+        // Extract fix quality and satellite count from 4th byte
+        val fixQuality = (data[3].toInt() shr 6) and 0x03
+        val satellites = data[3].toInt() and 0x3F
+        
+        Log.d(TAG, "Raw data[3]: ${data[3]}, satellites: $satellites, fixQuality: $fixQuality")
+        
+        // Extract latitude (4 bytes, big endian)
+        val latitude = ((data[4].toInt() and 0xFF) shl 24) or 
+                      ((data[5].toInt() and 0xFF) shl 16) or 
+                      ((data[6].toInt() and 0xFF) shl 8) or 
+                       (data[7].toInt() and 0xFF)
+        
+        // Extract longitude (4 bytes, big endian)
+        val longitude = ((data[8].toInt() and 0xFF) shl 24) or 
+                       ((data[9].toInt() and 0xFF) shl 16) or 
+                       ((data[10].toInt() and 0xFF) shl 8) or 
+                        (data[11].toInt() and 0xFF)
+        
+        // Extract altitude (2 bytes, big endian)
+        val altitude = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
+        val altitudeMeters = altitude / 10.0 - 500.0 // Convert to meters with offset
+        
+        // Extract speed (2 bytes, big endian)
+        val speed = ((data[14].toInt() and 0xFF) shl 8) or (data[15].toInt() and 0xFF)
+        val speedKmh = if (speed < 0x8000) {
+            // Speed is in km/h * 100
+            speed / 100.0
+        } else {
+            // Speed is in km/h * 10
+            (speed and 0x7FFF) / 10.0
         }
-
-        // Extract data according to RaceChrono_ESP32_M9N.ino protocol
-        // Use proper little-endian byte order for all multi-byte values
-        val timeSinceHourStart = ByteBuffer.wrap(data, 1, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        val fixQuality = (data[5].toInt() shr 6) and 0x03
-        val satellites = data[5].toInt() and 0x3F
         
-        // Latitude and Longitude in 1e-7 degrees
-        val latitude = ByteBuffer.wrap(data, 6, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        val longitude = ByteBuffer.wrap(data, 10, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        // Extract bearing (2 bytes, big endian)
+        val bearing = ((data[16].toInt() and 0xFF) shl 8) or (data[17].toInt() and 0xFF)
+        val bearingDegrees = bearing / 100.0
         
-        // Altitude in centimeters
-        val altitude = ByteBuffer.wrap(data, 14, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        
-        // Speed in centimeters per second
-        val speed = ByteBuffer.wrap(data, 18, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        
-        // Heading in degrees * 100
-        val heading = ByteBuffer.wrap(data, 22, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        
-        // Dilution of precision values in centimeters
-        val hdop = ByteBuffer.wrap(data, 26, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt()
-        val vdop = ByteBuffer.wrap(data, 28, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt()
-        val accuracy = ByteBuffer.wrap(data, 30, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt()
+        // Extract HDOP and VDOP (1 byte each)
+        val hdop = data[18].toInt() / 10.0 // HDOP * 10
+        val vdop = data[19].toInt() / 10.0 // VDOP * 10
         
         // Update real-time data state
         _realTimeData.value = _realTimeData.value.copy(
             time = System.currentTimeMillis(),
             satelliteCount = satellites,
-            dop = String.format("%.2f", hdop / 100.0),
+            dop = String.format("%.2f", hdop),
             positionType = fixQuality,
-            azimuth = heading / 100,
-            altitude = String.format("%.1f", altitude / 100.0),
-            altitudeError = String.format("%.2f", vdop / 100.0),
+            azimuth = bearingDegrees.toInt(),
+            altitude = String.format("%.1f", altitudeMeters),
+            altitudeError = String.format("%.2f", vdop),
             latitude = String.format("%.7f", latitude / 10000000.0),
             longitude = String.format("%.7f", longitude / 10000000.0),
             // Calculate elapsed time, distance, and speed from GPS data
             elapsedTime = "0.0",
             distance = "0.0",
-            speed = (speed / 100) // Convert to km/h: (cm/s / 100) * 3.6 = km/h
+            speed = speedKmh.toInt()
         )
+    }
+    
+    // Parse GPS time data from BLE characteristic (time characteristic - 00000004)
+    private fun parseGpsTimeData(data: ByteArray) {
+        Log.d(TAG, "Received GPS time data, size: ${data.size}")
+        
+        // According to ESP32 code, the time characteristic sends 3 bytes of data
+        if (data.size < 3) {
+            Log.d(TAG, "Invalid GPS time data size: ${data.size}, expected 3")
+            return
+        }
+        
+        // Extract sync bits (first 3 bits of first byte)
+        val syncBits = (data[0].toInt() shr 5) and 0x07
+        
+        // Extract date and hour (21 bits total)
+        val dateAndHour = ((data[0].toInt() and 0x1F) shl 16) or 
+                         (data[1].toInt() shl 8) or 
+                          data[2].toInt()
+        
+        // Log the parsed time data
+        Log.d(TAG, "GPS time data - Sync bits: $syncBits, DateAndHour: $dateAndHour")
+        
+        // dateAndHour is calculated as: (Year-2000)*8928 + (Month-1)*744 + (Day-1)*24 + Hour
+        // We can optionally decode this to actual date/time if needed
+        // For now, we'll just log it for debugging purposes
     }
 
 
@@ -224,34 +283,68 @@ class RealTimeDataActivity : ComponentActivity() {
                     return
                 }
                 
-                service?.let { 
-                    val characteristic = it.getCharacteristic(java.util.UUID.fromString(RACECHRONO_CHARACTERISTIC_UUID))
-                    if (characteristic == null) {
-                        Log.e(TAG, "RaceChrono characteristic not found")
+                // Enable notifications for both GPS main characteristic and GPS time characteristic
+                // as defined in the ESP32 code
+                
+                // 1. Enable GPS main characteristic (00000003)
+                val mainCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_CHARACTERISTIC_UUID))
+                if (mainCharacteristic != null) {
+                    Log.d(TAG, "Found GPS main characteristic: ${mainCharacteristic.uuid}")
+                    
+                    if (ActivityCompat.checkSelfPermission(
+                            this@RealTimeDataActivity,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
                         return
                     }
                     
-                    characteristic?.let {char ->
-                        if (ActivityCompat.checkSelfPermission(
-                                this@RealTimeDataActivity,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
-                            return
-                        }
-                        
-                        // Enable notifications for the GPS characteristic
-                        val success = gatt.setCharacteristicNotification(char, true)
-                        Log.d(TAG, "Enabled notifications: $success")
-                        
-                        // Also enable the descriptor for notifications
-                        val descriptor = char.getDescriptor(java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                        if (descriptor != null) {
-                            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                            val descSuccess = gatt.writeDescriptor(descriptor)
-                            Log.d(TAG, "Wrote notification descriptor: $descSuccess")
-                        }
+                    // Enable notifications for GPS main characteristic
+                    val mainSuccess = gatt.setCharacteristicNotification(mainCharacteristic, true)
+                    Log.d(TAG, "Enabled main characteristic notifications: $mainSuccess")
+                    
+                    // Enable descriptor for notifications
+                    val mainDescriptor = mainCharacteristic.getDescriptor(java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    if (mainDescriptor != null) {
+                        mainDescriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        val mainDescSuccess = gatt.writeDescriptor(mainDescriptor)
+                        Log.d(TAG, "Wrote main characteristic descriptor: $mainDescSuccess")
+                    }
+                } else {
+                    Log.e(TAG, "GPS main characteristic not found with UUID: $RACECHRONO_CHARACTERISTIC_UUID")
+                }
+                
+                // 2. Enable GPS time characteristic (00000004)
+                val timeCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_TIME_CHARACTERISTIC_UUID))
+                if (timeCharacteristic != null) {
+                    Log.d(TAG, "Found GPS time characteristic: ${timeCharacteristic.uuid}")
+                    
+                    if (ActivityCompat.checkSelfPermission(
+                            this@RealTimeDataActivity,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
+                        return
+                    }
+                    
+                    // Enable notifications for GPS time characteristic
+                    val timeSuccess = gatt.setCharacteristicNotification(timeCharacteristic, true)
+                    Log.d(TAG, "Enabled time characteristic notifications: $timeSuccess")
+                    
+                    // Enable descriptor for notifications
+                    val timeDescriptor = timeCharacteristic.getDescriptor(java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    if (timeDescriptor != null) {
+                        timeDescriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        val timeDescSuccess = gatt.writeDescriptor(timeDescriptor)
+                        Log.d(TAG, "Wrote time characteristic descriptor: $timeDescSuccess")
+                    }
+                } else {
+                    Log.e(TAG, "GPS time characteristic not found with UUID: $RACECHRONO_TIME_CHARACTERISTIC_UUID")
+                    Log.e(TAG, "Available characteristics in service ${service.uuid}:")
+                    service.characteristics.forEach { char ->
+                        Log.e(TAG, "  - ${char.uuid}, properties: ${char.properties}")
                     }
                 }
             } else {
@@ -261,10 +354,22 @@ class RealTimeDataActivity : ComponentActivity() {
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             super.onCharacteristicChanged(gatt, characteristic)
-            // Parse the received data and update UI
+            // Parse the received data and update UI based on characteristic type
             val data = characteristic.value
-            Log.d(TAG, "Characteristic changed, data size: ${data.size}")
-            parseGpsData(data)
+            val charUuid = characteristic.uuid.toString()
+            
+            Log.d(TAG, "Characteristic changed: $charUuid, data size: ${data.size}")
+            Log.d(TAG, "Data: ${data.joinToString { String.format("%02X", it) }}")
+            
+            if (charUuid.equals(RACECHRONO_CHARACTERISTIC_UUID, ignoreCase = true)) {
+                // This is the GPS main characteristic (00000003)
+                // It contains the full GPS data (20 bytes)
+                parseGpsData(data)
+            } else if (charUuid.equals(RACECHRONO_TIME_CHARACTERISTIC_UUID, ignoreCase = true)) {
+                // This is the GPS time characteristic (00000004)
+                // It contains time data (3 bytes) including sync bits and date/hour
+                parseGpsTimeData(data)
+            }
         }
     }
 

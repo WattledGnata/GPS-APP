@@ -27,6 +27,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        private const val TAG = "RaceChronoGPS"
+    }
+    
     private val repository = BluetoothDeviceRepository(application)
     private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val bluetoothLeScanner: BluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner
@@ -50,15 +54,19 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
             if (result.scanRecord?.serviceUuids?.contains(raceChronoServiceUuid) == true) {
                 val device = result.device
                 val deviceModel = BluetoothDeviceModel(device.name, device.address)
+                Log.d(TAG, "Discovered RaceChrono device: ${device.name} (${device.address})")
                 
                 viewModelScope.launch {
                     updateDiscoveredDevices(deviceModel)
                 }
+            } else {
+                Log.v(TAG, "Discovered non-RaceChrono device: ${result.device.name} (${result.device.address})")
             }
         }
 
         override fun onScanFailed(errorCode: Int) {
             super.onScanFailed(errorCode)
+            Log.e(TAG, "BLE scan failed with error code: $errorCode")
             _scanState.value = ScanState.Error("Scan failed with error code: $errorCode")
         }
 
@@ -82,8 +90,10 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun loadSavedDevices() {
+        Log.d(TAG, "Loading saved devices...")
         viewModelScope.launch(Dispatchers.IO) {
             val devices = repository.getSavedDevices()
+            Log.d(TAG, "Loaded ${devices.size} saved devices")
             withContext(Dispatchers.Main) {
                 _savedDevices.value = devices
             }
@@ -91,10 +101,12 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun startScan() {
+        Log.d(TAG, "Starting BLE scan...")
         _scanState.value = ScanState.Scanning
         _discoveredDevices.value = emptyList()
 
         if (!bluetoothAdapter.isEnabled) {
+            Log.e(TAG, "Bluetooth is not enabled, cannot start scan")
             _scanState.value = ScanState.Error("Bluetooth is not enabled")
             return
         }
@@ -107,6 +119,9 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         
+        Log.d(TAG, "Scan filters: $scanFilters")
+        Log.d(TAG, "Scan settings: $scanSettings")
+        
         // Start BLE scan with filter
         bluetoothLeScanner.startScan(scanFilters, scanSettings, scanCallback)
 
@@ -118,23 +133,29 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun stopScan() {
+        Log.d(TAG, "Stopping BLE scan...")
         bluetoothLeScanner.stopScan(scanCallback)
         // Ensure LiveData update happens on main thread
         viewModelScope.launch(Dispatchers.Main) {
             _scanState.value = ScanState.Idle
+            Log.d(TAG, "BLE scan stopped")
         }
     }
 
     fun saveDevice(device: BluetoothDeviceModel) {
+        Log.d(TAG, "Saving device: ${device.name} (${device.address})")
         viewModelScope.launch(Dispatchers.IO) {
             repository.addDevice(device)
+            Log.d(TAG, "Device saved successfully")
             loadSavedDevices()
         }
     }
 
     fun removeDevice(address: String) {
+        Log.d(TAG, "Removing device with address: $address")
         viewModelScope.launch(Dispatchers.IO) {
             repository.removeDevice(address)
+            Log.d(TAG, "Device removed successfully")
             loadSavedDevices()
         }
     }
@@ -146,9 +167,12 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
      * @return true if the address is valid (non-empty), false otherwise
      */
     fun isDeviceAvailable(address: String): Boolean {
+        Log.d(TAG, "Checking device availability for address: $address")
         // For BLE devices, we don't need to check bonded devices
         // Just validate the address format
-        return address.isNotEmpty() && address.matches(Regex("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", RegexOption.IGNORE_CASE))
+        val isValid = address.isNotEmpty() && address.matches(Regex("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", RegexOption.IGNORE_CASE))
+        Log.d(TAG, "Device availability check result: $isValid")
+        return isValid
     }
 
     private fun updateDiscoveredDevices(newDevice: BluetoothDeviceModel) {
@@ -156,6 +180,7 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
         if (!currentDevices.any { it.address == newDevice.address }) {
             val updatedDevices = currentDevices + newDevice
             _discoveredDevices.value = updatedDevices
+            Log.d(TAG, "Updated discovered devices list, now has ${updatedDevices.size} devices")
         }
     }
 
