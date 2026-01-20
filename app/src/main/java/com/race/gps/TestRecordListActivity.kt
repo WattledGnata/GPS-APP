@@ -4,7 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -51,6 +53,11 @@ class TestRecordListActivity : ComponentActivity() {
                         val intent = Intent(this, TestRecordDetailActivity::class.java)
                         intent.putExtra("record_id", record.id)
                         startActivity(intent)
+                    },
+                    onRecordLongClick = { record ->
+                        val intent = Intent(this, AccelerationCurveActivity::class.java)
+                        intent.putExtra("test_record", record)
+                        startActivity(intent)
                     }
                 )
             }
@@ -62,7 +69,8 @@ class TestRecordListActivity : ComponentActivity() {
 @Composable
 fun TestRecordListScreen(
     mainViewModel: MainViewModel,
-    onRecordClick: (TestRecord) -> Unit
+    onRecordClick: (TestRecord) -> Unit,
+    onRecordLongClick: (TestRecord) -> Unit
 ) {
     val testRecords by mainViewModel.testRecords.observeAsState(emptyList())
 
@@ -100,7 +108,8 @@ fun TestRecordListScreen(
                     items(testRecords) {
                         TestRecordItem(
                             record = it,
-                            onClick = { onRecordClick(it) }
+                            onClick = { onRecordClick(it) },
+                            onLongClick = { onRecordLongClick(it) }
                         )
                     }
                 }
@@ -109,16 +118,22 @@ fun TestRecordListScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TestRecordItem(
     record: TestRecord,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         elevation = CardDefaults.cardElevation(4.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

@@ -61,6 +61,13 @@ class RealTimeDataActivity : ComponentActivity() {
     // Real-time data state
     private val _realTimeData = mutableStateOf(RealTimeData())
     val realTimeData by _realTimeData
+    
+    // GPS frequency calculation - using time window counting method
+    private val gpsDataTimestamps = mutableListOf<Long>()
+    private val timeWindowMs = 1000 // 1 second time window
+    private var lastFrequencyUpdateTime = 0L
+    private val updateIntervalMs = 500 // Update frequency display every 500ms
+    private var gpsFrequency = 0.0 // Current GPS frequency in Hz
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,6 +189,24 @@ class RealTimeDataActivity : ComponentActivity() {
         val hdop = data[18].toInt() / 10.0 // HDOP * 10
         val vdop = data[19].toInt() / 10.0 // VDOP * 10
         
+        // Calculate GPS frequency using time window counting method
+        val currentTime = System.currentTimeMillis()
+        
+        // Add current timestamp to list
+        gpsDataTimestamps.add(currentTime)
+        
+        // Remove timestamps older than timeWindowMs
+        val cutoffTime = currentTime - timeWindowMs
+        gpsDataTimestamps.removeAll { it < cutoffTime }
+        
+        // Update frequency display at a lower rate to avoid excessive UI updates
+        if (currentTime - lastFrequencyUpdateTime >= updateIntervalMs) {
+            // Calculate frequency as number of data points in the time window
+            gpsFrequency = gpsDataTimestamps.size.toDouble()
+            lastFrequencyUpdateTime = currentTime
+            Log.d(TAG, "GPS frequency calculated: $gpsFrequency Hz, data points in window: ${gpsDataTimestamps.size}")
+        }
+        
         // Update real-time data state
         _realTimeData.value = _realTimeData.value.copy(
             time = System.currentTimeMillis(),
@@ -196,7 +221,8 @@ class RealTimeDataActivity : ComponentActivity() {
             // Calculate elapsed time, distance, and speed from GPS data
             elapsedTime = "0.0",
             distance = "0.0",
-            speed = speedKmh.toInt()
+            speed = speedKmh.toInt(),
+            frequency = String.format("%.1f", gpsFrequency) // Update GPS frequency
         )
     }
     
@@ -535,7 +561,7 @@ fun RealTimeDataScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Fourth row: Elapsed Time, Distance, Speed
+                // Fourth row: Elapsed Time, Distance, Speed, GPS Frequency
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataCard(
                         title = "经过时间",
@@ -553,6 +579,12 @@ fun RealTimeDataScreen(
                         title = "车辆速度",
                         value = realTimeData.speed.toString(),
                         subtitle = "kph",
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                    )
+                    DataCard(
+                        title = "GPS频率",
+                        value = realTimeData.frequency,
+                        subtitle = "Hz",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -620,7 +652,8 @@ data class RealTimeData(
     val longitude: String = "0.0",
     val elapsedTime: String = "0.0",
     val distance: String = "0.0",
-    val speed: Int = 0
+    val speed: Int = 0,
+    val frequency: String = "0.0" // GPS update frequency in Hz
 ) {
     val formattedTime: String
         get() {
