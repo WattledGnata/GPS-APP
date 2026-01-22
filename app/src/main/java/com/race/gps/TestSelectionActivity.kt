@@ -84,7 +84,7 @@ fun TestSelectionScreen(
     val tabItems = listOf("加速测试", "刹车测试")
     
     // Get test records from ViewModel
-    val testRecords by mainViewModel.testRecords.observeAsState(emptyList())
+    val testRecords by mainViewModel.testRecords.collectAsState(emptyList())
     
     // Filter test records by current tab
     val filteredRecords = testRecords.filter {
@@ -193,7 +193,7 @@ fun TestSelectionScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         items(filteredRecords) {
-                            TestRecordItem(record = it)
+                            SimpleTestRecordItem(record = it)
                         }
                     }
                 }
@@ -329,6 +329,36 @@ fun BrakingTestsTab(
                 .padding(bottom = 12.dp)
         ) {
             Text(text = "自定义刹车测试")
+        }
+    }
+}
+
+@Composable
+fun SimpleTestRecordItem(record: com.race.gps.data.model.TestRecord) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = record.testType,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "${record.carModel} - ${record.result}",
+                fontSize = 14.sp,
+                color = Color.Gray
+            )
+            Text(
+                text = record.timestamp.toString(),
+                fontSize = 12.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

@@ -72,7 +72,7 @@ fun TestRecordListScreen(
     onRecordClick: (TestRecord) -> Unit,
     onRecordLongClick: (TestRecord) -> Unit
 ) {
-    val testRecords by mainViewModel.testRecords.observeAsState(emptyList())
+    val testRecords by mainViewModel.testRecords.collectAsState(emptyList())
 
     Scaffold(
         topBar = {

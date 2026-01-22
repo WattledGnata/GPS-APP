@@ -149,7 +149,7 @@ fun BluetoothDeviceScreen(
     val scanState by bluetoothViewModel.scanState.observeAsState()
     val discoveredDevices by bluetoothViewModel.discoveredDevices.observeAsState(emptyList())
     val savedDevices by bluetoothViewModel.savedDevices.observeAsState(emptyList())
-    val testRecords by mainViewModel.testRecords.observeAsState(emptyList())
+    val testRecords by mainViewModel.testRecords.collectAsState(emptyList())
     
     // Track if user has triggered search
     var showSearchResults by remember { mutableStateOf(false) }
@@ -254,48 +254,15 @@ fun BluetoothDeviceScreen(
                     .fillMaxWidth()
                     .height(200.dp)
             ) {
-                items(items = testRecords) {
-                    TestRecordItem(record = it)
+                items(testRecords) {
+                    SimpleTestRecordItem(record = it)
                 }
             }
         }
     }
 }
 
-@Composable
-fun TestRecordItem(record: com.race.gps.data.model.TestRecord) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-            .clickable {
-                // Handle test record click - Navigate to detail page
-                // This functionality will be implemented later
-                // For now, just show a toast
-            }
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = record.testType,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "${record.carModel} - ${record.result}",
-                fontSize = 14.sp,
-                color = Color.Gray
-            )
-            Text(
-                text = record.timestamp.toString(),
-                fontSize = 12.sp,
-                color = Color.Gray,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-    }
-}
+
 
 @Composable
 fun DiscoveredDeviceItem(

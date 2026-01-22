@@ -2,8 +2,6 @@ package com.race.gps.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.race.gps.data.model.AccelerationDataPoint
 import com.race.gps.data.model.CarModel
@@ -12,6 +10,8 @@ import com.race.gps.data.repository.CarModelRepository
 import com.race.gps.data.repository.TestRecordRepository
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -24,12 +24,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val carModelRepository = CarModelRepository(application)
 
     // Test records
-    private val _testRecords = MutableLiveData<List<TestRecord>>(emptyList())
-    val testRecords: LiveData<List<TestRecord>> = _testRecords
+    private val _testRecords = MutableStateFlow<List<TestRecord>>(emptyList())
+    val testRecords: StateFlow<List<TestRecord>> = _testRecords
 
     // Car models
-    private val _carModels = MutableLiveData<List<CarModel>>(emptyList())
-    val carModels: LiveData<List<CarModel>> = _carModels
+    private val _carModels = MutableStateFlow<List<CarModel>>(emptyList())
+    val carModels: StateFlow<List<CarModel>> = _carModels
     
     init {
         // Load initial test records and car models
@@ -39,28 +39,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Observe test records flow for real-time updates
         viewModelScope.launch {
             testRecordRepository.testRecordsFlow.collect {
-                _testRecords.postValue(it)
+                _testRecords.value = it
                 Log.d(TAG, "Test records updated via flow: ${it.size} records")
             }
         }
     }
     
     // Test state management
-    private val _currentSpeed = MutableLiveData(0.0)
-    val currentSpeed: LiveData<Double> = _currentSpeed
+    private val _currentSpeed = MutableStateFlow(0.0)
+    val currentSpeed: StateFlow<Double> = _currentSpeed
     
-    private val _isTestRunning = MutableLiveData(false)
-    val isTestRunning: LiveData<Boolean> = _isTestRunning
+    private val _isTestRunning = MutableStateFlow(false)
+    val isTestRunning: StateFlow<Boolean> = _isTestRunning
     
-    private val _testResult = MutableLiveData("Not Started")
-    val testResult: LiveData<String> = _testResult
+    private val _testResult = MutableStateFlow("Not Started")
+    val testResult: StateFlow<String> = _testResult
     
-    private val _isTestReady = MutableLiveData(false)
-    val isTestReady: LiveData<Boolean> = _isTestReady
+    private val _isTestReady = MutableStateFlow(false)
+    val isTestReady: StateFlow<Boolean> = _isTestReady
     
     // Acceleration data collection
-    private val _accelerationDataPoints = MutableLiveData<List<AccelerationDataPoint>>(emptyList())
-    val accelerationDataPoints: LiveData<List<AccelerationDataPoint>> = _accelerationDataPoints
+    private val _accelerationDataPoints = MutableStateFlow<List<AccelerationDataPoint>>(emptyList())
+    val accelerationDataPoints: StateFlow<List<AccelerationDataPoint>> = _accelerationDataPoints
     
     // Test states
     enum class TestState {
@@ -86,7 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     // Method to update GPS speed
     fun updateCurrentSpeed(speed: Double) {
-        _currentSpeed.postValue(speed)
+        _currentSpeed.value = speed
         
         // Only process test logic if test is running
         if (_isTestRunning.value == true) {
@@ -99,7 +99,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         testState = TestState.RUNNING
                         testStartTimeGps = System.currentTimeMillis()
                         isTestStartedFromValidSpeed = true
-                        _testResult.postValue("Running...")
+                        _testResult.value = "Running..."
                         Log.d(TAG, "Test started at valid speed: $speed km/h, target speed: ${currentTargetSpeed}km/h")
                     }
                 }
@@ -109,7 +109,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val elapsedTime = (currentTime - testStartTimeGps) / 1000.0 // Convert to seconds
                     val dataPoint = AccelerationDataPoint(time = elapsedTime, speed = speed)
                     accelerationDataPointsList.add(dataPoint)
-                    _accelerationDataPoints.postValue(accelerationDataPointsList.toList())
+                    _accelerationDataPoints.value = accelerationDataPointsList.toList()
                     
                     // 检查是否达到目标速度（所有测试类型通用）
                     if (!isSpeedThresholdReached && speed >= currentTargetSpeed) {
@@ -184,10 +184,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentStartSpeed = startSpeed
         currentTargetSpeed = targetSpeed
         
-        // Update LiveData
-        _isTestRunning.postValue(true)
-        _testResult.postValue("等待起始速度...")
-        _accelerationDataPoints.postValue(emptyList())
+        // Update StateFlow
+        _isTestRunning.value = true
+        _testResult.value = "等待起始速度..."
+        _accelerationDataPoints.value = emptyList()
         Log.d(TAG, "Test initialized, waiting for start speed: ${currentStartSpeed}km/h, target speed: ${currentTargetSpeed}km/h")
     }
     
@@ -221,11 +221,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.d(TAG, "Stopping test: $currentTestType")
         
         testEndTimeGps = System.currentTimeMillis()
-        _isTestRunning.postValue(false)
+        _isTestRunning.value = false
         
         // Calculate test result
         val testResult = calculateTestResult()
-        _testResult.postValue(testResult)
+        _testResult.value = testResult
         
         // Save test record if we have a valid result
         if (testResult != "No valid data" && currentCarModel != null) {
@@ -284,7 +284,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     // Method to update test ready state
     fun updateTestReady(isReady: Boolean) {
-        _isTestReady.postValue(isReady)
+        _isTestReady.value = isReady
     }
 
     fun loadTestRecords() {

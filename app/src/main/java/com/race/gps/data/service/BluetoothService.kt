@@ -52,6 +52,12 @@ interface BluetoothService {
         fun onSpeedUpdated(speedKmh: Double)
         
         /**
+         * GPS卫星数量更新回调
+         * @param satelliteCount 卫星数量
+         */
+        fun onSatelliteCountUpdated(satelliteCount: Int)
+        
+        /**
          * 错误回调
          * @param errorMessage 错误信息
          */

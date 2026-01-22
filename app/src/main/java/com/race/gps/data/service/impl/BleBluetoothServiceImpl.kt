@@ -262,14 +262,20 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
         Log.d(TAG, "GPS time updated: $gpsTime ms, syncBits: $syncBits, dateAndHour: $dateAndHour")
     }
     
-    // Parse GPS main data to get speed
+    // Parse GPS main data to get speed and satellite count
     private fun parseGpsMainData(data: ByteArray) {
         if (data.size < 20) {
             Log.e(TAG, "Invalid GPS main data size: ${data.size}")
             return
         }
         
-        // Extract speed from GPS main data (bytes 15-16, big endian)
+        // Extract fix quality and satellite count from 4th byte (same as RealTimeDataActivity)
+        val fixQuality = (data[3].toInt() shr 6) and 0x03
+        val satelliteCount = data[3].toInt() and 0x3F // 低6位是卫星数
+        
+        Log.d(TAG, "Raw data[3]: ${data[3]}, satellites: $satelliteCount, fixQuality: $fixQuality")
+        
+        // Extract speed (2 bytes, big endian - same as RealTimeDataActivity)
         val speed = ((data[14].toInt() and 0xFF) shl 8) or (data[15].toInt() and 0xFF)
         val speedKmh = if (speed < 0x8000) {
             // Speed is in km/h * 100
@@ -281,7 +287,9 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
         
         // Notify speed update
         callback?.onSpeedUpdated(speedKmh)
+        // Notify satellite count update
+        callback?.onSatelliteCountUpdated(satelliteCount)
         
-        Log.d(TAG, "Current speed from GPS: ${speedKmh}km/h")
+        Log.d(TAG, "Current speed from GPS: ${speedKmh}km/h, satellites: $satelliteCount")
     }
 }

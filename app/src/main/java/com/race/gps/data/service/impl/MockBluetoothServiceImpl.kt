@@ -1,5 +1,6 @@
 package com.race.gps.data.service.impl
 
+import android.content.Context
 import android.util.Log
 import com.race.gps.data.service.BluetoothService
 import kotlinx.coroutines.*
@@ -7,7 +8,7 @@ import kotlinx.coroutines.*
 /**
  * Mock蓝牙服务实现类，用于测试，模拟蓝牙连接和数据传输
  */
-class MockBluetoothServiceImpl : BluetoothService {
+class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
     
     companion object {
         private const val TAG = "RaceChronoGPS"
@@ -73,17 +74,30 @@ class MockBluetoothServiceImpl : BluetoothService {
         
         scope.launch {
             while (isSimulationRunning) {
-                // 模拟车辆加速过程
-                // 0-100km/h加速测试，每秒增加10km/h
-                currentSpeed += 0.5 // 每100ms增加0.5km/h
-                
-                // 限制最大速度为120km/h
-                if (currentSpeed > 120.0) {
-                    currentSpeed = 0.0 // 重置速度，模拟下一次测试
+                // 模拟真实车辆速度变化，而不是简单累加
+                when {
+                    // 模拟怠速状态（测试未开始时）
+                    !isTestReady -> {
+                        // 保持低速波动（0-5 km/h）
+                        currentSpeed = Math.random() * 5.0
+                    }
+                    // 模拟加速过程（测试进行中）
+                    else -> {
+                        // 模拟真实加速曲线：开始慢，然后快，最后逐渐变慢
+                        // 使用正弦函数模拟加速曲线（0-100 km/h）
+                        val time = System.currentTimeMillis() % 10000 // 10秒一个周期
+                        val progress = (time.toDouble() / 10000) * Math.PI
+                        currentSpeed = (Math.sin(progress) * 50 + 50) // 0-100 km/h
+                    }
                 }
+                
+                // 模拟卫星数量，范围5-20
+                val satelliteCount = (Math.random() * 15 + 5).toInt()
                 
                 // 通知速度更新
                 callback?.onSpeedUpdated(currentSpeed)
+                // 通知卫星数量更新
+                callback?.onSatelliteCountUpdated(satelliteCount)
                 
                 // 等待下一次更新
                 delay(SIMULATION_DELAY)

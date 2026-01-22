@@ -162,17 +162,26 @@ class BluetoothDeviceViewModel(application: Application) : AndroidViewModel(appl
 
     /**
      * Check if a Bluetooth device with the given address exists and is reachable
-     * For BLE devices, we don't need to check bonded devices as they don't require pairing
+     * For BLE devices, we need to check if the device is currently discovered or saved
      * @param address Bluetooth MAC address to check
-     * @return true if the address is valid (non-empty), false otherwise
+     * @return true if the device is available, false otherwise
      */
     fun isDeviceAvailable(address: String): Boolean {
         Log.d(TAG, "Checking device availability for address: $address")
-        // For BLE devices, we don't need to check bonded devices
-        // Just validate the address format
-        val isValid = address.isNotEmpty() && address.matches(Regex("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", RegexOption.IGNORE_CASE))
-        Log.d(TAG, "Device availability check result: $isValid")
-        return isValid
+        
+        // First validate the address format
+        val isValidAddress = address.isNotEmpty() && address.matches(Regex("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", RegexOption.IGNORE_CASE))
+        
+        // Check if the device is currently discovered or saved and recently discovered
+        val isDeviceDiscovered = _discoveredDevices.value?.any { it.address == address } ?: false
+        val isDeviceSaved = _savedDevices.value?.any { it.address == address } ?: false
+        
+        // For BLE devices, we should only allow devices that are currently discovered or recently discovered
+        // This prevents users from accessing the test page with devices that are not actually available
+        val isAvailable = isValidAddress && (isDeviceDiscovered || (isDeviceSaved && _discoveredDevices.value?.isNotEmpty() == true))
+        
+        Log.d(TAG, "Device availability check result: $isAvailable (isValidAddress: $isValidAddress, isDeviceDiscovered: $isDeviceDiscovered, isDeviceSaved: $isDeviceSaved)")
+        return isAvailable
     }
 
     private fun updateDiscoveredDevices(newDevice: BluetoothDeviceModel) {
