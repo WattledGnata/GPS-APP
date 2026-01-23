@@ -137,7 +137,7 @@ fun TestScreen(
     val bluetoothData by bluetoothManager.bluetoothDataFlow.collectAsState()
     
     // Update ViewModel with bluetooth data
-    LaunchedEffect(bluetoothData) {
+    LaunchedEffect(bluetoothData.speed) {
         mainViewModel.updateCurrentSpeed(bluetoothData.speed)
         mainViewModel.updateTestReady(bluetoothData.isTestReady)
     }
