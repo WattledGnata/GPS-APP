@@ -1,15 +1,7 @@
 package com.race.gps
 
-import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +26,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,30 +37,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import com.race.gps.data.model.BluetoothData
+import com.race.gps.service.BluetoothManager
 
 class RealTimeDataActivity : ComponentActivity() {
     private lateinit var deviceName: String
-    private lateinit var deviceAddress: String
-    private var bluetoothGatt: BluetoothGatt? = null
     private val TAG = "RaceChronoGPS"
-    private val RACECHRONO_SERVICE_UUID = "00001ff8-0000-1000-8000-00805f9b34fb"
-    private val RACECHRONO_CHARACTERISTIC_UUID = "00000003-0000-1000-8000-00805f9b34fb"
-    private val RACECHRONO_TIME_CHARACTERISTIC_UUID = "00000004-0000-1000-8000-00805f9b34fb"
     
-    // Real-time data state
-    private val _realTimeData = mutableStateOf(RealTimeData())
-    val realTimeData by _realTimeData
-    
-    // GPS frequency calculation - using time window counting method
-    private val gpsDataTimestamps = mutableListOf<Long>()
-    private val timeWindowMs = 1000 // 1 second time window
-    private var lastFrequencyUpdateTime = 0L
-    private val updateIntervalMs = 500 // Update frequency display every 500ms
-    private var gpsFrequency = 0.0 // Current GPS frequency in Hz
+    // Bluetooth Manager
+    private lateinit var bluetoothManager: BluetoothManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,9 +56,11 @@ class RealTimeDataActivity : ComponentActivity() {
         window.statusBarColor = android.graphics.Color.BLACK
 
         deviceName = intent.getStringExtra("device_name") ?: "Unknown Device"
-        deviceAddress = intent.getStringExtra("device_address") ?: ""
         
-        Log.d(TAG, "Starting RealTimeDataActivity for device: $deviceName ($deviceAddress)")
+        Log.d(TAG, "Starting RealTimeDataActivity")
+
+        // Initialize Bluetooth Manager
+        bluetoothManager = BluetoothManager.getInstance(this)
 
         setContent {
             // Add MaterialTheme with light color scheme for better visibility
@@ -93,329 +74,16 @@ class RealTimeDataActivity : ComponentActivity() {
                     onSurface = Color.Black
                 )
             ) {
+                // Observe bluetooth data
+                val bluetoothData by bluetoothManager.bluetoothDataFlow.collectAsState()
+                
                 RealTimeDataScreen(
                     deviceName = deviceName,
-                    realTimeData = realTimeData,
+                    bluetoothData = bluetoothData,
                     onBackClick = { finish() }
                 )
             }
         }
-
-        // Connect to BLE device to get real GPS data
-        connectToDevice()
-    }
-
-    // BLE connection and GPS data handling
-    private fun connectToDevice() {
-        Log.d(TAG, "Attempting to connect to device: $deviceAddress")
-        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        
-        if (!bluetoothAdapter.isEnabled) {
-            Log.e(TAG, "Bluetooth is not enabled, cannot connect to device")
-            return
-        }
-        
-        val device = bluetoothAdapter.getRemoteDevice(deviceAddress)
-        Log.d(TAG, "Found remote device: ${device.name} (${device.address})")
-        
-        // Check BLUETOOTH_CONNECT permission
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.d(TAG, "BLUETOOTH_CONNECT permission not granted")
-            return
-        }
-        
-        // Connect to GATT server
-        bluetoothGatt = device.connectGatt(this, false, gattCallback)
-        Log.d(TAG, "Connecting to GATT server...")
-    }
-
-    // Parse GPS data from BLE characteristic (main characteristic - 00000003)
-    private fun parseGpsData(data: ByteArray) {
-        Log.d(TAG, "Received GPS main data, size: ${data.size}")
-        
-        // According to ESP32 code, the main characteristic sends 20 bytes of data
-        if (data.size < 20) {
-            Log.d(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
-            return
-        }
-
-        // Extract sync bits (first 3 bits of first byte)
-        val syncBits = (data[0].toInt() shr 5) and 0x07
-        Log.d(TAG, "Sync bits: $syncBits")
-        
-        // Extract time since hour start (21 bits total)
-        val timeSinceHourStart = ((data[0].toInt() and 0x1F) shl 16) or 
-                                 (data[1].toInt() shl 8) or 
-                                 data[2].toInt()
-        Log.d(TAG, "Time since hour start: $timeSinceHourStart")
-        
-        // Extract fix quality and satellite count from 4th byte
-        val fixQuality = (data[3].toInt() shr 6) and 0x03
-        val satellites = data[3].toInt() and 0x3F
-        
-        Log.d(TAG, "Raw data[3]: ${data[3]}, satellites: $satellites, fixQuality: $fixQuality")
-        
-        // Extract latitude (4 bytes, big endian)
-        val latitude = ((data[4].toInt() and 0xFF) shl 24) or 
-                      ((data[5].toInt() and 0xFF) shl 16) or 
-                      ((data[6].toInt() and 0xFF) shl 8) or 
-                       (data[7].toInt() and 0xFF)
-        
-        // Extract longitude (4 bytes, big endian)
-        val longitude = ((data[8].toInt() and 0xFF) shl 24) or 
-                       ((data[9].toInt() and 0xFF) shl 16) or 
-                       ((data[10].toInt() and 0xFF) shl 8) or 
-                        (data[11].toInt() and 0xFF)
-        
-        // Extract altitude (2 bytes, big endian)
-        val altitude = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
-        val altitudeMeters = altitude / 10.0 - 500.0 // Convert to meters with offset
-        
-        // Extract speed (2 bytes, big endian)
-        val speed = ((data[14].toInt() and 0xFF) shl 8) or (data[15].toInt() and 0xFF)
-        val speedKmh = if (speed < 0x8000) {
-            // Speed is in km/h * 100
-            speed / 100.0
-        } else {
-            // Speed is in km/h * 10
-            (speed and 0x7FFF) / 10.0
-        }
-        
-        // Extract bearing (2 bytes, big endian)
-        val bearing = ((data[16].toInt() and 0xFF) shl 8) or (data[17].toInt() and 0xFF)
-        val bearingDegrees = bearing / 100.0
-        
-        // Extract HDOP and VDOP (1 byte each)
-        val hdop = data[18].toInt() / 10.0 // HDOP * 10
-        val vdop = data[19].toInt() / 10.0 // VDOP * 10
-        
-        // Calculate GPS frequency using time window counting method
-        val currentTime = System.currentTimeMillis()
-        
-        // Add current timestamp to list
-        gpsDataTimestamps.add(currentTime)
-        
-        // Remove timestamps older than timeWindowMs
-        val cutoffTime = currentTime - timeWindowMs
-        gpsDataTimestamps.removeAll { it < cutoffTime }
-        
-        // Update frequency display at a lower rate to avoid excessive UI updates
-        if (currentTime - lastFrequencyUpdateTime >= updateIntervalMs) {
-            // Calculate frequency as number of data points in the time window
-            gpsFrequency = gpsDataTimestamps.size.toDouble()
-            lastFrequencyUpdateTime = currentTime
-            Log.d(TAG, "GPS frequency calculated: $gpsFrequency Hz, data points in window: ${gpsDataTimestamps.size}")
-        }
-        
-        // Update real-time data state
-        _realTimeData.value = _realTimeData.value.copy(
-            time = System.currentTimeMillis(),
-            satelliteCount = satellites,
-            dop = String.format("%.2f", hdop),
-            positionType = fixQuality,
-            azimuth = bearingDegrees.toInt(),
-            altitude = String.format("%.1f", altitudeMeters),
-            altitudeError = String.format("%.2f", vdop),
-            latitude = String.format("%.7f", latitude / 10000000.0),
-            longitude = String.format("%.7f", longitude / 10000000.0),
-            // Calculate elapsed time, distance, and speed from GPS data
-            elapsedTime = "0.0",
-            distance = "0.0",
-            speed = speedKmh.toInt(),
-            frequency = String.format("%.1f", gpsFrequency) // Update GPS frequency
-        )
-    }
-    
-    // Parse GPS time data from BLE characteristic (time characteristic - 00000004)
-    private fun parseGpsTimeData(data: ByteArray) {
-        Log.d(TAG, "Received GPS time data, size: ${data.size}")
-        
-        // According to ESP32 code, the time characteristic sends 3 bytes of data
-        if (data.size < 3) {
-            Log.d(TAG, "Invalid GPS time data size: ${data.size}, expected 3")
-            return
-        }
-        
-        // Extract sync bits (first 3 bits of first byte)
-        val syncBits = (data[0].toInt() shr 5) and 0x07
-        
-        // Extract date and hour (21 bits total)
-        val dateAndHour = ((data[0].toInt() and 0x1F) shl 16) or 
-                         (data[1].toInt() shl 8) or 
-                          data[2].toInt()
-        
-        // Log the parsed time data
-        Log.d(TAG, "GPS time data - Sync bits: $syncBits, DateAndHour: $dateAndHour")
-        
-        // dateAndHour is calculated as: (Year-2000)*8928 + (Month-1)*744 + (Day-1)*24 + Hour
-        // We can optionally decode this to actual date/time if needed
-        // For now, we'll just log it for debugging purposes
-    }
-
-
-    // Bluetooth GATT callback for real data
-    private val gattCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            super.onConnectionStateChange(gatt, status, newState)
-            Log.d(TAG, "Connection state changed: status=$status, newState=$newState")
-            
-            // Check if connection failed due to an error
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "Connection error: status=$status")
-                return
-            }
-            
-            if (newState == BluetoothGatt.STATE_CONNECTED) {
-                Log.d(TAG, "Connected to GATT server")
-                if (ActivityCompat.checkSelfPermission(
-                        this@RealTimeDataActivity,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
-                    return
-                }
-                // Discover services to find our GPS characteristic
-                gatt.discoverServices()
-            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                Log.d(TAG, "Disconnected from GATT server")
-                // Update UI to show disconnected state
-                runOnUiThread {
-                    Toast.makeText(this@RealTimeDataActivity, "蓝牙连接已断开", Toast.LENGTH_SHORT).show()
-                }
-            } else if (newState == BluetoothGatt.STATE_CONNECTING) {
-                Log.d(TAG, "Connecting to GATT server...")
-            } else if (newState == BluetoothGatt.STATE_DISCONNECTING) {
-                Log.d(TAG, "Disconnecting from GATT server...")
-            }
-        }
-
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            super.onServicesDiscovered(gatt, status)
-            Log.d(TAG, "Services discovered: status=$status")
-            
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                // Log all discovered services for debugging
-                gatt.services.forEach { service ->
-                    Log.d(TAG, "Discovered service: ${service.uuid}")
-                    service.characteristics.forEach { char ->
-                        Log.d(TAG, "  Characteristic: ${char.uuid}, properties: ${char.properties}")
-                    }
-                }
-                
-                val service = gatt.getService(java.util.UUID.fromString(RACECHRONO_SERVICE_UUID))
-                if (service == null) {
-                    Log.e(TAG, "RaceChrono service not found")
-                    return
-                }
-                
-                // Enable notifications for both GPS main characteristic and GPS time characteristic
-                // as defined in the ESP32 code
-                
-                // 1. Enable GPS main characteristic (00000003)
-                val mainCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_CHARACTERISTIC_UUID))
-                if (mainCharacteristic != null) {
-                    Log.d(TAG, "Found GPS main characteristic: ${mainCharacteristic.uuid}")
-                    
-                    if (ActivityCompat.checkSelfPermission(
-                            this@RealTimeDataActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
-                        return
-                    }
-                    
-                    // Enable notifications for GPS main characteristic
-                    val mainSuccess = gatt.setCharacteristicNotification(mainCharacteristic, true)
-                    Log.d(TAG, "Enabled main characteristic notifications: $mainSuccess")
-                    
-                    // Enable descriptor for notifications
-                    val mainDescriptor = mainCharacteristic.getDescriptor(java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                    if (mainDescriptor != null) {
-                        mainDescriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        val mainDescSuccess = gatt.writeDescriptor(mainDescriptor)
-                        Log.d(TAG, "Wrote main characteristic descriptor: $mainDescSuccess")
-                    }
-                } else {
-                    Log.e(TAG, "GPS main characteristic not found with UUID: $RACECHRONO_CHARACTERISTIC_UUID")
-                }
-                
-                // 2. Enable GPS time characteristic (00000004)
-                val timeCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_TIME_CHARACTERISTIC_UUID))
-                if (timeCharacteristic != null) {
-                    Log.d(TAG, "Found GPS time characteristic: ${timeCharacteristic.uuid}")
-                    
-                    if (ActivityCompat.checkSelfPermission(
-                            this@RealTimeDataActivity,
-                            Manifest.permission.BLUETOOTH_CONNECT
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Log.e(TAG, "BLUETOOTH_CONNECT permission not granted")
-                        return
-                    }
-                    
-                    // Enable notifications for GPS time characteristic
-                    val timeSuccess = gatt.setCharacteristicNotification(timeCharacteristic, true)
-                    Log.d(TAG, "Enabled time characteristic notifications: $timeSuccess")
-                    
-                    // Enable descriptor for notifications
-                    val timeDescriptor = timeCharacteristic.getDescriptor(java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                    if (timeDescriptor != null) {
-                        timeDescriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        val timeDescSuccess = gatt.writeDescriptor(timeDescriptor)
-                        Log.d(TAG, "Wrote time characteristic descriptor: $timeDescSuccess")
-                    }
-                } else {
-                    Log.e(TAG, "GPS time characteristic not found with UUID: $RACECHRONO_TIME_CHARACTERISTIC_UUID")
-                    Log.e(TAG, "Available characteristics in service ${service.uuid}:")
-                    service.characteristics.forEach { char ->
-                        Log.e(TAG, "  - ${char.uuid}, properties: ${char.properties}")
-                    }
-                }
-            } else {
-                Log.e(TAG, "Failed to discover services: status=$status")
-            }
-        }
-
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            super.onCharacteristicChanged(gatt, characteristic)
-            // Parse the received data and update UI based on characteristic type
-            val data = characteristic.value
-            val charUuid = characteristic.uuid.toString()
-            
-            Log.d(TAG, "Characteristic changed: $charUuid, data size: ${data.size}")
-            Log.d(TAG, "Data: ${data.joinToString { String.format("%02X", it) }}")
-            
-            if (charUuid.equals(RACECHRONO_CHARACTERISTIC_UUID, ignoreCase = true)) {
-                // This is the GPS main characteristic (00000003)
-                // It contains the full GPS data (20 bytes)
-                parseGpsData(data)
-            } else if (charUuid.equals(RACECHRONO_TIME_CHARACTERISTIC_UUID, ignoreCase = true)) {
-                // This is the GPS time characteristic (00000004)
-                // It contains time data (3 bytes) including sync bits and date/hour
-                parseGpsTimeData(data)
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
-            return
-        }
-        bluetoothGatt?.close()
     }
 }
 
@@ -423,9 +91,16 @@ class RealTimeDataActivity : ComponentActivity() {
 @Composable
 fun RealTimeDataScreen(
     deviceName: String,
-    realTimeData: RealTimeData,
+    bluetoothData: BluetoothData,
     onBackClick: () -> Unit
 ) {
+    // Helper to format time
+    val formattedTime = remember(bluetoothData.time) {
+        val date = java.util.Date(bluetoothData.time)
+        val sdf = java.text.SimpleDateFormat("HH:mm:ss\nyyyy/MM/dd", java.util.Locale.getDefault())
+        sdf.format(date)
+    }
+
     Scaffold(
         topBar = {
             androidx.compose.material3.TopAppBar(
@@ -475,9 +150,9 @@ fun RealTimeDataScreen(
                         color = Color.Gray
                     )
                     Text(
-                        text = "已连接，已锁定 ${realTimeData.satelliteCount} 颗卫星",
+                        text = if (bluetoothData.isConnected) "已连接，已锁定 ${bluetoothData.satelliteCount} 颗卫星" else "未连接",
                         fontSize = 14.sp,
-                        color = Color.Green,
+                        color = if (bluetoothData.isConnected) Color.Green else Color.Red,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
@@ -499,17 +174,17 @@ fun RealTimeDataScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataCard(
                         title = "时间",
-                        value = realTimeData.formattedTime,
+                        value = formattedTime,
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "卫星数量",
-                        value = realTimeData.satelliteCount.toString(),
+                        value = bluetoothData.satelliteCount.toString(),
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "坐标误差",
-                        value = realTimeData.dop,
+                        value = bluetoothData.dop,
                         subtitle = "DOP",
                         modifier = Modifier.weight(1f)
                     )
@@ -521,17 +196,17 @@ fun RealTimeDataScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataCard(
                         title = "定位类型",
-                        value = realTimeData.positionType.toString(),
+                        value = bluetoothData.positionType.toString(),
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "方位角",
-                        value = realTimeData.azimuth.toString(),
+                        value = bluetoothData.azimuth.toString(),
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "海拔",
-                        value = realTimeData.altitude,
+                        value = bluetoothData.altitude,
                         subtitle = "m",
                         modifier = Modifier.weight(1f)
                     )
@@ -543,18 +218,18 @@ fun RealTimeDataScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataCard(
                         title = "海拔误差",
-                        value = realTimeData.altitudeError,
+                        value = bluetoothData.altitudeError,
                         subtitle = "DOP",
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "纬度",
-                        value = realTimeData.latitude,
+                        value = bluetoothData.latitude,
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "经度",
-                        value = realTimeData.longitude,
+                        value = bluetoothData.longitude,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -565,25 +240,25 @@ fun RealTimeDataScreen(
                 Row(modifier = Modifier.fillMaxWidth()) {
                     DataCard(
                         title = "经过时间",
-                        value = realTimeData.elapsedTime,
+                        value = bluetoothData.elapsedTime,
                         subtitle = "s",
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "路程",
-                        value = realTimeData.distance,
+                        value = bluetoothData.distance,
                         subtitle = "km",
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "车辆速度",
-                        value = realTimeData.speed.toString(),
+                        value = String.format("%.1f", bluetoothData.speed),
                         subtitle = "kph",
                         modifier = Modifier.weight(1f).padding(end = 8.dp)
                     )
                     DataCard(
                         title = "GPS频率",
-                        value = realTimeData.frequency,
+                        value = bluetoothData.frequency,
                         subtitle = "Hz",
                         modifier = Modifier.weight(1f)
                     )
@@ -638,27 +313,4 @@ fun DataCard(
             }
         }
     }
-}
-
-data class RealTimeData(
-    val time: Long = System.currentTimeMillis(),
-    val satelliteCount: Int = 0,
-    val dop: String = "0.00",
-    val positionType: Int = 0,
-    val azimuth: Int = 0,
-    val altitude: String = "0.0",
-    val altitudeError: String = "0.00",
-    val latitude: String = "0.0",
-    val longitude: String = "0.0",
-    val elapsedTime: String = "0.0",
-    val distance: String = "0.0",
-    val speed: Int = 0,
-    val frequency: String = "0.0" // GPS update frequency in Hz
-) {
-    val formattedTime: String
-        get() {
-            val date = java.util.Date(time)
-            val sdf = java.text.SimpleDateFormat("HH:mm:ss\nyyyy/MM/dd", java.util.Locale.getDefault())
-            return sdf.format(date)
-        }
 }

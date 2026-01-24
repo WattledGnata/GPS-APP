@@ -1,6 +1,6 @@
 package com.race.gps.data.service
 
-import com.race.gps.data.service.BluetoothService.BluetoothCallback
+import com.race.gps.data.model.BluetoothData
 
 /**
  * Bluetooth服务接口，定义所有蓝牙相关功能
@@ -46,16 +46,10 @@ interface BluetoothService {
         fun onTestReady(isReady: Boolean)
         
         /**
-         * GPS速度更新回调
-         * @param speedKmh 速度（km/h）
+         * GPS数据更新回调
+         * @param data 包含最新GPS数据的BluetoothData对象
          */
-        fun onSpeedUpdated(speedKmh: Double)
-        
-        /**
-         * GPS卫星数量更新回调
-         * @param satelliteCount 卫星数量
-         */
-        fun onSatelliteCountUpdated(satelliteCount: Int)
+        fun onGpsDataUpdated(data: BluetoothData)
         
         /**
          * 错误回调

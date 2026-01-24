@@ -50,10 +50,6 @@
             android:name=".TestRecordDetailActivity"
             android:exported="false" />
         
-        <!-- Bluetooth Service -->
-        <service
-            android:name=".service.BluetoothForegroundService"
-            android:exported="false" />
     </application>
 
 </manifest>

@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,7 +47,9 @@ class TestActivity : ComponentActivity() {
     }
     
     private lateinit var mainViewModel: MainViewModel
-    private val bluetoothManager = BluetoothManager.getInstance()
+    
+    // Bluetooth Manager
+    private lateinit var bluetoothManager: BluetoothManager
     
     // Test state
     private lateinit var testType: String
@@ -67,11 +68,10 @@ class TestActivity : ComponentActivity() {
             ViewModelProvider.AndroidViewModelFactory.getInstance(application)
         )[MainViewModel::class.java]
         
-        // 绑定到蓝牙服务
-        bluetoothManager.bindService(this)
+        // Initialize Bluetooth Manager
+        bluetoothManager = BluetoothManager.getInstance(this)
         
-        // 连接到蓝牙设备
-        bluetoothManager.connectToDevice(deviceAddress)
+        // Note: Connection logic is handled in MainActivity and shared via singleton manager
 
         setContent {
             // Add MaterialTheme with light color scheme for better visibility
@@ -98,11 +98,7 @@ class TestActivity : ComponentActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
-        // 断开蓝牙连接
-        bluetoothManager.disconnect()
-        // 取消绑定服务
-        bluetoothManager.unbindService(this)
-        Log.d(TAG, "Bluetooth service closed")
+        // No service unbinding needed
     }
 }
 
@@ -113,7 +109,7 @@ fun TestScreen(
     deviceName: String = "Unknown Device",
     deviceAddress: String = "",
     mainViewModel: MainViewModel = MainViewModel(androidx.compose.ui.platform.LocalContext.current.applicationContext as android.app.Application),
-    bluetoothManager: BluetoothManager = BluetoothManager.getInstance()
+    bluetoothManager: BluetoothManager = BluetoothManager.getInstance(androidx.compose.ui.platform.LocalContext.current)
 ) {
     val carModels by mainViewModel.carModels.collectAsState(emptyList())
     var selectedCarModel by remember { mutableStateOf<CarModel?>(null) }

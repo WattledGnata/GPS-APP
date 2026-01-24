@@ -27,12 +27,16 @@ import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import com.race.gps.data.model.BluetoothDeviceModel
+import com.race.gps.service.BluetoothManager
 import com.race.gps.viewmodel.BluetoothDeviceViewModel
 import com.race.gps.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothViewModel: BluetoothDeviceViewModel
     private lateinit var mainViewModel: MainViewModel
+    
+    // Bluetooth Manager
+    private lateinit var bluetoothManager: BluetoothManager
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -74,6 +78,9 @@ class MainActivity : ComponentActivity() {
             ViewModelProvider.AndroidViewModelFactory.getInstance(application)
         )[MainViewModel::class.java]
 
+        // Initialize Bluetooth Manager
+        bluetoothManager = BluetoothManager.getInstance(this)
+
         // Check permissions when app starts
         checkPermissions()
 
@@ -97,6 +104,9 @@ class MainActivity : ComponentActivity() {
                     onDeviceSelect = { device ->
                         // Check if device is available before proceeding
                         if (bluetoothViewModel.isDeviceAvailable(device.address)) {
+                            // Connect to device via BluetoothManager
+                            bluetoothManager.connectToDevice(device.address)
+                            
                             val intent = Intent(this, TestSelectionActivity::class.java)
                             intent.putExtra("device_name", device.name)
                             intent.putExtra("device_address", device.address)
@@ -261,8 +271,6 @@ fun BluetoothDeviceScreen(
         }
     }
 }
-
-
 
 @Composable
 fun DiscoveredDeviceItem(

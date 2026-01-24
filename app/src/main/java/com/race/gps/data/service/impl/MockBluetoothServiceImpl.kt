@@ -2,6 +2,7 @@ package com.race.gps.data.service.impl
 
 import android.content.Context
 import android.util.Log
+import com.race.gps.data.model.BluetoothData
 import com.race.gps.data.service.BluetoothService
 import kotlinx.coroutines.*
 
@@ -24,6 +25,9 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
     private var currentSpeed = 0.0
     private var isTestReady = false
     
+    // Current Data State
+    private var currentData = BluetoothData()
+    
     // 协程作用域，用于管理模拟数据的协程
     private val scope = CoroutineScope(Dispatchers.IO)
     
@@ -32,12 +36,14 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
         
         // 立即模拟连接成功
         isConnected = true
+        currentData = currentData.copy(isConnected = true)
         callback?.onConnectionStateChanged(true)
         
         // 延迟模拟测试准备就绪
         scope.launch {
             delay(1000) // 1秒后模拟准备就绪
             isTestReady = true
+            currentData = currentData.copy(isTestReady = true)
             callback?.onTestReady(true)
             
             // 开始模拟GPS数据传输
@@ -50,6 +56,7 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
         isConnected = false
         isTestReady = false
         isSimulationRunning = false
+        currentData = currentData.copy(isConnected = false, isTestReady = false)
         callback?.onConnectionStateChanged(false)
     }
     
@@ -94,10 +101,20 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
                 // 模拟卫星数量，范围5-20
                 val satelliteCount = (Math.random() * 15 + 5).toInt()
                 
-                // 通知速度更新
-                callback?.onSpeedUpdated(currentSpeed)
-                // 通知卫星数量更新
-                callback?.onSatelliteCountUpdated(satelliteCount)
+                // Update current data
+                currentData = currentData.copy(
+                    speed = currentSpeed,
+                    satelliteCount = satelliteCount,
+                    time = System.currentTimeMillis(),
+                    frequency = "10.0", // Mock 10Hz
+                    dop = "1.0",
+                    altitude = "100.0",
+                    latitude = "0.0",
+                    longitude = "0.0"
+                )
+                
+                // 通知数据更新
+                callback?.onGpsDataUpdated(currentData)
                 
                 // 等待下一次更新
                 delay(SIMULATION_DELAY)
@@ -111,7 +128,8 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
      */
     fun setMockSpeed(speed: Double) {
         currentSpeed = speed
-        callback?.onSpeedUpdated(currentSpeed)
+        currentData = currentData.copy(speed = speed)
+        callback?.onGpsDataUpdated(currentData)
     }
     
     /**
@@ -121,7 +139,8 @@ class MockBluetoothServiceImpl(context: Context? = null) : BluetoothService {
         currentSpeed = 0.0
         isTestReady = false
         isSimulationRunning = false
-        callback?.onSpeedUpdated(currentSpeed)
+        currentData = currentData.copy(speed = 0.0, isTestReady = false)
+        callback?.onGpsDataUpdated(currentData)
         callback?.onTestReady(false)
     }
 }
