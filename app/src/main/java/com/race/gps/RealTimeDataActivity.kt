@@ -40,6 +40,14 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.race.gps.data.model.BluetoothData
 import com.race.gps.service.BluetoothManager
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import com.race.gps.utils.AppPreferences
+import androidx.compose.foundation.clickable
 
 class RealTimeDataActivity : ComponentActivity() {
     private lateinit var deviceName: String
@@ -87,6 +95,80 @@ class RealTimeDataActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun SettingsDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedMode by remember { 
+        mutableStateOf(AppPreferences.getMockMode(context)) 
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("设置数据源") },
+        text = {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedMode = AppPreferences.MOCK_MODE_REAL }
+                        .padding(vertical = 8.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedMode == AppPreferences.MOCK_MODE_REAL,
+                        onClick = { selectedMode = AppPreferences.MOCK_MODE_REAL }
+                    )
+                    Text("真实蓝牙设备 (Real Device)")
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedMode = AppPreferences.MOCK_MODE_PROTOCOL }
+                        .padding(vertical = 8.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedMode == AppPreferences.MOCK_MODE_PROTOCOL,
+                        onClick = { selectedMode = AppPreferences.MOCK_MODE_PROTOCOL }
+                    )
+                    Text("底层协议模拟 (Protocol Mock)")
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedMode = AppPreferences.MOCK_MODE_SIMPLE }
+                        .padding(vertical = 8.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedMode == AppPreferences.MOCK_MODE_SIMPLE,
+                        onClick = { selectedMode = AppPreferences.MOCK_MODE_SIMPLE }
+                    )
+                    Text("简单数据模拟 (Simple Mock)")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    AppPreferences.setMockMode(context, selectedMode)
+                    onDismiss()
+                    android.widget.Toast.makeText(context, "设置已保存，请重启应用生效", android.widget.Toast.LENGTH_LONG).show()
+                }
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RealTimeDataScreen(
@@ -94,6 +176,12 @@ fun RealTimeDataScreen(
     bluetoothData: BluetoothData,
     onBackClick: () -> Unit
 ) {
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    if (showSettingsDialog) {
+        SettingsDialog(onDismiss = { showSettingsDialog = false })
+    }
+
     // Helper to format time
     val formattedTime = remember(bluetoothData.time) {
         val date = java.util.Date(bluetoothData.time)
@@ -116,7 +204,7 @@ fun RealTimeDataScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { /* TODO: Implement settings */ }) {
+                    IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(
                             imageVector = Icons.Filled.Settings,
                             contentDescription = "Settings"

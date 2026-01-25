@@ -24,7 +24,6 @@ import kotlinx.coroutines.launch
 class BluetoothManager private constructor(context: Context) {
     companion object {
         private const val TAG = "RaceChronoGPS"
-        private const val USE_MOCK_BLUETOOTH = false // 设置为true使用mock蓝牙服务，false使用真实BLE服务
         
         // 单例实例
         @Volatile
@@ -54,13 +53,24 @@ class BluetoothManager private constructor(context: Context) {
     
     init {
         Log.d(TAG, "Initializing BluetoothManager")
+        
+        // Get configuration from preferences
+        val mockMode = com.race.gps.utils.AppPreferences.getMockMode(context)
+        
         // 初始化BluetoothService
-        bluetoothService = if (USE_MOCK_BLUETOOTH) {
-            Log.d(TAG, "Using Mock Bluetooth Service")
-            MockBluetoothServiceImpl(context)
-        } else {
-            Log.d(TAG, "Using Real BLE Bluetooth Service")
-            BleBluetoothServiceImpl(context)
+        bluetoothService = when (mockMode) {
+            com.race.gps.utils.AppPreferences.MOCK_MODE_PROTOCOL -> {
+                Log.d(TAG, "Using Protocol Mock Bluetooth Service")
+                com.race.gps.data.service.impl.ProtocolMockBluetoothServiceImpl(context)
+            }
+            com.race.gps.utils.AppPreferences.MOCK_MODE_SIMPLE -> {
+                Log.d(TAG, "Using Simple Mock Bluetooth Service")
+                MockBluetoothServiceImpl(context)
+            }
+            else -> {
+                Log.d(TAG, "Using Real BLE Bluetooth Service")
+                BleBluetoothServiceImpl(context)
+            }
         }
         
         // 设置回调
