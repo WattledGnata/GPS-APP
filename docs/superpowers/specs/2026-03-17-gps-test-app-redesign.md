@@ -1,8 +1,8 @@
 # GPS测试应用重新设计规范
 
 **日期**: 2026-03-17
-**版本**: 1.0
-**状态**: 待审查
+**版本**: 1.1
+**状态**: 已修订
 
 ## 1. 概述
 
@@ -126,6 +126,7 @@ class BluetoothDataSource(
    - 起始条件：速度在 95-105 km/h 范围内
    - 结束条件：速度 <= 1 km/h
    - 记录：总时间、总距离、减速度曲线、10km/h分段数据
+   - **计时点修正**：使用历史数据后处理，在数据明显越过起始/结束阈值后，回溯历史数据点找到精确的计时点
 
 **二期功能**（待实现）：
 - 60-160加速测试
@@ -195,20 +196,17 @@ sealed class TestState {
 - 按车型分组统计
 - 按时间段统计
 
-### 3.4 海报分享
+### 3.4 数据分享
 
-**功能**：
+**一期实现**：
+- 用户可以使用手机截屏功能分享测试结果
+- 结果详情页面设计为适合截屏的布局
+
+**二期功能**（待实现）：
 - 生成精美的测试结果海报图片
 - 支持多种模板风格（简约、运动、科技）
 - 包含关键数据和速度曲线
 - 保存到相册或直接分享
-
-**海报内容**：
-- 测试类型和成绩（大标题）
-- 速度曲线图
-- 关键指标（时间、距离、加速度）
-- 车型信息
-- 测试日期
 
 ## 4. 数据模型设计
 
@@ -226,8 +224,29 @@ data class GpsData(
     val satelliteCount: Int,
     val hdop: Double,
     val vdop: Double,
-    val frequency: Double        // Hz
-)
+    val frequency: Double,       // Hz
+    val isConnected: Boolean,    // 连接状态
+    val isTestReady: Boolean,    // 测试就绪状态
+    val errorMessage: String?    // 错误信息
+) {
+    companion object {
+        val Empty = GpsData(
+            timestamp = 0L,
+            speed = 0.0,
+            latitude = 0.0,
+            longitude = 0.0,
+            altitude = 0.0,
+            bearing = 0.0,
+            satelliteCount = 0,
+            hdop = 0.0,
+            vdop = 0.0,
+            frequency = 0.0,
+            isConnected = false,
+            isTestReady = false,
+            errorMessage = null
+        )
+    }
+}
 ```
 
 **TestTemplate（测试模板）**：
@@ -285,16 +304,70 @@ data class SpeedSegment(
 )
 ```
 
-### 4.2 数据库设计
+### 4.2 数据持久化策略
 
-**利用已有的Room架构**：
-- TestRecordEntity（测试记录）
-- AccelerationDataPointEntity（数据点）
-- CarModelEntity（车型）
+**分离存储原则**：
+- **原始GPS数据点**：保存到本地文件（JSON格式）
+  - 路径：`/data/data/com.race.gps/files/test_data/{testId}.json`
+  - 包含完整的GPS数据点序列（10Hz采样，数据量大）
+  - 用于后处理分析和曲线绘制
 
-**新增字段**：
-- TestRecordEntity 添加 `testTemplateId` 字段
-- 添加 `avgAcceleration`、`maxAcceleration` 字段
+- **测试元数据**：保存到Room数据库
+  - 测试基本信息（ID、类型、车型、时间戳）
+  - 统计结果（总时间、总距离、加速度）
+  - 分段数据（10km/h速度段）
+  - 数据文件路径引用
+
+**数据库设计**：
+
+利用已有的Room架构，调整字段：
+
+```kotlin
+@Entity(tableName = "test_records")
+data class TestRecordEntity(
+    @PrimaryKey val id: String,
+    val testTemplateId: String,      // 新增：测试模板ID
+    val testType: String,
+    val carModel: String,
+    val deviceName: String,
+    val deviceAddress: String,
+    val timestamp: Long,
+
+    // 统计结果
+    val totalTime: Double,           // 新增：总时间（秒）
+    val totalDistance: Double,       // 新增：总距离（米）
+    val avgAcceleration: Double,     // 新增：平均加速度（G）
+    val maxAcceleration: Double,     // 新增：最大加速度（G）
+
+    // 数据文件引用
+    val dataFilePath: String         // 新增：原始数据文件路径
+)
+
+// 分段数据单独存储
+@Entity(
+    tableName = "speed_segments",
+    foreignKeys = [ForeignKey(
+        entity = TestRecordEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["testRecordId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class SpeedSegmentEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val testRecordId: String,
+    val startSpeed: Int,
+    val endSpeed: Int,
+    val time: Double,
+    val distance: Double
+)
+```
+
+**数据访问流程**：
+1. 查询测试列表：从数据库读取元数据
+2. 查看测试详情：从数据库读取统计结果 + 从文件读取原始数据点
+3. 绘制曲线：从文件读取原始数据点
+4. 删除测试：删除数据库记录 + 删除数据文件
 
 ## 5. UI/UX设计
 
@@ -401,14 +474,20 @@ val viewModelModule = module {
 
 **必须实现**：
 - ✅ 重构Bluetooth层（BluetoothDataSource + 单一数据源）
+- ✅ 统一数据模型（BluetoothData → GpsData）
 - ✅ 实现GpsDataViewModel（单例共享）
 - ✅ 实现测试状态机（Waiting → Running → Completed）
 - ✅ 实现0-100加速测试
-- ✅ 实现100-0刹车测试
+- ✅ 实现100-0刹车测试（含计时点后处理修正）
 - ✅ 实现结果计算（总时间、距离、分段数据）
+- ✅ 实现数据持久化（文件+数据库分离存储）
 - ✅ 实现UI页面（设备连接、测试类型选择、测试执行、结果详情）
 - ✅ 实现历史记录（列表、筛选、删除）
-- ✅ 实现海报生成和分享
+
+**不包含**：
+- ❌ 海报生成（用户使用截屏）
+- ❌ 数据导出（CSV/Excel）
+- ❌ 云端同步
 
 ### 7.2 二期功能（增强）
 
@@ -417,6 +496,7 @@ val viewModelModule = module {
 - ⏸️ 离散点修复（GPS信号丢失、速度跳变）
 - ⏸️ 智能触发（识别加速/刹车意图）
 - ⏸️ 更多测试类型（60-160、0-200等）
+- ⏸️ 海报生成和分享
 - ⏸️ 数据导出（CSV/Excel）
 - ⏸️ 云端同步
 
