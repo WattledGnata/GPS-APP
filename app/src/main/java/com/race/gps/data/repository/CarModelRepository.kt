@@ -1,45 +1,39 @@
 package com.race.gps.data.repository
 
-import android.content.Context
-import android.content.SharedPreferences
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.race.gps.data.local.dao.CarModelDao
+import com.race.gps.data.local.mapper.toEntity
+import com.race.gps.data.local.mapper.toModel
 import com.race.gps.data.model.CarModel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
-class CarModelRepository(private val context: Context) {
-    private val sharedPreferences: SharedPreferences = 
-        context.getSharedPreferences("car_models", Context.MODE_PRIVATE)
-    private val gson = Gson()
-    private val carListType = object : TypeToken<List<CarModel>>() {}.type
+class CarModelRepository(
+    private val carModelDao: CarModelDao
+) {
+    // Flow自动从Room获取
+    val carModelsFlow: Flow<List<CarModel>> =
+        carModelDao.getAllCarModels()
+            .map { list -> list.map { it.toModel() } }
 
-    fun saveCarModels(carModels: List<CarModel>) {
-        val carModelsJson = gson.toJson(carModels)
-        sharedPreferences.edit().putString("saved_car_models", carModelsJson).apply()
-    }
-
-    fun getSavedCarModels(): List<CarModel> {
-        val carModelsJson = sharedPreferences.getString("saved_car_models", "[]")
-        return gson.fromJson(carModelsJson, carListType)
-    }
-
-    fun addCarModel(carModel: CarModel) {
-        val carModels = getSavedCarModels().toMutableList()
-        carModels.add(carModel)
-        saveCarModels(carModels)
-    }
-
-    fun updateCarModel(carModel: CarModel) {
-        val carModels = getSavedCarModels().toMutableList()
-        val index = carModels.indexOfFirst { it.id == carModel.id }
-        if (index != -1) {
-            carModels[index] = carModel
-            saveCarModels(carModels)
+    suspend fun saveCarModels(carModels: List<CarModel>) {
+        carModels.forEach { carModel ->
+            carModelDao.insertCarModel(carModel.toEntity())
         }
     }
 
-    fun removeCarModel(carModel: CarModel) {
-        val carModels = getSavedCarModels().toMutableList()
-        carModels.remove(carModel)
-        saveCarModels(carModels)
+    suspend fun getSavedCarModels(): List<CarModel> {
+        return carModelDao.getAllCarModelsSync().map { it.toModel() }
+    }
+
+    suspend fun addCarModel(carModel: CarModel) {
+        carModelDao.insertCarModel(carModel.toEntity())
+    }
+
+    suspend fun updateCarModel(carModel: CarModel) {
+        carModelDao.updateCarModel(carModel.toEntity())
+    }
+
+    suspend fun removeCarModel(carModel: CarModel) {
+        carModelDao.deleteCarModel(carModel.toEntity())
     }
 }

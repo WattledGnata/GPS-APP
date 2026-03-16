@@ -93,14 +93,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (testState) {
                 TestState.WAITING_FOR_START_SPEED -> {
                     // 等待达到起始速度
-                    val speedRange = currentStartSpeed - 2.0..currentStartSpeed + 2.0 // 允许2km/h的误差范围
-                    if (speed in speedRange) {
-                        // 达到起始速度，开始测试计时
-                        testState = TestState.RUNNING
-                        testStartTimeGps = System.currentTimeMillis()
-                        isTestStartedFromValidSpeed = true
-                        _testResult.value = "Running..."
-                        Log.d(TAG, "Test started at valid speed: $speed km/h, target speed: ${currentTargetSpeed}km/h")
+                    // 逻辑修改：
+                    // 对于0起步测试（0-100）：
+                    // 1. 如果当前速度在 0-5km/h 之间，我们认为是“静止或准静止”状态，保持 WAITING
+                    // 2. 只有当速度 *超过* 了一定阈值（比如 > 1.0 km/h），我们才认为车辆真正起步了，开始计时。
+                    //    但是，为了精确，我们应该把计时点回溯到速度刚刚开始上升的那一刻？
+                    //    简化版：只要当前速度 > 0.5 且 < 5.0，就立即开始。
+                    //    不，更科学的逻辑是：用户点击开始后，状态是WAITING。
+                    //    此时用户是静止的（或者漂移中）。
+                    //    只有当速度 *开始增加* 并且 *超过* 某个阈值（比如1km/h）时，才触发 START。
+                    
+                    if (currentStartSpeed <= 5.0) {
+                        // 0-xxx 测试模式
+                        // 只有当速度大于 1.0km/h 时才触发开始
+                        // 这样避免了 0.0 -> 0.1 的漂移误触发
+                        // 同时也不需要必须完全静止在 0.0
+                        if (speed > 1.0) {
+                            testState = TestState.RUNNING
+                            testStartTimeGps = System.currentTimeMillis()
+                            isTestStartedFromValidSpeed = true
+                            _testResult.value = "Running..."
+                            Log.d(TAG, "Test started (0-xxx): Speed > 1.0 ($speed km/h)")
+                        }
+                    } else {
+                        // 60-160, 100-200 等区间测试
+                        // 需要先进入起始速度区间（例如 58-62），然后再加速离开区间
+                        // 这里简化处理：只要进入区间就算开始（Rolling Start）
+                        val speedRange = currentStartSpeed - 3.0..currentStartSpeed + 3.0
+                        if (speed in speedRange) {
+                            testState = TestState.RUNNING
+                            testStartTimeGps = System.currentTimeMillis()
+                            isTestStartedFromValidSpeed = true
+                            _testResult.value = "Running..."
+                            Log.d(TAG, "Test started (Rolling): $speed km/h")
+                        }
                     }
                 }
                 TestState.RUNNING -> {

@@ -75,11 +75,11 @@ class RaceChronoParser {
     /**
      * Parses GPS Main characteristic data (20 bytes)
      */
-    fun parseGpsData(data: ByteArray, inputData: BluetoothData): BluetoothData {
+    fun parseGpsData(data: ByteArray, inputData: BluetoothData, shouldLog: Boolean = false): BluetoothData {
         var currentData = inputData
 
         if (data.size < 20) {
-            Log.d(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
+            Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
             return currentData
         }
 
@@ -162,6 +162,7 @@ class RaceChronoParser {
                         lastLatitude = currentLatitude
                         lastLongitude = currentLongitude
                         totalDistance = 0.0
+                        if (shouldLog) Log.d(TAG, "Tracking started: Lat=$currentLatitude, Lon=$currentLongitude")
                     } else {
                         val lastLat = lastLatitude
                         val lastLon = lastLongitude
@@ -212,8 +213,12 @@ class RaceChronoParser {
                 frequency = String.format("%.1f", gpsFrequency)
             )
 
-            return currentData
+            if (shouldLog) {
+                Log.d(TAG, "Parsed GPS Data: Speed=$speedKmh, Sat=$satellites, Lat=$currentLatitude, Lon=$currentLongitude")
+            }
 
+            return currentData
+            
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing GPS data", e)
             return currentData

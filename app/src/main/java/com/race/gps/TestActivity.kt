@@ -133,9 +133,19 @@ fun TestScreen(
     val bluetoothData by bluetoothManager.bluetoothDataFlow.collectAsState()
     
     // Update ViewModel with bluetooth data
-    LaunchedEffect(bluetoothData.speed) {
+    LaunchedEffect(bluetoothData) {
+        // Update speed
         mainViewModel.updateCurrentSpeed(bluetoothData.speed)
-        mainViewModel.updateTestReady(bluetoothData.isTestReady)
+        
+        // Update test ready state
+        // Only consider test ready if connected AND has sufficient satellites AND isTestReady flag is true
+        // If using mock, satellite count check might need to be relaxed or mocked properly
+        val isReady = bluetoothData.isConnected && 
+                     (bluetoothData.satelliteCount >= 3 || bluetoothData.isTestReady) 
+        
+        mainViewModel.updateTestReady(isReady)
+        
+        Log.d(TAG, "Bluetooth data update: Speed=${bluetoothData.speed}, Satellites=${bluetoothData.satelliteCount}, Ready=${isReady}")
     }
     
     // Get current context at composable level

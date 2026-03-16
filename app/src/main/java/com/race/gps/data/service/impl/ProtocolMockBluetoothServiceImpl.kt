@@ -65,6 +65,10 @@ class ProtocolMockBluetoothServiceImpl(context: Context? = null) : BluetoothServ
         disconnect()
     }
 
+    // Log throttling
+    private var lastLogTime = 0L
+    private val LOG_INTERVAL = 5000L // 5 seconds
+    
     private fun startSimulation() {
         if (isSimulationRunning) return
         isSimulationRunning = true
@@ -87,8 +91,14 @@ class ProtocolMockBluetoothServiceImpl(context: Context? = null) : BluetoothServ
             while (isActive && isSimulationRunning) {
                 updateSimulationState()
                 
+                val currentTime = System.currentTimeMillis()
+                val shouldLog = (currentTime - lastLogTime) >= LOG_INTERVAL
+                if (shouldLog) {
+                    lastLogTime = currentTime
+                }
+                
                 val mainPacket = generateMainPacket()
-                val newData = parser.parseGpsData(mainPacket, currentData)
+                val newData = parser.parseGpsData(mainPacket, currentData, shouldLog)
                 currentData = newData
                 callback?.onGpsDataUpdated(currentData)
                 

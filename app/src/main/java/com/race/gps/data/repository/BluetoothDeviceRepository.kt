@@ -1,38 +1,35 @@
 package com.race.gps.data.repository
 
-import android.content.Context
-import android.content.SharedPreferences
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.race.gps.data.local.dao.BluetoothDeviceDao
+import com.race.gps.data.local.mapper.toEntity
+import com.race.gps.data.local.mapper.toModel
 import com.race.gps.data.model.BluetoothDeviceModel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
-class BluetoothDeviceRepository(private val context: Context) {
-    private val sharedPreferences: SharedPreferences = 
-        context.getSharedPreferences("bluetooth_devices", Context.MODE_PRIVATE)
-    private val gson = Gson()
-    private val deviceListType = object : TypeToken<List<BluetoothDeviceModel>>() {}.type
+class BluetoothDeviceRepository(
+    private val bluetoothDeviceDao: BluetoothDeviceDao
+) {
+    // Flow自动从Room获取
+    val devicesFlow: Flow<List<BluetoothDeviceModel>> =
+        bluetoothDeviceDao.getAllDevices()
+            .map { list -> list.map { it.toModel() } }
 
-    fun saveDevices(devices: List<BluetoothDeviceModel>) {
-        val devicesJson = gson.toJson(devices)
-        sharedPreferences.edit().putString("saved_devices", devicesJson).apply()
-    }
-
-    fun getSavedDevices(): List<BluetoothDeviceModel> {
-        val devicesJson = sharedPreferences.getString("saved_devices", "[]")
-        return gson.fromJson(devicesJson, deviceListType)
-    }
-
-    fun addDevice(device: BluetoothDeviceModel) {
-        val devices = getSavedDevices().toMutableList()
-        if (!devices.any { it.address == device.address }) {
-            devices.add(device)
-            saveDevices(devices)
+    suspend fun saveDevices(devices: List<BluetoothDeviceModel>) {
+        devices.forEach { device ->
+            bluetoothDeviceDao.insertDevice(device.toEntity())
         }
     }
 
-    fun removeDevice(address: String) {
-        val devices = getSavedDevices().toMutableList()
-        devices.removeAll { it.address == address }
-        saveDevices(devices)
+    suspend fun getSavedDevices(): List<BluetoothDeviceModel> {
+        return bluetoothDeviceDao.getAllDevicesSync().map { it.toModel() }
+    }
+
+    suspend fun addDevice(device: BluetoothDeviceModel) {
+        bluetoothDeviceDao.insertDevice(device.toEntity())
+    }
+
+    suspend fun removeDevice(address: String) {
+        bluetoothDeviceDao.deleteDevice(address)
     }
 }

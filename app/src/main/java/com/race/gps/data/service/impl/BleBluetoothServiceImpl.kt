@@ -106,11 +106,15 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
         }
     }
     
+    // Log throttling
+    private var lastLogTime = 0L
+    private val LOG_INTERVAL = 5000L // 5 seconds
+    
     // Bluetooth GATT callback
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             super.onConnectionStateChange(gatt, status, newState)
-            Log.d(TAG, "Connection state changed: status=$status, newState=$newState")
+            Log.i(TAG, "Connection state changed: status=$status, newState=$newState")
             
             val isConnected = newState == BluetoothGatt.STATE_CONNECTED
             
@@ -132,7 +136,7 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
             }
             
             if (isConnected) {
-                Log.d(TAG, "Connected to GATT server")
+                Log.i(TAG, "Connected to GATT server")
                 if (ActivityCompat.checkSelfPermission(
                         context,
                         Manifest.permission.BLUETOOTH_CONNECT
@@ -143,7 +147,7 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
                 }
                 gatt.discoverServices()
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                Log.d(TAG, "Disconnected from GATT server")
+                Log.i(TAG, "Disconnected from GATT server")
                 bluetoothGatt = null
                 // Reset test ready state on disconnect
                  currentData = currentData.copy(isTestReady = false)
@@ -153,7 +157,7 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
         
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             super.onServicesDiscovered(gatt, status)
-            Log.d(TAG, "Services discovered: status=$status")
+            Log.i(TAG, "Services discovered: status=$status")
             
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 val errorMessage = "Failed to discover services: status=$status"
@@ -171,11 +175,29 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
                 return
             }
             
-            // Enable notifications for GPS time characteristic
-            enableGpsTimeNotifications(gatt, service)
-            
-            // Enable notifications for GPS main characteristic
+            // 1. First Enable notifications for GPS Main characteristic (Critical)
+            // We chain the next enable call in onDescriptorWrite
             enableGpsMainNotifications(gatt, service)
+        }
+        
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            super.onDescriptorWrite(gatt, descriptor, status)
+            Log.i(TAG, "onDescriptorWrite: ${descriptor.characteristic.uuid} status=$status")
+            
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val charUuid = descriptor.characteristic.uuid.toString()
+                // If we just enabled Main Characteristic, now enable Time Characteristic
+                if (charUuid.equals(RACECHRONO_CHARACTERISTIC_UUID, ignoreCase = true)) {
+                    val service = gatt.getService(java.util.UUID.fromString(RACECHRONO_SERVICE_UUID))
+                    if (service != null) {
+                         // 2. Now Enable notifications for GPS Time characteristic
+                         // Add a small delay to prevent BLE command flooding
+                         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                             enableGpsTimeNotifications(gatt, service)
+                         }, 200)
+                    }
+                }
+            }
         }
         
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -183,14 +205,23 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
             val data = characteristic.value
             val charUuid = characteristic.uuid.toString()
             
-            // Log.d(TAG, "Characteristic changed: $charUuid, data size: ${data.size}")
+            val currentTime = System.currentTimeMillis()
+            
+            // Only allow logging for the main characteristic to ensure we see the GPS data
+            val isMainChar = charUuid.equals(RACECHRONO_CHARACTERISTIC_UUID, ignoreCase = true)
+            val shouldLog = isMainChar && (currentTime - lastLogTime) >= LOG_INTERVAL
+            
+            if (shouldLog) {
+                Log.i(TAG, "Characteristic changed: $charUuid, data size: ${data.size}")
+                lastLogTime = currentTime
+            }
             
             if (charUuid.equals(RACECHRONO_TIME_CHARACTERISTIC_UUID, ignoreCase = true)) {
                 // Parse GPS time data (3 bytes)
                 parseGpsTimeData(data)
-            } else if (charUuid.equals(RACECHRONO_CHARACTERISTIC_UUID, ignoreCase = true)) {
+            } else if (isMainChar) {
                 // Parse GPS main data (20 bytes)
-                parseGpsData(data)
+                parseGpsData(data, shouldLog)
             }
         }
     }
@@ -199,7 +230,7 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
     private fun enableGpsTimeNotifications(gatt: BluetoothGatt, service: BluetoothGattService) {
         val timeCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_TIME_CHARACTERISTIC_UUID))
         if (timeCharacteristic != null) {
-            Log.d(TAG, "Found GPS time characteristic: ${timeCharacteristic.uuid}")
+            Log.i(TAG, "Found GPS time characteristic: ${timeCharacteristic.uuid}")
             
             if (ActivityCompat.checkSelfPermission(
                     context,
@@ -212,14 +243,14 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
             
             // Enable notifications
             val success = gatt.setCharacteristicNotification(timeCharacteristic, true)
-            Log.d(TAG, "Enabled GPS time notifications: $success")
+            Log.i(TAG, "Enabled GPS time notifications: $success")
             
             // Enable descriptor
             val descriptor = timeCharacteristic.getDescriptor(java.util.UUID.fromString(CLIENT_CHARACTERISTIC_CONFIG))
             if (descriptor != null) {
                 descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 val descSuccess = gatt.writeDescriptor(descriptor)
-                Log.d(TAG, "Wrote GPS time descriptor: $descSuccess")
+                Log.i(TAG, "Wrote GPS time descriptor: $descSuccess")
             }
         }
     }
@@ -228,7 +259,7 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
     private fun enableGpsMainNotifications(gatt: BluetoothGatt, service: BluetoothGattService) {
         val mainCharacteristic = service.getCharacteristic(java.util.UUID.fromString(RACECHRONO_CHARACTERISTIC_UUID))
         if (mainCharacteristic != null) {
-            Log.d(TAG, "Found GPS main characteristic: ${mainCharacteristic.uuid}")
+            Log.i(TAG, "Found GPS main characteristic: ${mainCharacteristic.uuid}")
             
             if (ActivityCompat.checkSelfPermission(
                     context,
@@ -241,15 +272,21 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
             
             // Enable notifications
             val success = gatt.setCharacteristicNotification(mainCharacteristic, true)
-            Log.d(TAG, "Enabled GPS main notifications: $success")
+            Log.i(TAG, "SetCharacteristicNotification(Main): $success")
             
-            // Enable descriptor
-            val descriptor = mainCharacteristic.getDescriptor(java.util.UUID.fromString(CLIENT_CHARACTERISTIC_CONFIG))
-            if (descriptor != null) {
-                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                val descSuccess = gatt.writeDescriptor(descriptor)
-                Log.d(TAG, "Wrote GPS main descriptor: $descSuccess")
+            if (success) {
+                // Enable descriptor
+                val descriptor = mainCharacteristic.getDescriptor(java.util.UUID.fromString(CLIENT_CHARACTERISTIC_CONFIG))
+                if (descriptor != null) {
+                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    val descSuccess = gatt.writeDescriptor(descriptor)
+                    Log.i(TAG, "WriteDescriptor(Main): $descSuccess")
+                } else {
+                    Log.e(TAG, "Main Characteristic Descriptor is null")
+                }
             }
+        } else {
+            Log.e(TAG, "Main Characteristic not found")
         }
     }
     
@@ -265,10 +302,14 @@ class BleBluetoothServiceImpl(private val context: Context) : BluetoothService {
     }
     
     // Parse GPS main data to get speed and satellite count
-    private fun parseGpsData(data: ByteArray) {
-        val newData = parser.parseGpsData(data, currentData)
-        currentData = newData
-        callback?.onGpsDataUpdated(currentData)
+    private fun parseGpsData(data: ByteArray, shouldLog: Boolean = false) {
+        try {
+            val newData = parser.parseGpsData(data, currentData, shouldLog)
+            currentData = newData
+            callback?.onGpsDataUpdated(currentData)
+        } catch (e: Exception) {
+            Log.e(TAG, "Critical error in parseGpsData", e)
+        }
     }
     
     private fun resetTrackingState() {
