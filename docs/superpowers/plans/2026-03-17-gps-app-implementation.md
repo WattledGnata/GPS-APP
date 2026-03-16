@@ -993,3 +993,805 @@ git commit -m "feat(persistence): 添加Room数据库、文件存储和TestResul
 
 ---
 
+## 5. Chunk 4: UI实现
+
+### 5.1 目标
+
+- 实现设备连接页面（DeviceConnectionScreen）
+- 实现测试类型选择页面（TestTypeSelectionScreen）
+- 实现测试执行页面（TestExecutionScreen）
+- 实现结果详情页面（TestResultDetailScreen）
+- 实现历史记录页面（TestHistoryScreen）
+
+### 5.2 任务清单
+
+#### 5.2.1 设备连接页面
+
+- [ ] 创建 `DeviceConnectionScreen`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/screen/DeviceConnectionScreen.kt`
+  - 显示已配对设备列表
+  - 点击设备触发连接
+  - 显示连接状态（连接中/已连接/断开）
+
+```kotlin
+package com.race.gps.ui.screen
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.race.gps.viewmodel.GpsDataViewModel
+import org.koin.androidx.compose.koinViewModel
+
+@Composable
+fun DeviceConnectionScreen(
+    onConnected: () -> Unit,
+    viewModel: GpsDataViewModel = koinViewModel()
+) {
+    val gpsData by viewModel.gpsData.collectAsState()
+
+    LaunchedEffect(gpsData.isConnected) {
+        if (gpsData.isConnected) onConnected()
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("选择GPS设备", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+
+        if (gpsData.isConnected) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("已连接", color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = { viewModel.disconnect() }) {
+                        Text("断开")
+                    }
+                }
+            }
+        } else {
+            // 设备列表（从ViewModel获取扫描结果）
+            Text("正在扫描设备...", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+```
+
+#### 5.2.2 测试类型选择页面
+
+- [ ] 创建 `TestTypeSelectionScreen`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/screen/TestTypeSelectionScreen.kt`
+  - 显示可用测试类型卡片
+  - 显示当前GPS信号质量（卫星数、HDOP）
+  - 信号不足时禁用测试按钮
+
+```kotlin
+package com.race.gps.ui.screen
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.race.gps.domain.model.TestTemplate
+import com.race.gps.viewmodel.GpsDataViewModel
+import org.koin.androidx.compose.koinViewModel
+
+@Composable
+fun TestTypeSelectionScreen(
+    onTemplateSelected: (TestTemplate) -> Unit,
+    gpsViewModel: GpsDataViewModel = koinViewModel()
+) {
+    val gpsData by gpsViewModel.gpsData.collectAsState()
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // GPS信号状态卡片
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("GPS信号", style = MaterialTheme.typography.titleMedium)
+                Text("卫星数: ${gpsData.satelliteCount}")
+                Text("HDOP: ${"%.1f".format(gpsData.hdop)}")
+                if (!gpsData.isTestReady) {
+                    Text(
+                        "信号不足，请等待...",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text("选择测试类型", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(16.dp))
+
+        // 0-100加速测试
+        TestTypeCard(
+            title = "0-100 加速测试",
+            description = "从静止加速到100 km/h，记录时间和距离",
+            enabled = gpsData.isTestReady,
+            onClick = { onTemplateSelected(TestTemplate.Acceleration0To100) }
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        // 100-0刹车测试
+        TestTypeCard(
+            title = "100-0 刹车测试",
+            description = "从100 km/h制动到静止，记录时间和距离",
+            enabled = gpsData.isTestReady,
+            onClick = { onTemplateSelected(TestTemplate.Braking100To0) }
+        )
+    }
+}
+
+@Composable
+private fun TestTypeCard(
+    title: String,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(description, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("开始测试")
+            }
+        }
+    }
+}
+```
+
+#### 5.2.3 测试执行页面
+
+- [ ] 创建 `TestExecutionScreen`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/screen/TestExecutionScreen.kt`
+  - 实时显示当前速度（大字体）
+  - 显示测试状态（等待触发/测试中/已完成）
+  - 显示计时器（测试进行中）
+  - 完成后显示结果摘要并提供导航
+
+```kotlin
+package com.race.gps.ui.screen
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.race.gps.domain.model.TestState
+import com.race.gps.viewmodel.TestSessionViewModel
+import org.koin.androidx.compose.koinViewModel
+
+@Composable
+fun TestExecutionScreen(
+    onFinished: (String) -> Unit,  // 传递resultId
+    onCancel: () -> Unit,
+    viewModel: TestSessionViewModel = koinViewModel()
+) {
+    val testState by viewModel.testState.collectAsState()
+
+    LaunchedEffect(testState) {
+        if (testState is TestState.Finished) {
+            val result = (testState as TestState.Finished).result
+            onFinished(result.id)
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        AnimatedContent(targetState = testState) { state ->
+            when (state) {
+                is TestState.Waiting -> WaitingContent(state, onCancel)
+                is TestState.Running -> RunningContent(state, onCancel)
+                is TestState.Finished -> FinishedContent(state)
+                is TestState.Timeout -> TimeoutContent(state, onCancel)
+                else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun WaitingContent(state: TestState.Waiting, onCancel: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("等待触发", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(32.dp))
+        Text(
+            "${"%.1f".format(state.currentSpeed)}",
+            fontSize = 80.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text("km/h", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "速度超过 ${"%.0f".format(state.template.startSpeedKmh)} km/h 时自动开始",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(32.dp))
+        OutlinedButton(onClick = onCancel) { Text("取消") }
+    }
+}
+
+@Composable
+private fun RunningContent(state: TestState.Running, onCancel: () -> Unit) {
+    val currentSpeed = state.dataPoints.lastOrNull()?.speed ?: state.startSpeed
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("测试进行中", style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "${"%.1f".format(currentSpeed)}",
+            fontSize = 80.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text("km/h", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "${"%.2f".format(state.elapsedMs / 1000.0)} 秒",
+            fontSize = 40.sp,
+            color = MaterialTheme.colorScheme.secondary
+        )
+        Spacer(Modifier.height(32.dp))
+        OutlinedButton(onClick = onCancel) { Text("中止") }
+    }
+}
+
+@Composable
+private fun FinishedContent(state: TestState.Finished) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("测试完成", style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "${"%.2f".format(state.result.durationMs / 1000.0)} 秒",
+            fontSize = 60.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text("${"%.1f".format(state.result.distanceMeters)} 米",
+            style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun TimeoutContent(state: TestState.Timeout, onCancel: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("测试超时", style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.height(16.dp))
+        Text("未能在规定时间内完成测试")
+        Spacer(Modifier.height(32.dp))
+        Button(onClick = onCancel) { Text("返回") }
+    }
+}
+```
+
+#### 5.2.4 结果详情页面
+
+- [ ] 创建 `TestResultDetailScreen`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/screen/TestResultDetailScreen.kt`
+  - 显示完整测试结果（时间、距离、最大速度）
+  - 显示GPS质量指标（HDOP、卫星数）
+  - 提供分享/导出按钮
+
+```kotlin
+package com.race.gps.ui.screen
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.race.gps.domain.model.TestResult
+
+@Composable
+fun TestResultDetailScreen(
+    result: TestResult,
+    onBack: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(result.templateName, style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(24.dp))
+
+        ResultMetricCard("测试时间", "${"%.3f".format(result.durationMs / 1000.0)} 秒")
+        Spacer(Modifier.height(8.dp))
+        ResultMetricCard("测试距离", "${"%.1f".format(result.distanceMeters)} 米")
+        Spacer(Modifier.height(8.dp))
+        ResultMetricCard("最大速度", "${"%.1f".format(result.maxSpeedKmh)} km/h")
+        Spacer(Modifier.height(8.dp))
+        ResultMetricCard("平均HDOP", "${"%.2f".format(result.averageHdop)}")
+        Spacer(Modifier.height(8.dp))
+        ResultMetricCard("最少卫星数", "${result.minSatelliteCount}")
+
+        Spacer(Modifier.weight(1f))
+        Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+            Text("返回")
+        }
+    }
+}
+
+@Composable
+private fun ResultMetricCard(label: String, value: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(value, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+```
+
+#### 5.2.5 历史记录页面
+
+- [ ] 创建 `TestHistoryScreen`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/screen/TestHistoryScreen.kt`
+  - 显示所有历史测试结果列表
+  - 按时间倒序排列
+  - 点击进入结果详情
+
+```kotlin
+package com.race.gps.ui.screen
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.race.gps.domain.model.TestResult
+import com.race.gps.viewmodel.TestHistoryViewModel
+import org.koin.androidx.compose.koinViewModel
+import java.text.SimpleDateFormat
+import java.util.*
+
+@Composable
+fun TestHistoryScreen(
+    onResultClick: (TestResult) -> Unit,
+    viewModel: TestHistoryViewModel = koinViewModel()
+) {
+    val results by viewModel.results.collectAsState()
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("历史记录", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+
+        if (results.isEmpty()) {
+            Text("暂无测试记录", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(results) { result ->
+                    HistoryItemCard(result = result, onClick = { onResultClick(result) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryItemCard(result: TestResult, onClick: () -> Unit) {
+    val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(result.templateName, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    dateFormat.format(Date(result.startTime)),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                Text(
+                    "${"%.2f".format(result.durationMs / 1000.0)}s",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    "${"%.0f".format(result.distanceMeters)}m",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+```
+
+#### 5.2.6 创建 TestHistoryViewModel
+
+- [ ] 创建 `TestHistoryViewModel`
+  - 文件路径: `app/src/main/java/com/race/gps/viewmodel/TestHistoryViewModel.kt`
+
+```kotlin
+package com.race.gps.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.race.gps.domain.model.TestResult
+import com.race.gps.domain.repository.TestResultRepository
+import kotlinx.coroutines.flow.*
+
+class TestHistoryViewModel(
+    private val repository: TestResultRepository
+) : ViewModel() {
+
+    val results: StateFlow<List<TestResult>> = repository.getAllResultsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+}
+```
+
+#### 5.2.7 配置导航
+
+- [ ] 创建 `AppNavigation`
+  - 文件路径: `app/src/main/java/com/race/gps/ui/navigation/AppNavigation.kt`
+  - 定义路由：`connection` → `test_type` → `test_execution` → `result_detail/{id}` / `history`
+
+```kotlin
+package com.race.gps.ui.navigation
+
+import androidx.compose.runtime.Composable
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.race.gps.domain.model.TestTemplate
+import com.race.gps.ui.screen.*
+
+@Composable
+fun AppNavigation() {
+    val navController = rememberNavController()
+
+    NavHost(navController = navController, startDestination = "connection") {
+        composable("connection") {
+            DeviceConnectionScreen(
+                onConnected = { navController.navigate("test_type") }
+            )
+        }
+        composable("test_type") {
+            TestTypeSelectionScreen(
+                onTemplateSelected = { template ->
+                    // 通过ViewModel传递模板，然后导航
+                    navController.navigate("test_execution")
+                }
+            )
+        }
+        composable("test_execution") {
+            TestExecutionScreen(
+                onFinished = { id -> navController.navigate("result_detail/$id") },
+                onCancel = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "result_detail/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val id = backStackEntry.arguments?.getString("id") ?: return@composable
+            // 从ViewModel加载结果
+        }
+        composable("history") {
+            TestHistoryScreen(
+                onResultClick = { result ->
+                    navController.navigate("result_detail/${result.id}")
+                }
+            )
+        }
+    }
+}
+```
+
+### 5.3 测试步骤
+
+1. 启动应用，确认导航到设备连接页面
+2. Mock模式下自动连接，确认跳转到测试类型选择页面
+3. 选择"0-100加速测试"，确认进入测试执行页面并显示"等待触发"
+4. Mock数据触发后，确认计时器开始计时
+5. 测试完成后，确认跳转到结果详情页面
+6. 返回并进入历史记录页面，确认记录已保存
+
+### 5.4 Git提交
+
+```bash
+git add app/src/main/java/com/race/gps/ui/
+git add app/src/main/java/com/race/gps/viewmodel/TestHistoryViewModel.kt
+git commit -m "feat(ui): 实现完整UI页面（连接、测试选择、执行、结果详情、历史记录）"
+```
+
+---
+
+## 6. 测试与验证
+
+### 6.1 单元测试
+
+#### 6.1.1 CalculateResultUseCase 测试
+
+- [ ] 创建 `CalculateResultUseCaseTest`
+  - 文件路径: `app/src/test/java/com/race/gps/domain/usecase/CalculateResultUseCaseTest.kt`
+
+```kotlin
+package com.race.gps.domain.usecase
+
+import com.race.gps.domain.model.GpsData
+import com.race.gps.domain.model.TestTemplate
+import org.junit.Assert.*
+import org.junit.Test
+
+class CalculateResultUseCaseTest {
+
+    private val useCase = CalculateResultUseCase()
+
+    @Test
+    fun `计算0-100加速测试结果`() {
+        val startTime = 0L
+        val endTime = 5000L
+        val dataPoints = (0..50).map { i ->
+            GpsData(
+                timestamp = i * 100L,
+                speed = i * 2.0,
+                latitude = 39.9042 + i * 0.00001,
+                longitude = 116.4074,
+                altitude = 50.0,
+                bearing = 0.0,
+                satelliteCount = 8,
+                hdop = 1.2,
+                vdop = 1.5,
+                frequency = 10.0,
+                isConnected = true,
+                isTestReady = true,
+                errorMessage = null
+            )
+        }
+
+        val result = useCase(TestTemplate.Acceleration0To100, startTime, endTime, dataPoints)
+
+        assertEquals(5000L, result.durationMs)
+        assertEquals(100.0, result.maxSpeedKmh, 0.1)
+        assertTrue(result.distanceMeters > 0)
+    }
+
+    @Test
+    fun `空数据点返回零距离`() {
+        val result = useCase(TestTemplate.Acceleration0To100, 0L, 1000L, emptyList())
+        assertEquals(0.0, result.distanceMeters, 0.001)
+    }
+}
+```
+
+#### 6.1.2 TestSessionViewModel 测试
+
+- [ ] 创建 `TestSessionViewModelTest`
+  - 文件路径: `app/src/test/java/com/race/gps/viewmodel/TestSessionViewModelTest.kt`
+  - 使用 `kotlinx-coroutines-test` 和 `turbine` 测试Flow
+
+```kotlin
+package com.race.gps.viewmodel
+
+import app.cash.turbine.test
+import com.race.gps.domain.model.*
+import com.race.gps.domain.repository.GpsDataRepository
+import com.race.gps.domain.usecase.CalculateResultUseCase
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.*
+import org.junit.Test
+
+class TestSessionViewModelTest {
+
+    private val mockRepository = mockk<GpsDataRepository>()
+    private val calculateResult = CalculateResultUseCase()
+
+    @Test
+    fun `选择模板后状态变为Waiting`() = runTest {
+        every { mockRepository.gpsDataFlow } returns flowOf(GpsData.Empty)
+        val viewModel = TestSessionViewModel(mockRepository, calculateResult)
+
+        viewModel.testState.test {
+            assertEquals(TestState.Idle, awaitItem())
+            viewModel.selectTemplate(TestTemplate.Acceleration0To100)
+            val waiting = awaitItem()
+            assertTrue(waiting is TestState.Waiting)
+        }
+    }
+}
+```
+
+### 6.2 集成测试
+
+#### 6.2.1 端到端测试流程
+
+- [ ] 验证完整测试流程（Mock模式）
+
+```
+测试步骤：
+1. 启动应用（USE_MOCK_BLE=true）
+2. 自动连接Mock设备
+3. 选择"0-100加速测试"
+4. 等待速度超过5 km/h（约2秒）
+5. 观察计时器启动
+6. 等待速度超过100 km/h（约40秒）
+7. 确认结果页面显示正确时间和距离
+8. 确认数据库中有新记录
+9. 进入历史记录页面确认记录存在
+
+预期结果：
+- 测试时间约40秒（Mock每100ms增加2.5 km/h）
+- 距离约500-600米
+- 历史记录页面显示该记录
+```
+
+#### 6.2.2 数据库迁移验证
+
+- [ ] 验证从版本1升级到版本2不丢失数据
+
+```
+测试步骤：
+1. 安装旧版本应用（数据库版本1）
+2. 创建一些测试数据
+3. 安装新版本应用（数据库版本2）
+4. 确认旧数据仍然存在
+5. 确认新表 speed_segments 已创建
+```
+
+### 6.3 性能验证
+
+- [ ] 验证GPS数据流不阻塞UI线程
+  - 在 `BleBluetoothDataSource` 中确认数据解析在 `Dispatchers.IO` 执行
+  - 使用 Android Profiler 确认主线程无长时间阻塞
+
+- [ ] 验证内存使用
+  - 长时间测试（>5分钟）后检查内存无泄漏
+  - 确认 `dataPoints` 列表在测试完成后被清理
+
+---
+
+## 7. 提交策略
+
+### 7.1 提交顺序
+
+按以下顺序提交，确保每个提交都可独立编译运行：
+
+```
+Commit 1: refactor(bluetooth): 重构蓝牙层为DataSource模式，统一GpsData数据模型
+Commit 2: feat(test-session): 实现测试状态机、结果计算和TestSessionViewModel
+Commit 3: feat(persistence): 添加Room数据库、文件存储和TestResultRepository
+Commit 4: feat(ui): 实现完整UI页面（连接、测试选择、执行、结果详情、历史记录）
+Commit 5: test: 添加单元测试和集成测试
+```
+
+### 7.2 分支策略
+
+```bash
+# 从master创建功能分支
+git checkout -b feature/gps-test-redesign
+
+# 按Chunk逐步提交
+# Chunk 1完成后
+git commit -m "refactor(bluetooth): 重构蓝牙层为DataSource模式，统一GpsData数据模型"
+
+# Chunk 2完成后
+git commit -m "feat(test-session): 实现测试状态机、结果计算和TestSessionViewModel"
+
+# Chunk 3完成后
+git commit -m "feat(persistence): 添加Room数据库、文件存储和TestResultRepository"
+
+# Chunk 4完成后
+git commit -m "feat(ui): 实现完整UI页面（连接、测试选择、执行、结果详情、历史记录）"
+
+# 测试完成后
+git commit -m "test: 添加单元测试和集成测试"
+
+# 合并到master（需要用户确认）
+# git checkout master && git merge --no-ff feature/gps-test-redesign
+```
+
+### 7.3 每个Chunk的验收标准
+
+| Chunk | 验收标准 |
+|-------|---------|
+| Chunk 1 | 应用启动，Mock数据正常流动，`GpsDataViewModel` 更新 |
+| Chunk 2 | 完整测试流程可运行，状态机转换正确 |
+| Chunk 3 | 测试结果持久化，重启后历史记录存在 |
+| Chunk 4 | 所有页面可正常导航，UI显示正确 |
+
+### 7.4 回滚策略
+
+如果某个Chunk引入问题：
+
+```bash
+# 查看提交历史
+git log --oneline -10
+
+# 回滚到上一个稳定提交
+git revert HEAD  # 创建反向提交（安全）
+
+# 或者软重置（保留文件修改）
+git reset --soft HEAD~1
+```
+
+---
+
+## 附录：文件结构总览
+
+```
+app/src/main/java/com/race/gps/
+├── di/
+│   ├── BluetoothModule.kt          # Chunk 1
+│   └── DatabaseModule.kt           # Chunk 3
+├── domain/
+│   ├── model/
+│   │   ├── GpsData.kt              # Chunk 1
+│   │   ├── TestTemplate.kt         # Chunk 2
+│   │   ├── TestState.kt            # Chunk 2
+│   │   └── TestResult.kt           # Chunk 2
+│   ├── repository/
+│   │   ├── GpsDataRepository.kt    # Chunk 1
+│   │   └── TestResultRepository.kt # Chunk 3
+│   └── usecase/
+│       └── CalculateResultUseCase.kt # Chunk 2
+├── data/
+│   ├── bluetooth/
+│   │   ├── BluetoothDataSource.kt  # Chunk 1
+│   │   └── impl/
+│   │       ├── BleBluetoothDataSource.kt   # Chunk 1
+│   │       └── MockBluetoothDataSource.kt  # Chunk 1
+│   ├── db/
+│   │   ├── AppDatabase.kt          # Chunk 3
+│   │   ├── dao/
+│   │   │   └── SpeedSegmentDao.kt  # Chunk 3
+│   │   └── entity/
+│   │       └── SpeedSegmentEntity.kt # Chunk 3
+│   ├── repository/
+│   │   ├── GpsDataRepositoryImpl.kt    # Chunk 1
+│   │   └── TestResultRepositoryImpl.kt # Chunk 3
+│   └── storage/
+│       └── TestResultFileStorage.kt    # Chunk 3
+├── viewmodel/
+│   ├── GpsDataViewModel.kt         # Chunk 1
+│   ├── TestSessionViewModel.kt     # Chunk 2
+│   └── TestHistoryViewModel.kt     # Chunk 4
+└── ui/
+    ├── navigation/
+    │   └── AppNavigation.kt        # Chunk 4
+    └── screen/
+        ├── DeviceConnectionScreen.kt    # Chunk 4
+        ├── TestTypeSelectionScreen.kt   # Chunk 4
+        ├── TestExecutionScreen.kt       # Chunk 4
+        ├── TestResultDetailScreen.kt    # Chunk 4
+        └── TestHistoryScreen.kt         # Chunk 4
+```
+
+---
+
+*文档生成时间: 2026-03-17*
+*预计总实现时间: 8-12小时*
