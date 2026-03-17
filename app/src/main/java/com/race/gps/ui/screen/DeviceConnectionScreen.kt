@@ -13,6 +13,7 @@ import com.race.gps.bluetooth.ConnectionState
 import com.race.gps.domain.model.GpsData
 import com.race.gps.viewmodel.GpsDataViewModel
 import org.koin.androidx.compose.koinViewModel
+import androidx.compose.runtime.LaunchedEffect
 
 /**
  * 设备连接页面
@@ -25,6 +26,10 @@ fun DeviceConnectionScreen(
 ) {
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
     val connectionState by gpsDataViewModel.connectionState.collectAsState()
+    val isScanning by gpsDataViewModel.isScanning.collectAsState()
+    val scanResults by gpsDataViewModel.scanResults.collectAsState()
+
+    var showScanDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -35,7 +40,12 @@ fun DeviceConnectionScreen(
         Text("GPS 设备", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
         // 连接状态卡片
-        ConnectionStatusCard(gpsData, connectionState)
+        ConnectionStatusCard(
+            gpsData = gpsData,
+            connectionState = connectionState,
+            onScanClick = { showScanDialog = true },
+            scanResultsCount = scanResults.size
+        )
 
         // GPS信号质量卡片
         if (connectionState == ConnectionState.CONNECTED) {
@@ -60,13 +70,60 @@ fun DeviceConnectionScreen(
             )
         }
     }
+
+    // 设备扫描对话框
+    if (showScanDialog) {
+        DeviceScanDialog(
+            isScanning = isScanning,
+            scanResults = scanResults,
+            onDismiss = {
+                showScanDialog = false
+                gpsDataViewModel.stopScan()
+            },
+            onStopScan = {
+                gpsDataViewModel.stopScan()
+            },
+            onDeviceClick = { device ->
+                gpsDataViewModel.connectDevice(device)
+                showScanDialog = false
+            }
+        )
+
+        // 自动开始扫描
+        LaunchedEffect(Unit) {
+            gpsDataViewModel.startScan()
+        }
+    }
 }
 
 @Composable
-private fun ConnectionStatusCard(gpsData: GpsData, connectionState: ConnectionState) {
+private fun ConnectionStatusCard(
+    gpsData: GpsData,
+    connectionState: ConnectionState,
+    onScanClick: () -> Unit,
+    scanResultsCount: Int
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("设备状态", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("设备状态", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                // 扫描按钮
+                if (connectionState != ConnectionState.CONNECTED) {
+                    OutlinedButton(
+                        onClick = onScanClick,
+                        modifier = Modifier.height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("扫描设备", fontSize = 12.sp)
+                    }
+                }
+            }
+
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val (statusText, statusColor) = when (connectionState) {
                     ConnectionState.CONNECTED -> "已连接" to Color(0xFF4CAF50)
@@ -79,10 +136,21 @@ private fun ConnectionStatusCard(gpsData: GpsData, connectionState: ConnectionSt
                     color = statusColor
                 ) {}
                 Text(statusText, color = statusColor, fontWeight = FontWeight.Medium)
+
+                // 显示找到的设备数量
+                if (connectionState == ConnectionState.DISCONNECTED && scanResultsCount > 0) {
+                    Text(
+                        "找到 $scanResultsCount 台设备",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
             }
+
             if (connectionState == ConnectionState.CONNECTED) {
                 Text("频率: ${gpsData.frequency} Hz", fontSize = 14.sp, color = Color.Gray)
             }
+
             gpsData.errorMessage?.let {
                 Text(it, fontSize = 12.sp, color = Color(0xFFF44336))
             }
