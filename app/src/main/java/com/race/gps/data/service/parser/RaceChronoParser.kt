@@ -73,65 +73,76 @@ class RaceChronoParser {
     }
 
     /**
-     * Parses GPS Main characteristic data (20 bytes)
+     * Parses GPS Main characteristic data (28 bytes - RaceChrono protocol)
      */
     fun parseGpsData(data: ByteArray, inputData: GpsData, shouldLog: Boolean = false): GpsData {
         var currentData = inputData
 
-        if (data.size < 20) {
-            Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
+        if (data.size < 28) {
+            Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 28")
             return currentData
         }
 
         try {
-            // 1. Parse Basic GPS Data (Critical)
-            // Extract sync bits (first 3 bits of first byte)
-            val syncBits = (data[0].toInt() shr 5) and 0x07
-
-            // Extract time since hour start (21 bits total)
-            val timeSinceHourStart = ((data[0].toInt() and 0x1F) shl 16) or
-                    ((data[1].toInt() and 0xFF) shl 8) or
-                    (data[2].toInt() and 0xFF)
-
-            // Extract fix quality and satellite count from 4th byte
-            val fixQuality = (data[3].toInt() shr 6) and 0x03
-            val satellites = data[3].toInt() and 0x3F
-
-            // Extract latitude (4 bytes, big endian)
-            val latitudeVal = ((data[4].toInt() and 0xFF) shl 24) or
-                    ((data[5].toInt() and 0xFF) shl 16) or
-                    ((data[6].toInt() and 0xFF) shl 8) or
-                    (data[7].toInt() and 0xFF)
-            val currentLatitude = latitudeVal / 10000000.0
-
-            // Extract longitude (4 bytes, big endian)
-            val longitudeVal = ((data[8].toInt() and 0xFF) shl 24) or
-                    ((data[9].toInt() and 0xFF) shl 16) or
-                    ((data[10].toInt() and 0xFF) shl 8) or
-                    (data[11].toInt() and 0xFF)
-            val currentLongitude = longitudeVal / 10000000.0
-
-            // Extract altitude (2 bytes, big endian)
-            val altitudeVal = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
-            val altitudeMeters = altitudeVal / 10.0 - 500.0 // Convert to meters with offset
-
-            // Extract speed (2 bytes, big endian)
-            val speedVal = ((data[14].toInt() and 0xFF) shl 8) or (data[15].toInt() and 0xFF)
-            val speedKmh = if (speedVal < 0x8000) {
-                // Speed is in km/h * 100
-                speedVal / 100.0
-            } else {
-                // Speed is in km/h * 10
-                (speedVal and 0x7FFF) / 10.0
+            // 添加原始数据hex dump日志
+            if (shouldLog) {
+                val hexDump = data.joinToString("") { "%02X".format(it) }
+                Log.d(TAG, "Raw GPS Data (28 bytes): $hexDump")
             }
 
-            // Extract bearing (2 bytes, big endian)
-            val bearing = ((data[16].toInt() and 0xFF) shl 8) or (data[17].toInt() and 0xFF)
-            val bearingDegrees = bearing / 100.0
+            // Byte 0: 同步位 (低3位)
+            val syncBits = data[0].toInt() and 0x07
 
-            // Extract HDOP and VDOP (1 byte each)
-            val hdop = (data[18].toInt() and 0xFF) / 10.0 // HDOP * 10
-            val vdop = (data[19].toInt() and 0xFF) / 10.0 // VDOP * 10
+            // Byte 1-4: 小时开始时间 (big endian)
+            val timeSinceHourStart = ((data[1].toInt() and 0xFF) shl 24) or
+                    ((data[2].toInt() and 0xFF) shl 16) or
+                    ((data[3].toInt() and 0xFF) shl 8) or
+                    (data[4].toInt() and 0xFF)
+
+            // Byte 5: 定位质量(高2位) + 卫星数(低6位)
+            val fixQuality = (data[5].toInt() shr 6) and 0x03
+            val satellites = data[5].toInt() and 0x3F
+
+            // Byte 6-9: 纬度 (big endian, 度 * 10,000,000)
+            val latInt = ((data[6].toInt() and 0xFF) shl 24) or
+                    ((data[7].toInt() and 0xFF) shl 16) or
+                    ((data[8].toInt() and 0xFF) shl 8) or
+                    (data[9].toInt() and 0xFF)
+            val currentLatitude = latInt / 10000000.0
+
+            // Byte 10-13: 经度 (big endian, 度 * 10,000,000)
+            val lonInt = ((data[10].toInt() and 0xFF) shl 24) or
+                    ((data[11].toInt() and 0xFF) shl 16) or
+                    ((data[12].toInt() and 0xFF) shl 8) or
+                    (data[13].toInt() and 0xFF)
+            val currentLongitude = lonInt / 10000000.0
+
+            // Byte 14-17: 海拔 (big endian, 米 * 100)
+            val altInt = ((data[14].toInt() and 0xFF) shl 24) or
+                    ((data[15].toInt() and 0xFF) shl 16) or
+                    ((data[16].toInt() and 0xFF) shl 8) or
+                    (data[17].toInt() and 0xFF)
+            val altitudeMeters = altInt / 100.0
+
+            // Byte 18-21: 速度 (big endian, km/h * 100)
+            val speedInt = ((data[18].toInt() and 0xFF) shl 24) or
+                    ((data[19].toInt() and 0xFF) shl 16) or
+                    ((data[20].toInt() and 0xFF) shl 8) or
+                    (data[21].toInt() and 0xFF)
+            val speedKmh = speedInt / 100.0
+
+            // Byte 22-25: 方位角 (big endian, 度 * 100)
+            val bearingInt = ((data[22].toInt() and 0xFF) shl 24) or
+                    ((data[23].toInt() and 0xFF) shl 16) or
+                    ((data[24].toInt() and 0xFF) shl 8) or
+                    (data[25].toInt() and 0xFF)
+            val bearingDegrees = bearingInt / 100.0
+
+            // Byte 26: HDOP (0.1单位)
+            val hdop = (data[26].toInt() and 0xFF) / 10.0
+
+            // Byte 27: VDOP (0.1单位)
+            val vdop = (data[27].toInt() and 0xFF) / 10.0
 
             // 2. Frequency Calculation (Non-Critical)
             try {
@@ -212,7 +223,14 @@ class RaceChronoParser {
             )
 
             if (shouldLog) {
-                Log.d(TAG, "Parsed GPS Data: Speed=$speedKmh, Sat=$satellites, Lat=$currentLatitude, Lon=$currentLongitude")
+                Log.d(TAG, "Parsed: Sync=$syncBits, Time=$timeSinceHourStart, " +
+                        "Fix=$fixQuality, Sats=$satellites, " +
+                        "Lat=${"%.7f".format(currentLatitude)}, " +
+                        "Lon=${"%.7f".format(currentLongitude)}, " +
+                        "Alt=${"%.1f".format(altitudeMeters)}m, " +
+                        "Speed=${"%.1f".format(speedKmh)}km/h, " +
+                        "Bearing=${"%.1f".format(bearingDegrees)}°, " +
+                        "HDOP=$hdop, VDOP=$vdop")
             }
 
             return currentData

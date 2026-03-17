@@ -53,6 +53,7 @@ class BleConnection(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
+            logReceivedData(characteristic.uuid, value)
             onDataReceived(value)
         }
 
@@ -61,7 +62,23 @@ class BleConnection(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
+            logReceivedData(characteristic.uuid, characteristic.value)
             onDataReceived(characteristic.value)
+        }
+
+        private fun logReceivedData(uuid: UUID, data: ByteArray) {
+            val hexDump = data.joinToString("") { "%02X".format(it) }
+            when (uuid) {
+                GPS_MAIN_UUID -> {
+                    Log.d(TAG, "Received GPS Main Data (${data.size} bytes): $hexDump")
+                }
+                GPS_TIME_UUID -> {
+                    Log.d(TAG, "Received GPS Time Data (${data.size} bytes): $hexDump")
+                }
+                else -> {
+                    Log.d(TAG, "Received unknown characteristic data: $hexDump")
+                }
+            }
         }
     }
 

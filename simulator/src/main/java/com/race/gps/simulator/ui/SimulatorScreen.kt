@@ -64,6 +64,13 @@ fun SimulatorScreen(
             // 蓝牙状态
             BluetoothStatusCard(uiState.isBluetoothEnabled)
 
+            // 数据预览
+            DataPreviewCard(
+                currentSpeed = uiState.currentSpeed,
+                currentLatitude = uiState.currentLatitude,
+                currentLongitude = uiState.currentLongitude
+            )
+
             // 控制按钮
             ControlCard(
                 isAdvertising = uiState.isAdvertising,
