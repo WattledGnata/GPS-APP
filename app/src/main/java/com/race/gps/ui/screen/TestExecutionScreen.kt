@@ -162,7 +162,7 @@ private fun ProgressBar(speed: Double, testState: TestState) {
             Text("${template.endSpeed} km/h", fontSize = 12.sp, color = Color.Gray)
         }
         LinearProgressIndicator(
-            progress = { progress },
+            progress = progress,
             modifier = Modifier.fillMaxWidth().height(8.dp)
         )
     }

@@ -60,7 +60,7 @@ class TestSessionViewModel(
             }
             is TestState.Running -> {
                 state.session.addDataPoint(gpsData)
-                if (state.template.shouldEnd(gpsData)) {
+                if (state.session.template.shouldEnd(gpsData)) {
                     finishTest(state.session)
                 }
             }

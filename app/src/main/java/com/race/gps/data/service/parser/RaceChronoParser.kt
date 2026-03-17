@@ -2,13 +2,13 @@ package com.race.gps.data.service.parser
 
 import android.location.Location
 import android.util.Log
-import com.race.gps.data.model.BluetoothData
+import com.race.gps.domain.model.GpsData
 import java.util.Collections
 import java.util.ArrayList
 
 /**
  * RaceChrono GPS Protocol Parser
- * Handles parsing of raw byte arrays into BluetoothData objects.
+ * Handles parsing of raw byte arrays into GpsData objects.
  * Maintains state for frequency calculation and tracking (distance/time).
  */
 class RaceChronoParser {
@@ -47,7 +47,7 @@ class RaceChronoParser {
     /**
      * Parses GPS Time characteristic data (3 bytes)
      */
-    fun parseGpsTimeData(data: ByteArray, currentData: BluetoothData): BluetoothData {
+    fun parseGpsTimeData(data: ByteArray, currentData: GpsData): GpsData {
         if (data.size < 3) {
             Log.e(TAG, "Invalid GPS time data size: ${data.size}")
             return currentData
@@ -75,7 +75,7 @@ class RaceChronoParser {
     /**
      * Parses GPS Main characteristic data (20 bytes)
      */
-    fun parseGpsData(data: ByteArray, inputData: BluetoothData, shouldLog: Boolean = false): BluetoothData {
+    fun parseGpsData(data: ByteArray, inputData: GpsData, shouldLog: Boolean = false): GpsData {
         var currentData = inputData
 
         if (data.size < 20) {
@@ -198,19 +198,17 @@ class RaceChronoParser {
 
             // 4. Update Current Data
             currentData = currentData.copy(
-                time = System.currentTimeMillis(),
-                satelliteCount = satellites,
-                dop = String.format("%.2f", hdop),
-                positionType = fixQuality,
-                azimuth = bearingDegrees.toInt(),
-                altitude = String.format("%.1f", altitudeMeters),
-                altitudeError = String.format("%.2f", vdop),
-                latitude = String.format("%.7f", currentLatitude),
-                longitude = String.format("%.7f", currentLongitude),
-                elapsedTime = String.format("%.1f", elapsedTimeSeconds),
-                distance = String.format("%.2f", totalDistance),
+                timestamp = System.currentTimeMillis(),
                 speed = speedKmh,
-                frequency = String.format("%.1f", gpsFrequency)
+                latitude = currentLatitude,
+                longitude = currentLongitude,
+                altitude = altitudeMeters,
+                bearing = bearingDegrees,
+                satelliteCount = satellites,
+                hdop = hdop,
+                vdop = vdop,
+                frequency = gpsFrequency,
+                isTestReady = satellites >= 6 && hdop < 2.0
             )
 
             if (shouldLog) {
