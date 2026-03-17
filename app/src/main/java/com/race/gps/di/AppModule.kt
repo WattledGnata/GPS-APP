@@ -4,14 +4,12 @@ import androidx.room.Room
 import com.race.gps.bluetooth.BluetoothDataSource
 import com.race.gps.data.local.AppDatabase
 import com.race.gps.data.local.file.TestDataFileStorage
-import com.race.gps.data.local.migration.SharedPreferencesDataMigration
 import com.race.gps.data.repository.BluetoothDeviceRepository
 import com.race.gps.data.repository.CarModelRepository
 import com.race.gps.data.repository.GpsDataRepository
 import com.race.gps.data.repository.TestResultRepository
 import com.race.gps.data.service.parser.RaceChronoParser
 import com.race.gps.domain.usecase.CalculateResultUseCase
-import com.race.gps.viewmodel.BluetoothDeviceViewModel
 import com.race.gps.viewmodel.GpsDataViewModel
 import com.race.gps.viewmodel.TestHistoryViewModel
 import com.race.gps.viewmodel.TestSessionViewModel
@@ -29,7 +27,7 @@ val databaseModule = module {
             AppDatabase::class.java,
             "race_chrono_database"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .fallbackToDestructiveMigration()
             .build()
     }
 
@@ -73,12 +71,4 @@ val viewModelModule = module {
     single { GpsDataViewModel(get()) }
     viewModel { TestSessionViewModel(get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
-    viewModel { BluetoothDeviceViewModel(get()) }
-}
-
-/**
- * 数据迁移模块
- */
-val migrationModule = module {
-    single { SharedPreferencesDataMigration(androidContext(), get()) }
 }
