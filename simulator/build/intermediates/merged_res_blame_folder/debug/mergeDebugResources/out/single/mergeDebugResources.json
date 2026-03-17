@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.race.gps.simulator-debug-45:/xml_data_extraction_rules.xml.flat",
+        "source": "com.race.gps.simulator-main-47:/xml/data_extraction_rules.xml"
+    },
+    {
+        "merged": "com.race.gps.simulator-debug-45:/xml_backup_rules.xml.flat",
+        "source": "com.race.gps.simulator-main-47:/xml/backup_rules.xml"
+    }
+]

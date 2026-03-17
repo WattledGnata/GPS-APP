@@ -25,7 +25,8 @@ import com.race.gps.simulator.viewmodel.SimulatorViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SimulatorScreen(
-    viewModel: SimulatorViewModel = viewModel()
+    viewModel: SimulatorViewModel = viewModel(),
+    onRequestPermission: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
@@ -55,7 +56,10 @@ fun SimulatorScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 权限状态
-            PermissionStatusCard(uiState.hasPermissions)
+            PermissionStatusCard(
+                hasPermissions = uiState.hasPermissions,
+                onRequestPermission = onRequestPermission
+            )
 
             // 蓝牙状态
             BluetoothStatusCard(uiState.isBluetoothEnabled)
@@ -102,23 +106,58 @@ fun SimulatorScreen(
 }
 
 @Composable
-fun PermissionStatusCard(hasPermissions: Boolean) {
+fun PermissionStatusCard(
+    hasPermissions: Boolean,
+    onRequestPermission: () -> Unit = {}
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = if (hasPermissions) Color(0xFF4CAF50) else Color(0xFFF44336)
         )
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = if (hasPermissions) "✓ 权限已授予" else "✗ 缺少权限",
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (hasPermissions) "✓ 权限已授予" else "✗ 缺少权限",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+
+            if (!hasPermissions) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "GPS模拟器需要以下权限：",
+                        color = Color.White,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "• 蓝牙连接 (BLE广播)\n• 蓝牙扫描\n• 位置权限 (系统要求)",
+                        color = Color.White,
+                        fontSize = 11.sp
+                    )
+
+                    Button(
+                        onClick = onRequestPermission,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color(0xFFF44336)
+                        )
+                    ) {
+                        Text("请求权限", fontSize = 14.sp)
+                    }
+                }
+            }
         }
     }
 }

@@ -36,17 +36,35 @@ class MainActivity : ComponentActivity() {
 
         viewModel = SimulatorViewModel()
 
-        // 检查权限
-        if (!checkPermissions()) {
-            requestPermissions()
-        }
-
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme()
             ) {
-                SimulatorScreen(viewModel)
+                SimulatorScreen(
+                    viewModel = viewModel,
+                    onRequestPermission = { requestPermissions() }
+                )
             }
+        }
+
+        // 启动时检查权限
+        checkAndRequestPermissions()
+    }
+
+    /**
+     * 检查并请求权限
+     */
+    private fun checkAndRequestPermissions() {
+        val missingPermissions = SimulatorViewModel.REQUIRED_PERMISSIONS.filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missingPermissions.isNotEmpty()) {
+            // 有缺失的权限，自动请求
+            requestPermissions()
+        } else {
+            // 所有权限都已授予
+            viewModel.checkPermissions(this)
         }
     }
 

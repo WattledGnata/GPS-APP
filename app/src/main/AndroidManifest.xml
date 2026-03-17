@@ -41,22 +41,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity
-            android:name=".TestSelectionActivity"
-            android:exported="false" />
-        <activity
-            android:name=".TestActivity"
-            android:exported="false" />
-        <activity
-            android:name=".RealTimeDataActivity"
-            android:exported="false" />
-        <activity
-            android:name=".TestRecordListActivity"
-            android:exported="false" />
-        <activity
-            android:name=".TestRecordDetailActivity"
-            android:exported="false" />
-        
     </application>
 
 </manifest>

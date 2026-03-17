@@ -53,6 +53,7 @@ class SimulatorViewModel : ViewModel() {
 
         // 必需的权限
         val REQUIRED_PERMISSIONS = buildList {
+            // Android 12+ BLE权限
             add(Manifest.permission.BLUETOOTH_CONNECT)
             add(Manifest.permission.BLUETOOTH_ADVERTISE)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -61,6 +62,9 @@ class SimulatorViewModel : ViewModel() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
+            // 位置权限 (BLE扫描需要，即使不实际使用位置)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.toTypedArray()
     }
 
