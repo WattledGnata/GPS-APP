@@ -139,7 +139,24 @@ class BleDeviceScanner(
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
             results.forEach { result ->
-                onScanResult(ScanCallback.CALLBACK_TYPE_ALL_MATCHES, result)
+                // 直接处理扫描结果，不需要callbackType
+                val device = result.device
+                val name = device.name ?: "未知设备"
+                val address = device.address
+                val rssi = result.rssi
+
+                val existingDevice = deviceCache[address]
+                val newDevice = ScannedDevice(
+                    name = name,
+                    address = address,
+                    rssi = rssi,
+                    lastSeen = System.currentTimeMillis()
+                )
+
+                if (existingDevice == null || rssi > existingDevice.rssi) {
+                    deviceCache[address] = newDevice
+                    updateScanResults()
+                }
             }
         }
 
