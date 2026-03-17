@@ -92,6 +92,18 @@ fun SimulatorScreen(
                 onScenarioChange = { viewModel.setScenario(it) }
             )
 
+            // 速度控制
+            SpeedControlCard(
+                mode = uiState.speedMode,
+                targetSpeed = uiState.targetSpeed,
+                acceleration = uiState.speedAcceleration,
+                currentSpeed = uiState.currentSpeed,
+                status = uiState.speedStatus,
+                onModeChange = { viewModel.setSpeedMode(it) },
+                onTargetSpeedChange = { viewModel.setTargetSpeed(it) },
+                onAccelerationChange = { viewModel.setSpeedAcceleration(it) }
+            )
+
             // 参数设置
             ParametersCard(
                 frequency = uiState.frequency,

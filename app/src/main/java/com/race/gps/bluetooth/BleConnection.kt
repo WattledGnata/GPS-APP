@@ -44,6 +44,25 @@ class BleConnection(
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                // 请求更大的MTU以支持28字节数据传输
+                // 默认MTU是23，实际数据只有20字节
+                // ��们需要至少31字节的MTU来传输28字节数据
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    val mtuRequested = gatt.requestMtu(31)
+                    Log.d(TAG, "Requesting MTU=31, result: $mtuRequested")
+                } else {
+                    enableNotifications(gatt)
+                }
+            }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "MTU changed to $mtu")
+                enableNotifications(gatt)
+            } else {
+                Log.e(TAG, "Failed to change MTU, status: $status")
+                // 即使MTU请求失败，也尝试启用通知
                 enableNotifications(gatt)
             }
         }

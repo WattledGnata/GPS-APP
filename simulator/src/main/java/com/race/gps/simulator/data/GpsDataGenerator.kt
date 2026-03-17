@@ -167,25 +167,28 @@ class GpsDataGenerator(
     }
 
     /**
+     * 设置当前速度（由ViewModel调用）
+     */
+    fun setCurrentSpeed(speed: Float) {
+        currentSpeed = speed
+    }
+
+    /**
+     * 设置当前位置（由ViewModel调用）
+     */
+    fun setCurrentPosition(lat: Double, lon: Double) {
+        currentLatitude = lat
+        currentLongitude = lon
+    }
+
+    /**
      * 更新模拟状态
      */
     private fun updateSimulation() {
         incrementSyncCounter()
 
-        when (scenario) {
-            TestScenario.STATIC -> {
-                // 静态场景，保持当前速度
-                currentSpeed = initialSpeed
-            }
-            TestScenario.ACCELERATION -> {
-                // 加速场景，每秒增加10 km/h
-                currentSpeed = min(currentSpeed + 10f, 100f)
-            }
-            TestScenario.BRAKING -> {
-                // 刹车场景，每秒减少15 km/h
-                currentSpeed = max(currentSpeed - 15f, 0f)
-            }
-        }
+        // 简化：使用外部设置的速度，不在这里计算
+        // 速度由SpeedController控制，通过setCurrentSpeed设置
 
         // 更新位置 (简化：根据速度移动)
         val speedMs = currentSpeed / 3.6f // km/h转m/s

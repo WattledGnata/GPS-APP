@@ -12,6 +12,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.race.gps.simulator.ble.GpsPeripheralManager
 import com.race.gps.simulator.data.GpsDataGenerator
+import com.race.gps.simulator.data.SpeedController
+import com.race.gps.simulator.data.SpeedMode
 import com.race.gps.simulator.data.TestScenario
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +36,12 @@ data class SimulatorUiState(
     val initialSpeed: Float = 0f,
     val currentSpeed: Float = 0f,
     val currentLatitude: Double = 60.1725,
-    val currentLongitude: Double = 24.9375
+    val currentLongitude: Double = 24.9375,
+    // 速度控制相关
+    val speedMode: SpeedMode = SpeedMode.STATIC,
+    val targetSpeed: Float = 60f,
+    val speedAcceleration: Float = 2.0f,
+    val speedStatus: String = "静止 (0 km/h)"
 )
 
 /**
@@ -47,24 +54,26 @@ class SimulatorViewModel : ViewModel() {
 
     private var peripheralManager: GpsPeripheralManager? = null
     private var dataGenerator: GpsDataGenerator? = null
+    private val speedController = SpeedController()
 
     companion object {
         private const val TAG = "SimulatorViewModel"
 
         // 必需的权限
         val REQUIRED_PERMISSIONS = buildList {
+            // 位置权限 (所有版本都需要)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+
             // Android 12+ BLE权限
-            add(Manifest.permission.BLUETOOTH_CONNECT)
-            add(Manifest.permission.BLUETOOTH_ADVERTISE)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
                 add(Manifest.permission.BLUETOOTH_SCAN)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
-            // 位置权限 (BLE扫描需要，即使不实际使用位置)
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.toTypedArray()
     }
 
@@ -164,13 +173,23 @@ class SimulatorViewModel : ViewModel() {
             val manager = peripheralManager ?: return@launch
 
             generator.startGpsDataStream().collect { (mainData, timeData) ->
+                // 更新速度
+                val currentSpeed = updateSpeed(System.currentTimeMillis())
+                generator.setCurrentSpeed(currentSpeed)
+
+                // 更新位置
+                val currentLat = getCurrentLatitude(currentSpeed)
+                val currentLon = getCurrentLongitude(currentSpeed)
+                generator.setCurrentPosition(currentLat, currentLon)
+
+                // 发送数据
                 manager.updateGpsData(mainData, timeData)
 
-                // 更新UI状态中的当前数据
+                // 更新UI状态
                 _uiState.value = _uiState.value.copy(
-                    currentSpeed = getCurrentSpeed(),
-                    currentLatitude = getCurrentLatitude(),
-                    currentLongitude = getCurrentLongitude()
+                    currentSpeed = currentSpeed,
+                    currentLatitude = currentLat,
+                    currentLongitude = currentLon
                 )
             }
         }
@@ -215,29 +234,69 @@ class SimulatorViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(initialSpeed = speed)
     }
 
+    // ==================== 速度控制相关方法 ====================
+
+    /**
+     * 设置速度模式
+     */
+    fun setSpeedMode(mode: SpeedMode) {
+        speedController.setMode(mode)
+        _uiState.value = _uiState.value.copy(
+            speedMode = mode,
+            speedStatus = speedController.getStatusDescription()
+        )
+    }
+
+    /**
+     * 设置目标速度
+     */
+    fun setTargetSpeed(speed: Float) {
+        speedController.setTargetSpeed(speed)
+        _uiState.value = _uiState.value.copy(
+            targetSpeed = speed,
+            speedStatus = speedController.getStatusDescription()
+        )
+    }
+
+    /**
+     * 设置加速度
+     */
+    fun setSpeedAcceleration(acc: Float) {
+        speedController.setAcceleration(acc)
+        _uiState.value = _uiState.value.copy(speedAcceleration = acc)
+    }
+
+    /**
+     * 更新速度（在数据生成循环中调用）
+     */
+    private fun updateSpeed(currentTimeMillis: Long): Float {
+        val newSpeed = speedController.updateSpeed(currentTimeMillis)
+        _uiState.value = _uiState.value.copy(
+            currentSpeed = newSpeed,
+            speedStatus = speedController.getStatusDescription()
+        )
+        return newSpeed
+    }
+
     /**
      * 获取当前速度（用于UI显示）
      */
     private fun getCurrentSpeed(): Float {
-        return when (_uiState.value.currentScenario) {
-            TestScenario.STATIC -> _uiState.value.initialSpeed
-            TestScenario.ACCELERATION -> _uiState.value.currentSpeed.coerceAtMost(100f)
-            TestScenario.BRAKING -> _uiState.value.currentSpeed.coerceAtLeast(0f)
-        }
+        return _uiState.value.currentSpeed
     }
 
     /**
      * 获取当前纬度
      */
-    private fun getCurrentLatitude(): Double {
-        return 60.1725 + (_uiState.value.currentSpeed * 0.0001)
+    private fun getCurrentLatitude(speed: Float = _uiState.value.currentSpeed): Double {
+        return 60.1725 + (speed * 0.0001)
     }
 
     /**
      * 获取当前经度
      */
-    private fun getCurrentLongitude(): Double {
-        return 24.9375 + (_uiState.value.currentSpeed * 0.0001)
+    private fun getCurrentLongitude(speed: Float = _uiState.value.currentSpeed): Double {
+        return 24.9375 + (speed * 0.0001)
     }
 
     override fun onCleared() {
