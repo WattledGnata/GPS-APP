@@ -43,6 +43,7 @@ val databaseModule = module {
 val bluetoothModule = module {
     single { RaceChronoParser() }
     single { BluetoothDataSource(androidContext(), get()) }
+    single { com.race.gps.bluetooth.BleDeviceManager(androidContext(), get()) }
 }
 
 /**
@@ -68,7 +69,7 @@ val domainModule = module {
  */
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
-    single { GpsDataViewModel(get()) }
+    single { GpsDataViewModel(get(), get()) }
     viewModel { TestSessionViewModel(get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
