@@ -165,5 +165,7 @@ data class FilteredGpsData(
     val isAnomaly: Boolean,         // 是否被修正
     val isTestTriggered: Boolean = false, // 是否触发测试（连续5点加速度>0.1G）
     val timestamp: Long,            // 原始时间戳
-    val raw: GpsData                // 原始数据引用
+    val raw: GpsData,                // 原始数据引用
+    val consistencyFactor: Double = 1.0,  // 位置-速度一致性因子
+    val isPositionAnomaly: Boolean = false  // 位置异常标记
 )
