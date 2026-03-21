@@ -34,9 +34,10 @@ class GpsDataFilter(
         // 2. 物理约束检查：检测速度跳变
         val isAnomaly = isPhysicalConstraintViolation(raw)
 
-        // 2.5. 信号丢失重置检查（GPS 信号丢失 > 200ms → 重置 previousPosition）
+        // 2.5. 信号丢失重置检查（GPS 信号丢失 > 200ms → 重置 previousPosition，等待新起点）
         val dtFromPrevious = previousRaw?.let { (raw.timestamp - it.timestamp) / 1000.0 } ?: 0.0
-        if (dtFromPrevious > 0.2) {
+        val signalLost = dtFromPrevious > 0.2
+        if (signalLost) {
             previousRaw = null
             previousPosition = null
         }
@@ -77,9 +78,11 @@ class GpsDataFilter(
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
 
-        // 6. 更新状态
-        previousRaw = raw
-        previousPosition = raw.latitude to raw.longitude
+        // 6. 更新状态（信号丢失帧不更新，等待新起点重新建立）
+        if (!signalLost) {
+            previousRaw = raw
+            previousPosition = raw.latitude to raw.longitude
+        }
 
         return FilteredGpsData(
             speed = outputSpeed,
