@@ -16,9 +16,13 @@ class GpsDataFilter(
 ) {
     // 滚动窗口：存储最近的原始速度用于中位数滤波
     private val speedWindow = mutableListOf<Double>()
+    private val latWindow = mutableListOf<Double>()       // 纬度中位数滤波窗口
+    private val lonWindow = mutableListOf<Double>()       // 经度中位数滤波窗口
+    private val bearingWindow = mutableListOf<Double>()  // 航向角中位数滤波窗口
 
     // 上一个原始数据点（用于计算加速度）
     private var previousRaw: GpsData? = null
+    private var previousPosition: Pair<Double, Double>? = null  // lat, lon
 
     /**
      * 处理单个GPS数据点
@@ -30,10 +34,19 @@ class GpsDataFilter(
         // 2. 物理约束检查：检测速度跳变
         val isAnomaly = isPhysicalConstraintViolation(raw)
 
+        // 2.5. 位置-速度一致性检验（基于原始数据）
+        val (consistencyFactor, isPositionAnomaly) = checkPositionVelocityConsistency(raw)
+
         // 3. 添加到窗口
         speedWindow.add(raw.speed)
+        latWindow.add(raw.latitude)
+        lonWindow.add(raw.longitude)
+        bearingWindow.add(raw.bearing)
         if (speedWindow.size > windowSize) {
             speedWindow.removeAt(0)
+            latWindow.removeAt(0)
+            lonWindow.removeAt(0)
+            bearingWindow.removeAt(0)
         }
 
         // 4. 计算输出速度
@@ -49,23 +62,31 @@ class GpsDataFilter(
             else -> raw.speed
         }
 
-        // 5. 计算置信度
-        val confidence = calculateConfidence(isAnomaly, raw.hdop)
+        // 位置和航向的滤波输出
+        val outputLat = if (latWindow.size >= 3) latWindow.median() else raw.latitude
+        val outputLon = if (lonWindow.size >= 3) lonWindow.median() else raw.longitude
+        val outputBearing = if (bearingWindow.size >= 3) bearingWindow.median() else raw.bearing
 
-        // 6. 更新previousRaw
+        // 5. 计算置信度
+        val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
+
+        // 6. 更新状态
         previousRaw = raw
+        previousPosition = raw.latitude to raw.longitude
 
         return FilteredGpsData(
             speed = outputSpeed,
-            latitude = raw.latitude,
-            longitude = raw.longitude,
+            latitude = outputLat,
+            longitude = outputLon,
             altitude = raw.altitude,
-            bearing = raw.bearing,
+            bearing = outputBearing,
             acceleration = acceleration,
             confidence = confidence,
             isAnomaly = isAnomaly,
             timestamp = raw.timestamp,
-            raw = raw
+            raw = raw,
+            consistencyFactor = consistencyFactor,
+            isPositionAnomaly = isPositionAnomaly
         )
     }
 
@@ -74,7 +95,11 @@ class GpsDataFilter(
      */
     fun reset() {
         speedWindow.clear()
+        latWindow.clear()
+        lonWindow.clear()
+        bearingWindow.clear()
         previousRaw = null
+        previousPosition = null
     }
 
     // ==================== 私有方法 ====================
@@ -122,7 +147,7 @@ class GpsDataFilter(
     /**
      * 计算置信度
      */
-    private fun calculateConfidence(isAnomaly: Boolean, hdop: Double): Double {
+    private fun calculateConfidence(isAnomaly: Boolean, hdop: Double, consistencyFactor: Double): Double {
         var confidence = if (isAnomaly) 0.5 else 1.0
 
         // HDOP 因子
@@ -133,8 +158,70 @@ class GpsDataFilter(
             else -> 0.3
         }
         confidence *= hdopFactor
+        confidence *= consistencyFactor
 
         return confidence.coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * 位置-速度一致性检验
+     * 基于原始数据计算 v_implied = Δd / Δt，与 GPS 报告速度对比
+     */
+    private fun checkPositionVelocityConsistency(current: GpsData): Pair<Double, Boolean> {
+        val prevPos = previousPosition ?: return 1.0 to false
+        val prevData = previousRaw ?: return 1.0 to false
+
+        val dt = (current.timestamp - prevData.timestamp) / 1000.0
+        if (dt <= 0 || dt > 1.0) return 1.0 to false
+
+        // 计算位移 Δd（简化平面近似）
+        val latRad = Math.toRadians(current.latitude)
+        val deltaLatM = abs(current.latitude - prevPos.first) * 111320.0
+        val deltaLonM = abs(current.longitude - prevPos.second) * 111320.0 * Math.cos(latRad)
+        val distanceM = Math.sqrt(deltaLatM * deltaLatM + deltaLonM * deltaLonM)
+
+        // Δd 过小时跳过一致性检查（0.01m 远小于 GPS 噪声，规避被淹没）
+        if (distanceM < 0.01) return 1.0 to false
+
+        // 计算 v_implied
+        val vImpliedKmh = (distanceM / dt) * 3.6
+        val speedDiff = abs(current.speed - vImpliedKmh)
+
+        // 航向变化降权（>30°/s 时降权）
+        val bearingDelta = abs(current.bearing - prevData.bearing)
+        val normalizedBearingDelta = if (bearingDelta > 180) 360 - bearingDelta else bearingDelta
+        val bearingPenalty = if (normalizedBearingDelta > 30.0) 0.8 else 1.0
+
+        // HDOP 降权
+        val hdopPenalty = if (current.hdop > 3.0) 0.5 else 1.0
+
+        // 确定容差
+        val tolerance = getConsistencyTolerance(current.speed)
+
+        // 一致性因子
+        val ratio = speedDiff / tolerance
+        val baseFactor = when {
+            ratio <= 1.0 -> 1.0
+            ratio <= 2.0 -> 0.8
+            ratio <= 3.0 -> 0.6
+            else -> 0.3
+        }
+
+        val consistencyFactor = (baseFactor * bearingPenalty * hdopPenalty).coerceIn(0.0, 1.0)
+        val isPositionAnomaly = ratio > 3.0
+
+        return consistencyFactor to isPositionAnomaly
+    }
+
+    /**
+     * 根据速度确定一致性容差
+     */
+    private fun getConsistencyTolerance(speed: Double): Double {
+        return when {
+            speed < 5.0 -> 3.0
+            speed < 60.0 -> 5.0
+            else -> 10.0
+        }
     }
 
     /**
