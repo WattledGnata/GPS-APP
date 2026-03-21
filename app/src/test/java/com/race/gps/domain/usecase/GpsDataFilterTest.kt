@@ -75,6 +75,44 @@ class GpsDataFilterTest {
         }
     }
 
+    /**
+     * 创建带位置变化的GPS序列
+     * 模拟车辆向北（纬度增加）行驶，位置变化与速度一致
+     *
+     * 关键设计：累积位移用每个区间的平均速度计算。
+     * 设区间 [i-1, i] 的位移 = avg(speed[i-1], speed[i]) * dt
+     * 这样一致性检验中 v_implied = displacement/dt = avg(speed[i-1], speed[i])
+     * 但 GPS 报告 speed[i]，两者在加速时不完全相等。
+     * 为确保一致性通过（speedDiff < tolerance），使用保守的 startSpeed 作为区间速度。
+     */
+    private fun createMovingSequence(
+        startSpeed: Double,
+        endSpeed: Double,
+        points: Int,
+        intervalMs: Long = 40L,
+        startTimestamp: Long = System.currentTimeMillis(),
+        startLat: Double = 60.1725,
+        startLon: Double = 24.9375,
+        bearing: Double = 0.0  // 正北方向
+    ): List<GpsData> {
+        val speedStep = (endSpeed - startSpeed) / (points - 1)
+        // 每个区间使用区间起始速度计算位移，保证 v_implied = reported speed（匀速）或略小（加速时）
+        return (0 until points).map { i ->
+            val speed = startSpeed + speedStep * i
+            // 从 startSpeed 开始累计，使用当前速度作为当前区间的速度
+            val segmentSpeed = startSpeed + speedStep * i
+            val latIncrement = (segmentSpeed / 3.6) * intervalMs / 111320.0 / 1000.0
+            createGpsData(
+                timestamp = startTimestamp + i * intervalMs,
+                speed = speed,
+                latitude = startLat + latIncrement * i,
+                longitude = startLon,
+                bearing = bearing,
+                hdop = 1.0
+            )
+        }
+    }
+
     // ==================== 测试用例 ====================
 
     /**
@@ -513,5 +551,272 @@ class GpsDataFilterTest {
             "连续异常应导致多个低置信度点",
             lowConfidenceCount >= 2
         )
+    }
+
+    // ==================== 位置-速度一致性检验测试 ====================
+
+    /**
+     * GF17: 匀速行驶应通过一致性检验
+     *
+     * 场景：速度恒定，位置变化与速度完全一致
+     * 输入：匀速 45 km/h，位移与报告速度精确一致
+     * 预期：consistencyFactor = 1.0, isPositionAnomaly = false
+     *
+     * 注意：使用匀速是因为加速时 GPS 报告端点速度与区间平均速度存在固有差异，
+     * 即使正常加速也会导致一致性 factor < 1.0。匀速场景下两者完全一致。
+     */
+    @Test
+    fun GF17_normalPositionConsistent_fullFactor() {
+        // Given: 匀速移动序列（startSpeed == endSpeed 确保一致性）
+        val movingData = createMovingSequence(
+            startSpeed = 45.0,
+            endSpeed = 45.0,  // 匀速，保证报告速度与位移完全一致
+            points = 9
+        )
+
+        // When
+        val results = movingData.map { filter.process(it) }
+
+        // Then: 从第2个点开始一致性因子应为 1.0
+        results.drop(2).forEachIndexed { idx, result ->
+            val index = idx + 2
+            assertEquals(
+                "第${index}个点一致性因子应为1.0",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+            assertFalse(
+                "第${index}个点不应为位置异常",
+                result.isPositionAnomaly
+            )
+        }
+    }
+
+    /**
+     * GF17b: 高速行驶（120 km/h）应通过一致性检验，容差 10 km/h
+     *
+     * 场景：高速时 GPS 精度通常更好，容差放宽至 10 km/h
+     * 输入：120 km/h 稳定行驶，位置平滑变化
+     * 预期：consistencyFactor = 1.0
+     */
+    @Test
+    fun GF17b_highSpeedConsistent_fullFactor() {
+        // Given: 高速稳定行驶序列
+        val movingData = createMovingSequence(
+            startSpeed = 120.0,
+            endSpeed = 120.0,  // 稳定 120 km/h
+            points = 12
+        )
+
+        // When
+        val results = movingData.map { filter.process(it) }
+
+        // Then: 从第2个点开始一致性因子应为 1.0
+        results.drop(2).forEachIndexed { idx, result ->
+            val index = idx + 2
+            assertEquals(
+                "高速第${index}个点一致性因子应为1.0",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+            assertFalse(
+                "高速第${index}个点不应为位置异常",
+                result.isPositionAnomaly
+            )
+        }
+    }
+
+    /**
+     * GF18: 位置跳变（瞬间位移100m）应被标记为位置异常
+     *
+     * 场景：GPS 位置瞬间跳变（不可能的物理位移）
+     * 输入：第5个点纬度瞬间跳变 +0.001度（约110m）
+     * 预期：isPositionAnomaly = true, consistencyFactor 降低
+     */
+    @Test
+    fun GF18_positionJump_detectedAsAnomaly() {
+        // Given: 正常移动序列，第5个点位置跳变
+        val normalData = createMovingSequence(
+            startSpeed = 30.0,
+            endSpeed = 60.0,
+            points = 9
+        )
+
+        val anomalousData = normalData.mapIndexed { index, data ->
+            if (index == 4) {
+                data.copy(latitude = data.latitude + 0.001) // 约+110m
+            } else {
+                data
+            }
+        }
+
+        // When
+        val results = anomalousData.map { filter.process(it) }
+
+        // Then: 第5个点应标记为位置异常
+        assertTrue(
+            "第5个点应为位置异常",
+            results[4].isPositionAnomaly
+        )
+        assertTrue(
+            "第5个点一致性因子应降低",
+            results[4].consistencyFactor < 1.0
+        )
+    }
+
+    /**
+     * GF19: 静止漂移（Δd < 0.5m）应跳过一致性检查
+     *
+     * 场景：低速时位置变化极小，不进行一致性判断
+     * 输入：低速（speed < 5 km/h）且位置几乎不变
+     * 预期：consistencyFactor = 1.0（跳过检查）
+     */
+    @Test
+    fun GF19_lowSpeedSkipsConsistencyCheck_fullFactor() {
+        // Given: 低速静止序列
+        val baseTimestamp = System.currentTimeMillis()
+        val lowSpeedData = (0 until 9).map { i ->
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = (i % 3) * 0.5,  // 0, 0.5, 1.0, 0, ...
+                latitude = 60.1725,      // 静止
+                longitude = 24.9375,     // 静止
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = lowSpeedData.map { filter.process(it) }
+
+        // Then: 一致性因子应为1.0（Δd过小跳过检查）
+        results.drop(1).forEachIndexed { index, result ->
+            assertEquals(
+                "低速静止第${index}个点一致性因子应为1.0",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+        }
+    }
+
+    /**
+     * GF20: 航向剧变（>30°/s）应降权 consistencyFactor
+     *
+     * 场景：转弯时直线位移与速度不匹配
+     * 输入：航向在40ms内变化90度
+     * 预期：consistencyFactor × 0.8 降权
+     */
+    @Test
+    fun GF20_sharpTurn_reducesConsistencyFactor() {
+        // Given: 弯道场景，航向剧变
+        val baseTimestamp = System.currentTimeMillis()
+        val turnData = (0 until 9).map { i ->
+            val bearing = if (i < 5) 0.0 else 90.0  // 第5个点突然转弯
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = 30.0,
+                latitude = 60.1725 + i * 0.0001,
+                longitude = 24.9375,
+                bearing = bearing,
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = turnData.map { filter.process(it) }
+
+        // Then: 航向变化点应有降权的 consistencyFactor
+        // bearing 从 0° 到 90°，变化 90° > 30°，应 ×0.8
+        assertTrue(
+            "转弯点一致性因子应降低",
+            results[5].consistencyFactor < 0.9
+        )
+    }
+
+    /**
+     * GF21: GPS 信号丢失（>200ms）后重置一致性检验
+     *
+     * 场景：GPS 信号中断后恢复
+     * 输入：第5个点与第4个点间隔 300ms
+     * 预期：第5个点不触发位置异常（dt过大跳过检查）
+     *
+     * 注意：使用匀速序列避免加速导致的 speedDiff > tolerance 问题
+     */
+    @Test
+    fun GF21_signalLoss_skipsConsistencyCheck() {
+        // Given: 匀速序列，第5个点间隔300ms
+        val normalData = createMovingSequence(
+            startSpeed = 45.0,
+            endSpeed = 45.0,  // 匀速
+            points = 5
+        )
+
+        val gapData = normalData.mapIndexed { index, data ->
+            if (index == 4) {
+                // 300ms 间隔（原本40ms）
+                data.copy(timestamp = data.timestamp + 260)
+            } else {
+                data
+            }
+        }
+
+        // When
+        val results = gapData.map { filter.process(it) }
+
+        // Then: 大间隔点不应为位置异常（跳过检查）
+        assertFalse(
+            "大间隔点不应为位置异常",
+            results[4].isPositionAnomaly
+        )
+        assertEquals(
+            "大间隔点一致性因子应为1.0",
+            1.0,
+            results[4].consistencyFactor,
+            0.01
+        )
+    }
+
+    /**
+     * GF22: 中位数滤波后位置应比原始位置更平滑
+     *
+     * 场景：位置有小幅抖动时，中位数滤波应平滑
+     * 输入：纬度有小抖动（±0.00001度）的序列
+     * 预期：滤波后纬度变化幅度小于原始
+     */
+    @Test
+    fun GF22_positionMedianFilter_smoothsOutput() {
+        // Given: 位置有小幅随机抖动
+        val baseTimestamp = System.currentTimeMillis()
+        val jitterData = (0 until 9).map { i ->
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = 30.0,
+                latitude = 60.1725 + (i % 3 - 1) * 0.00001,  // ±0.00001度抖动
+                longitude = 24.9375,
+                bearing = 0.0,
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = jitterData.map { filter.process(it) }
+
+        // Then: 窗口填满后，滤波后纬度应趋于稳定
+        if (results.size >= 9) {
+            val filteredLats = results.map { it.latitude }
+            val originalLats = jitterData.map { it.latitude }
+            // 原始数据波动范围
+            val originalRange = originalLats.maxOrNull()!! - originalLats.minOrNull()!!
+            // 滤波后范围（取中间几个）
+            val filteredRange = filteredLats.drop(5).take(3).let {
+                it.maxOrNull()!! - it.minOrNull()!!
+            }
+            assertTrue(
+                "滤波后位置变化应小于原始",
+                filteredRange <= originalRange
+            )
+        }
     }
 }

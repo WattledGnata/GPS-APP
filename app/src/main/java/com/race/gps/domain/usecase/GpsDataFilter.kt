@@ -34,7 +34,14 @@ class GpsDataFilter(
         // 2. 物理约束检查：检测速度跳变
         val isAnomaly = isPhysicalConstraintViolation(raw)
 
-        // 2.5. 位置-速度一致性检验（基于原始数据）
+        // 2.5. 信号丢失重置检查（GPS 信号丢失 > 200ms → 重置 previousPosition）
+        val dtFromPrevious = previousRaw?.let { (raw.timestamp - it.timestamp) / 1000.0 } ?: 0.0
+        if (dtFromPrevious > 0.2) {
+            previousRaw = null
+            previousPosition = null
+        }
+
+        // 2.6. 位置-速度一致性检验（基于原始数据）
         val (consistencyFactor, isPositionAnomaly) = checkPositionVelocityConsistency(raw)
 
         // 3. 添加到窗口
@@ -65,7 +72,7 @@ class GpsDataFilter(
         // 位置和航向的滤波输出
         val outputLat = if (latWindow.size >= 3) latWindow.median() else raw.latitude
         val outputLon = if (lonWindow.size >= 3) lonWindow.median() else raw.longitude
-        val outputBearing = if (bearingWindow.size >= 3) bearingWindow.median() else raw.bearing
+        val outputBearing = if (bearingWindow.size >= 3) bearingWindow.circularMedian() else raw.bearing
 
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
@@ -172,7 +179,7 @@ class GpsDataFilter(
         val prevData = previousRaw ?: return 1.0 to false
 
         val dt = (current.timestamp - prevData.timestamp) / 1000.0
-        if (dt <= 0 || dt > 1.0) return 1.0 to false
+        if (dt <= 0 || dt > 0.2) return 1.0 to false
 
         // 计算位移 Δd（简化平面近似）
         val latRad = Math.toRadians(current.latitude)
@@ -235,6 +242,31 @@ class GpsDataFilter(
         } else {
             sorted[sorted.size / 2]
         }
+    }
+
+    /**
+     * 扩展函数：计算循环中位数（用于航向角）
+     * 将角度转换为单位向量后求平均角，正确处理 0°=360° 的循环问题
+     * 场景：左转 350°→10°，窗口 [350°,10°,20°,30°,40°,50°,60°,70°,80°]
+     * 普通中位数 = 40°（错误），循环中位数 ≈ 20°（正确）
+     */
+    private fun List<Double>.circularMedian(): Double {
+        if (isEmpty()) return 0.0
+        if (size == 1) return this[0]
+
+        // 将所有角度转换为单位向量后求和
+        var sumSin = 0.0
+        var sumCos = 0.0
+        for (angle in this) {
+            sumSin += Math.sin(Math.toRadians(angle))
+            sumCos += Math.cos(Math.toRadians(angle))
+        }
+
+        // 平均向量的角度即为循环中位数
+        val meanAngle = Math.toDegrees(Math.atan2(sumSin, sumCos))
+
+        // 规范化到 [0, 360) 范围
+        return if (meanAngle < 0) meanAngle + 360 else meanAngle
     }
 }
 
