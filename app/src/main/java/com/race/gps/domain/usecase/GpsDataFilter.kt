@@ -77,11 +77,9 @@ class GpsDataFilter(
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
 
-        // 6. 更新状态（信号丢失帧不更新，等待新起点重新建立）
-        if (!signalLost) {
-            previousRaw = raw
-            previousPosition = raw.latitude to raw.longitude
-        }
+        // 6. 更新状态（信号丢失帧 previousRaw 为 null，下一帧 dt=0 跳过一致性检查，自然作为新基准）
+        previousRaw = raw
+        previousPosition = raw.latitude to raw.longitude
 
         return FilteredGpsData(
             speed = outputSpeed,
