@@ -163,6 +163,7 @@ data class FilteredGpsData(
     val acceleration: Double,       // 纵向加速度 (m/s²)
     val confidence: Double,         // 置信度 0.0 ~ 1.0
     val isAnomaly: Boolean,         // 是否被修正
+    val isTestTriggered: Boolean = false, // 是否触发测试（连续5点加速度>0.1G）
     val timestamp: Long,            // 原始时间戳
     val raw: GpsData                // 原始数据引用
 )

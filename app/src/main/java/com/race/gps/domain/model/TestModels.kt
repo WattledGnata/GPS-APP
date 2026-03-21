@@ -1,5 +1,7 @@
 package com.race.gps.domain.model
 
+import com.race.gps.domain.usecase.FilteredGpsData
+
 /**
  * 测试数据点 - 记录测试过程中每个GPS采样点
  */
@@ -96,35 +98,63 @@ sealed class TestTemplate(
 
 /**
  * 测试会话 - 一次完整的测试过程
+ *
+ * 设计规范：docs/superpowers/specs/2026-03-21-gps-data-filter-design.md
  */
 data class TestSession(
     val id: String,
     val template: TestTemplate,
     val carModel: String,
     val startTime: Long,
+    // 触发前2秒的滤波数据（触发时锁定传入）
+    val preTriggerData: List<FilteredGpsData> = emptyList(),
+    // 测试过程的滤波数据
+    val filteredDataPoints: MutableList<FilteredGpsData> = mutableListOf(),
+    // 传统数据点（用于向后兼容和结果展示）
     val dataPoints: MutableList<GpsDataPoint> = mutableListOf(),
     var triggerTime: Long? = null,
     var endTime: Long? = null
 ) {
-    fun markStarted(gpsData: GpsData) {
-        triggerTime = gpsData.timestamp
-        addDataPoint(gpsData, 0.0)
+    companion object {
+        private const val TAG = "TestSession"
     }
 
-    fun addDataPoint(gpsData: GpsData) {
+    /**
+     * 标记测试开始（触发时调用）
+     * @param filteredData 触发点的滤波数据
+     * @param preTriggerBuffer 触发前2秒的缓冲数据
+     */
+    fun markStarted(filteredData: FilteredGpsData, preTriggerBuffer: List<FilteredGpsData>) {
+        triggerTime = filteredData.timestamp
+
+        // 添加pre-trigger数据
+        filteredDataPoints.addAll(preTriggerBuffer)
+
+        // 添加触发点
+        addFilteredDataPoint(filteredData, 0.0)
+    }
+
+    /**
+     * 添加滤波后的数据点
+     */
+    fun addFilteredDataPoint(filteredData: FilteredGpsData) {
         val triggerTime = this.triggerTime ?: return
-        val elapsedTime = (gpsData.timestamp - triggerTime) / 1000.0
-        addDataPoint(gpsData, elapsedTime)
+        val elapsedTime = (filteredData.timestamp - triggerTime) / 1000.0
+        addFilteredDataPoint(filteredData, elapsedTime)
     }
 
-    private fun addDataPoint(gpsData: GpsData, elapsedTime: Double) {
+    private fun addFilteredDataPoint(filteredData: FilteredGpsData, elapsedTime: Double) {
+        // 添加到滤波数据列表
+        filteredDataPoints.add(filteredData)
+
+        // 同时添加传统数据点（向后兼容）
         dataPoints.add(
             GpsDataPoint(
                 elapsedTime = elapsedTime,
-                speed = gpsData.speed,
-                latitude = gpsData.latitude,
-                longitude = gpsData.longitude,
-                altitude = gpsData.altitude
+                speed = filteredData.speed,
+                latitude = filteredData.latitude,
+                longitude = filteredData.longitude,
+                altitude = filteredData.altitude
             )
         )
     }
