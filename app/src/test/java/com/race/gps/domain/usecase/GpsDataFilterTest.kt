@@ -863,6 +863,44 @@ class GpsDataFilterTest {
     }
 
     /**
+     * GF20b: 航向角跨0°循环边界测试
+     *
+     * 场景：航向跨越 0° 边界时，circularMedian() 应正确处理循环
+     * 输入：航向窗口 [355°, 358°, 0°, 2°, 5°, 8°, 10°, 12°, 15°]
+     * 预期：circularMedian() ≈ 5°-8°（正确），普通中位数会得到 358°（错误）
+     *
+     * 关键：数据紧密围绕0°分布（355°-15°），真正的中心约5°
+     * 普通排序 [0°,2°,5°,8°,10°,12°,15°,355°,358°] 中位数 = 10°
+     * 循环向量平均应给出约 5°（正确方向）
+     */
+    @Test
+    fun GF20b_bearingCircularMedian_crossesZero() {
+        // Given: 航向角紧密围绕 0° 分布（跨0°）
+        val baseTimestamp = System.currentTimeMillis()
+        val crossingData = listOf(355.0, 358.0, 0.0, 2.0, 5.0, 8.0, 10.0, 12.0, 15.0).mapIndexed { i, bearing ->
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = 30.0,
+                bearing = bearing,
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = crossingData.map { filter.process(it) }
+
+        // Then: 循环中位数应接近真正的方向中心（约 5°-8°）
+        // 普通中位数排序后会得到中间值约 10°（错误）
+        // 循环中位数应 < 15°（在正确方向）
+        val outputBearing = results.last().bearing
+        // 循环中位数应 < 15°（在0°附近），而不是接近355°-358°
+        assertTrue(
+            "循环航向应接近真正方向中心（<15°），实际=$outputBearing°",
+            outputBearing < 15.0
+        )
+    }
+
+    /**
      * GF21: GPS 信号丢失（>200ms）后重置一致性检验
      *
      * 场景：GPS 信号中断后恢复
