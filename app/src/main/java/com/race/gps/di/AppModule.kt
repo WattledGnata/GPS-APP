@@ -9,7 +9,12 @@ import com.race.gps.data.repository.CarModelRepository
 import com.race.gps.data.repository.GpsDataRepository
 import com.race.gps.data.repository.TestResultRepository
 import com.race.gps.data.service.parser.RaceChronoParser
+import com.race.gps.domain.usecase.AnomalyDetector
 import com.race.gps.domain.usecase.CalculateResultUseCase
+import com.race.gps.domain.usecase.DataInterpolator
+import com.race.gps.domain.usecase.DataQualityEvaluator
+import com.race.gps.domain.usecase.DataSmoothing
+import com.race.gps.domain.usecase.SmartTestLauncher
 import com.race.gps.viewmodel.GpsDataViewModel
 import com.race.gps.viewmodel.TestHistoryViewModel
 import com.race.gps.viewmodel.TestSessionViewModel
@@ -62,6 +67,11 @@ val repositoryModule = module {
  */
 val domainModule = module {
     factory { CalculateResultUseCase() }
+    factory { SmartTestLauncher() }
+    factory { DataQualityEvaluator() }
+    factory { AnomalyDetector() }
+    factory { DataSmoothing() }
+    factory { DataInterpolator() }
 }
 
 /**
@@ -69,7 +79,7 @@ val domainModule = module {
  */
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
-    single { GpsDataViewModel(get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get()) }
+    single { GpsDataViewModel(get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }

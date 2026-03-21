@@ -70,19 +70,15 @@ class BleDeviceScanner(
                 deviceCache.clear()
                 _scanResults.value = emptyList()
 
-                // 配置扫描过滤器
-                val scanFilter = ScanFilter.Builder()
-                    .setServiceUuid(ParcelUuid(SERVICE_UUID))
-                    .build()
-
                 // 配置扫描设置
                 val scanSettings = ScanSettings.Builder()
                     .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                     .setReportDelay(0)
                     .build()
 
-                // 开始扫描
-                scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
+                // 不带过滤器的扫描，用于诊断
+                // 扫描所有BLE设备，然后在回调中过滤
+                scanner.startScan(null, scanSettings, scanCallback)
 
                 Log.d(TAG, "开始扫描BLE设备")
             } catch (e: Exception) {
@@ -121,41 +117,57 @@ class BleDeviceScanner(
             val address = device.address
             val rssi = result.rssi
 
-            // 更新或添加设备
-            val existingDevice = deviceCache[address]
-            val newDevice = ScannedDevice(
-                name = name,
-                address = address,
-                rssi = rssi,
-                lastSeen = System.currentTimeMillis()
-            )
+            // 检查Service UUID
+            val scanRecord = result.scanRecord
+            val serviceUuids = scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
+            val hasTargetUuid = serviceUuids.any { it == SERVICE_UUID }
 
-            // 只保留RSSI更强的记录
-            if (existingDevice == null || rssi > existingDevice.rssi) {
-                deviceCache[address] = newDevice
-                updateScanResults()
-            }
-        }
+            // 只处理匹配目标UUID的设备
+            if (hasTargetUuid) {
+                Log.d(TAG, "✅ 匹配设备: $name [$address] RSSI=$rssi")
 
-        override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach { result ->
-                // 直接处理扫描结果，不需要callbackType
-                val device = result.device
-                val name = device.name ?: "未知设备"
-                val address = device.address
-                val rssi = result.rssi
-
+                // 更新或添加设备
                 val existingDevice = deviceCache[address]
                 val newDevice = ScannedDevice(
-                    name = name,
+                    name = if (name == "未知设备") "RaceChrono GPS" else name,
                     address = address,
                     rssi = rssi,
                     lastSeen = System.currentTimeMillis()
                 )
 
+                // 只保留RSSI更强的记录
                 if (existingDevice == null || rssi > existingDevice.rssi) {
                     deviceCache[address] = newDevice
                     updateScanResults()
+                }
+            }
+        }
+
+        override fun onBatchScanResults(results: MutableList<ScanResult>) {
+            results.forEach { result ->
+                val device = result.device
+                val name = device.name ?: "未知设备"
+                val address = device.address
+                val rssi = result.rssi
+
+                // 检查Service UUID
+                val scanRecord = result.scanRecord
+                val serviceUuids = scanRecord?.serviceUuids?.map { it.uuid } ?: emptyList()
+                val hasTargetUuid = serviceUuids.any { it == SERVICE_UUID }
+
+                if (hasTargetUuid) {
+                    val existingDevice = deviceCache[address]
+                    val newDevice = ScannedDevice(
+                        name = if (name == "未知设备") "RaceChrono GPS" else name,
+                        address = address,
+                        rssi = rssi,
+                        lastSeen = System.currentTimeMillis()
+                    )
+
+                    if (existingDevice == null || rssi > existingDevice.rssi) {
+                        deviceCache[address] = newDevice
+                        updateScanResults()
+                    }
                 }
             }
         }
@@ -170,9 +182,8 @@ class BleDeviceScanner(
      * 更新扫描结果列表
      */
     private fun updateScanResults() {
-        val now = System.currentTimeMillis()
+        // 不再按时间过滤，保留所有匹配的设备
         val validDevices = deviceCache.values
-            .filter { now - it.lastSeen < SCAN_DURATION_MS }
             .sortedByDescending { it.rssi }
             .take(MAX_DEVICES)
 

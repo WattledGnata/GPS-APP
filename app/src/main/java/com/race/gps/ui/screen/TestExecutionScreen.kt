@@ -28,6 +28,8 @@ fun TestExecutionScreen(
 ) {
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
     val testState by testSessionViewModel.testState.collectAsState()
+    val launchStatus by testSessionViewModel.launchStatus.collectAsState()
+    val countdownSeconds by testSessionViewModel.countdownSeconds.collectAsState()
 
     // 测试完成时跳转
     LaunchedEffect(testState) {
@@ -37,13 +39,30 @@ fun TestExecutionScreen(
         }
     }
 
+    // Preparing 状态显示智能启动检查界面
+    when (val state = testState) {
+        is TestState.Preparing -> {
+            SmartLaunchScreen(
+                launchStatus = launchStatus,
+                countdownSeconds = countdownSeconds,
+                onStartClicked = { testSessionViewModel.skipCountdown() },
+                onCancel = {
+                    testSessionViewModel.cancelTest()
+                    onCancel()
+                }
+            )
+            return
+        }
+        else -> { /* 继续显示正常测试界面 */ }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 标题
         val titleText = when (val state = testState) {
-            is TestState.Waiting -> state.template.name
+            is TestState.Preparing -> state.template.name
             is TestState.Running -> state.session.template.name
             else -> "测试"
         }
@@ -97,12 +116,12 @@ fun TestExecutionScreen(
 @Composable
 private fun StatusBanner(testState: TestState) {
     val (text, color) = when (testState) {
-        is TestState.Waiting -> {
+        is TestState.Preparing -> {
             val hint = when (testState.template) {
-                is TestTemplate.Acceleration0To100 -> "保持静止，准备加速..."
-                is TestTemplate.Braking100To0 -> "加速到100km/h，准备刹车..."
+                is TestTemplate.Acceleration0To100 -> "等待GPS数据就绪..."
+                is TestTemplate.Braking100To0 -> "等待GPS数据就绪..."
             }
-            hint to Color(0xFFFF9800)
+            hint to Color(0xFF2196F3)
         }
         is TestState.Running -> {
             val elapsed = testState.session.dataPoints.lastOrNull()?.elapsedTime ?: 0.0
@@ -146,7 +165,7 @@ private fun SpeedDisplay(speed: Double, testState: TestState) {
 @Composable
 private fun ProgressBar(speed: Double, testState: TestState) {
     val template = when (testState) {
-        is TestState.Waiting -> testState.template
+        is TestState.Preparing -> testState.template
         is TestState.Running -> testState.session.template
         else -> return
     }

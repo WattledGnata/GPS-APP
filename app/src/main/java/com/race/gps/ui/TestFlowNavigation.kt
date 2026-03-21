@@ -39,7 +39,7 @@ fun TestFlowNavigation(
                 onTestSelected = { template, carModel ->
                     selectedTemplate = template
                     selectedCarModel = carModel
-                    testSessionViewModel.startTest(template, carModel)
+                    testSessionViewModel.enterSmartLaunch(template, carModel)
                     currentRoute = TestNavRoute.Execution
                 }
             )

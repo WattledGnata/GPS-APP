@@ -176,23 +176,33 @@ class CalculateResultUseCase {
         toSpeed: Int,
         ascending: Boolean
     ): SpeedSegment {
+        if (dataPoints.isEmpty()) {
+            return SpeedSegment(fromSpeed, toSpeed, 0.0, 0.0)
+        }
+
         val from = fromSpeed.toDouble()
         val to = toSpeed.toDouble()
 
-        val startPoint = findPrecisePoint(dataPoints, from, ascending)
-        val endPoint = findPrecisePoint(dataPoints, to, ascending)
+        // 找到第一个速度 >= fromSpeed 的点作为起点
+        val startIdx = dataPoints.indexOfFirst { point ->
+            if (ascending) point.speed >= from else point.speed <= from
+        }
+        // 找到最后一个速度 >= toSpeed 的点作为终点
+        val endIdx = dataPoints.indexOfLast { point ->
+            if (ascending) point.speed >= to else point.speed <= to
+        }
 
-        val time = if (startPoint != null && endPoint != null) {
-            Math.abs(endPoint.elapsedTime - startPoint.elapsedTime)
-        } else 0.0
+        if (startIdx < 0 || endIdx < 0 || startIdx >= endIdx) {
+            return SpeedSegment(fromSpeed, toSpeed, 0.0, 0.0)
+        }
 
-        val distance = if (startPoint != null && endPoint != null) {
-            val segPoints = dataPoints.filter {
-                if (ascending) it.speed in from..to
-                else it.speed in to..from
-            }
-            calculateTotalDistance(segPoints)
-        } else 0.0
+        val startTime = dataPoints[startIdx].elapsedTime
+        val endTime = dataPoints[endIdx].elapsedTime
+        val time = endTime - startTime
+
+        // 计算该区间的距离
+        val segmentPoints = dataPoints.subList(startIdx, endIdx + 1)
+        val distance = calculateTotalDistance(segmentPoints)
 
         return SpeedSegment(
             startSpeed = fromSpeed,

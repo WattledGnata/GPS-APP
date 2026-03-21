@@ -14,6 +14,8 @@ import com.race.gps.data.local.entity.TestRecordEntity
 import com.race.gps.data.local.file.TestDataFileStorage
 import com.race.gps.domain.model.SpeedSegment
 import com.race.gps.domain.model.TestTemplate
+import com.race.gps.ui.components.SpeedChart
+import com.race.gps.ui.components.GForceChart
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
@@ -60,6 +62,26 @@ fun TestResultScreen(
 
         // 关键指标
         item { KeyMetricsCard(record) }
+
+        // 速度曲线图
+        if (dataPoints.isNotEmpty()) {
+            item {
+                SpeedChart(
+                    dataPoints = dataPoints,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // G值曲线图
+        if (dataPoints.isNotEmpty()) {
+            item {
+                GForceChart(
+                    dataPoints = dataPoints,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
 
         // 分段数据（从数据库加载）
         item {

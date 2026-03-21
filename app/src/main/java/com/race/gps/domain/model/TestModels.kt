@@ -1,7 +1,5 @@
 package com.race.gps.domain.model
 
-import android.location.Location
-
 /**
  * 测试数据点 - 记录测试过程中每个GPS采样点
  */
@@ -38,6 +36,8 @@ sealed class TestTemplate(
 
     /**
      * 0-100 加速测试
+     * 准备条件：速度接近 0（< 3 km/h）
+     * 触发条件：从准备状态加速超过 5 km/h
      */
     object Acceleration0To100 : TestTemplate(
         id = "acc_0_100",
@@ -46,6 +46,12 @@ sealed class TestTemplate(
         startSpeed = 0,
         endSpeed = 100
     ) {
+        // 准备条件：速度在起点范围（静止）
+        fun isReady(gpsData: GpsData): Boolean {
+            return gpsData.speed < 3.0
+        }
+
+        // 触发条件：从静止开始加速（速度 > 5 km/h）
         override fun shouldTrigger(gpsData: GpsData): Boolean {
             return gpsData.speed > 5.0
         }
@@ -57,6 +63,8 @@ sealed class TestTemplate(
 
     /**
      * 100-0 刹车测试
+     * 准备条件：速度接近 100（95-105 km/h）
+     * 触发条件：从准备状态减速低于 95 km/h
      */
     object Braking100To0 : TestTemplate(
         id = "brake_100_0",
@@ -65,8 +73,14 @@ sealed class TestTemplate(
         startSpeed = 100,
         endSpeed = 0
     ) {
-        override fun shouldTrigger(gpsData: GpsData): Boolean {
+        // 准备条件：速度在起点范围（接近 100）
+        fun isReady(gpsData: GpsData): Boolean {
             return gpsData.speed in 95.0..105.0
+        }
+
+        // 触发条件：开始刹车（速度 < 95 km/h）
+        override fun shouldTrigger(gpsData: GpsData): Boolean {
+            return gpsData.speed < 95.0 && gpsData.speed > 1.0
         }
 
         override fun shouldEnd(gpsData: GpsData): Boolean {
@@ -140,7 +154,18 @@ data class TestResult(
 sealed class TestState {
     object Idle : TestState()
 
-    data class Waiting(
+    /**
+     * 准备中 - 智能启动条件检查阶段
+     */
+    data class Preparing(
+        val template: TestTemplate,
+        val carModel: String
+    ) : TestState()
+
+    /**
+     * 就绪 - 所有条件满足，速度在起点范围，等待触发
+     */
+    data class Ready(
         val template: TestTemplate,
         val carModel: String
     ) : TestState()

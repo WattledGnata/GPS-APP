@@ -1,6 +1,8 @@
 package com.race.gps.ui.screen
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -11,6 +13,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.race.gps.bluetooth.ConnectionState
 import com.race.gps.domain.model.GpsData
+import com.race.gps.domain.model.QualityLevel
+import com.race.gps.ui.components.DataQualityCard
 import com.race.gps.viewmodel.GpsDataViewModel
 import org.koin.androidx.compose.koinViewModel
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +30,7 @@ fun DeviceConnectionScreen(
 ) {
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
     val connectionState by gpsDataViewModel.connectionState.collectAsState()
+    val dataQuality by gpsDataViewModel.dataQuality.collectAsState()
     val isScanning by gpsDataViewModel.isScanning.collectAsState()
     val scanResults by gpsDataViewModel.scanResults.collectAsState()
 
@@ -34,6 +39,7 @@ fun DeviceConnectionScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -48,11 +54,16 @@ fun DeviceConnectionScreen(
         )
 
         // GPS信号质量卡片
-        if (connectionState == ConnectionState.CONNECTED) {
+        if (connectionState == ConnectionState.CONNECTED && dataQuality.overall != QualityLevel.POOR) {
             GpsSignalCard(gpsData)
-        }
+        } else if (connectionState == ConnectionState.CONNECTED) {
+            GpsSignalCard(gpsData)
 
-        Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 数据质量监控卡片
+            DataQualityCard(quality = dataQuality)
+        }
 
         // 开始测试按钮
         Button(
