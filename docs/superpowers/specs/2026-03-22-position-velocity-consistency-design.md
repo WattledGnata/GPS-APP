@@ -120,7 +120,7 @@ confidence = baseScore × hdopFactor × consistencyFactor
 | 场景 | 处理策略 |
 |------|----------|
 | dt ≤ 0 或 dt > 1000ms | 跳过一致性检查，记录 previousRaw/previousPosition 状态 |
-| Δd < 0.01m | 跳过（被 GPS 位置噪声淹没） |
+| Δd < 0.01m | 跳过（0.01m 远小于 GPS 噪声，规避被淹没；实际实现比规范更严格） |
 | 航向变化 > 30°/s | consistencyFactor × 0.8（降权不跳过） |
 | GPS 信号丢失 > 200ms | 重置 previousPosition，等待新起点重新建立 |
 | HDOP > 3.0 | consistencyFactor × 0.5（降权） |

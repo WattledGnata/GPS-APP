@@ -179,14 +179,14 @@ git commit -m "feat: add lat/lon/bearing median filter windows to GpsDataFilter"
         val deltaLonM = kotlin.math.abs(current.longitude - prevPos.second) * 111320.0 * kotlin.math.cos(latRad)
         val distanceM = kotlin.math.sqrt(deltaLatM * deltaLatM + deltaLonM * deltaLonM)
 
-        // Δd 过小时跳过一致性检查
+        // Δd 过小时跳过一致性检查（0.01m 远小于 GPS 噪声，规避被淹没）
         if (distanceM < 0.01) return 1.0 to false
 
         // 计算 v_implied
         val vImpliedKmh = (distanceM / dt) * 3.6
         val speedDiff = kotlin.math.abs(current.speed - vImpliedKmh)
 
-        // 航向变化降权
+        // 航向变化降权（>30°/s 时降权）
         val bearingDelta = kotlin.math.abs(current.bearing - prevData.bearing)
         val normalizedBearingDelta = if (bearingDelta > 180) 360 - bearingDelta else bearingDelta
         val bearingPenalty = if (normalizedBearingDelta > 30.0) 0.8 else 1.0
@@ -337,8 +337,10 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
         // When
         val results = movingData.map { filter.process(it) }
 
-        // Then: 一致性因子应为 1.0
-        results.forEachIndexed { index, result ->
+        // Then: 前1-2个点 previousPosition==null 跳过检查（consistencyFactor=1.0默认值）
+        // 从第2个点开始应有完整一致性检验
+        results.drop(2).forEachIndexed { idx, result ->
+            val index = idx + 2
             assertEquals(
                 "第${index}个点一致性因子应为1.0",
                 1.0,
@@ -353,7 +355,48 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
     }
 ```
 
-- [ ] **Step 3: 添加位置跳变检测测试**
+- [ ] **Step 2b: 添加高速一致性检验测试**
+
+在 GF17 后添加：
+
+```kotlin
+    /**
+     * GF17b: 高速行驶（120 km/h）应通过一致性检验，容差 10 km/h
+     *
+     * 场景：高速时 GPS 精度通常更好，容差放宽至 10 km/h
+     * 输入：120 km/h 稳定行驶，位置平滑变化
+     * 预期：consistencyFactor = 1.0
+     */
+    @Test
+    fun GF17b_highSpeedConsistent_fullFactor() {
+        // Given: 高速稳定行驶序列
+        val movingData = createMovingSequence(
+            startSpeed = 120.0,
+            endSpeed = 120.0,  // 稳定 120 km/h
+            points = 12
+        )
+
+        // When
+        val results = movingData.map { filter.process(it) }
+
+        // Then: 从第2个点开始一致性因子应为 1.0
+        results.drop(2).forEachIndexed { idx, result ->
+            val index = idx + 2
+            assertEquals(
+                "高速第${index}个点一致性因子应为1.0",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+            assertFalse(
+                "高速第${index}个点不应为位置异常",
+                result.isPositionAnomaly
+            )
+        }
+    }
+```
+
+- [ ] **Step 3: 添加位置跳变检测测试**（GF18）
 
 ```kotlin
     /**
@@ -395,7 +438,7 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
     }
 ```
 
-- [ ] **Step 4: 添加低速静止跳过一致性检查测试**
+- [ ] **Step 4: 添加低速静止跳过一致性检查测试**（GF19）
 
 ```kotlin
     /**
@@ -434,7 +477,7 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
     }
 ```
 
-- [ ] **Step 5: 添加航向剧变降权测试**
+- [ ] **Step 5: 添加航向剧变降权测试**（GF20）
 
 ```kotlin
     /**
@@ -472,7 +515,7 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
     }
 ```
 
-- [ ] **Step 6: 添加信号丢失后重置测试**
+- [ ] **Step 6: 添加信号丢失后重置测试**（GF21）
 
 ```kotlin
     /**
@@ -517,7 +560,7 @@ git commit -m "feat: implement position-velocity consistency check with multi-le
     }
 ```
 
-- [ ] **Step 7: 添加滤波后位置与原始位置不同的测试**
+- [ ] **Step 7: 添加滤波后位置与原始位置不同的测试**（GF22）
 
 ```kotlin
     /**
