@@ -99,13 +99,13 @@ class GpsDataFilterTest {
         // 每个区间使用区间起始速度计算位移，保证 v_implied = reported speed（匀速）或略小（加速时）
         return (0 until points).map { i ->
             val speed = startSpeed + speedStep * i
-            // 从 startSpeed 开始累计，使用当前速度作为当前区间的速度
-            val segmentSpeed = startSpeed + speedStep * i
-            val latIncrement = (segmentSpeed / 3.6) * intervalMs / 111320.0 / 1000.0
+            // 累积位移：使用 startSpeed（保守值），确保 v_implied <= reported speed
+            // 位移 = speed(m/s) * interval(ms)/1000(s) / 111320(度/米)
+            val displacementPerPoint = (startSpeed / 3.6) * intervalMs / 1000.0 / 111320.0
             createGpsData(
                 timestamp = startTimestamp + i * intervalMs,
                 speed = speed,
-                latitude = startLat + latIncrement * i,
+                latitude = startLat + displacementPerPoint * i,
                 longitude = startLon,
                 bearing = bearing,
                 hdop = 1.0
@@ -365,9 +365,101 @@ class GpsDataFilterTest {
         )
     }
 
-    // ==================== 位置跳变检测测试 ====================
-    // TODO: 位置跳变检测功能将在后续迭代实现
-    // 相关测试：GF09_positionJump, GF10_smallPositionJitter
+    // ==================== 航向角循环边界测试 ====================
+
+    /**
+     * GF09: 航向角循环边界（真正跨0°）应使用循环中位数
+     *
+     * 场景：航向从 359° 经过 0° 到 1°
+     * 输入：航向窗口 [358°, 359°, 0°, 1°, 2°, 3°, 4°, 5°, 6°]
+     * 预期：普通中位数 = 3°（连续域错误），循环中位数 ≈ 1-2°（正确）
+     *
+     * 关键：数据紧密围绕0°分布，普通排序会给出错误结果
+     */
+    @Test
+    fun GF09_bearingCrossZero_circularMedian() {
+        // Given: 航向角真正跨0°（紧密围绕0°分布）
+        val baseTimestamp = System.currentTimeMillis()
+        val crossingData = listOf(358.0, 359.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0).mapIndexed { i, bearing ->
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = 30.0,
+                bearing = bearing,
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = crossingData.map { filter.process(it) }
+
+        // Then: 循环中位数应接近 1-2°（正确），而非普通中位数 3°
+        val outputBearing = results.last().bearing
+        // 循环中位数应 < 5°（在0°附近），而普通中位数是3°但排序后不在0°附近
+        assertTrue(
+            "循环航向应接近0°附近（<5°），实际=$outputBearing°",
+            outputBearing < 5.0
+        )
+    }
+
+    /**
+     * GF10: 极小幅位置抖动（Δd < 0.01m）应通过一致性检查
+     *
+     * 场景：GPS 精度范围内的极小幅抖动不应触发位置异常
+     * 输入：速度 60 km/h，位置变化 Δd < 0.01m（GPS 噪声水平以下）
+     * 预期：consistencyFactor = 1.0，isPositionAnomaly = false
+     *
+     * 关键：当 distanceM < 0.01m 时，一致性检验自动跳过（返回 factor=1.0）
+     * 这是 GPS 位置噪声的正常行为，不应被标记为异常
+     */
+    @Test
+    fun GF10_smallPositionJitter_passesConsistency() {
+        // Given: 先用稳定速度填充窗口，建立正常一致性基准
+        val baseTimestamp = System.currentTimeMillis()
+
+        // 前9个点：稳定匀速，建立正常一致性基准
+        val stableData = (0 until 9).map { i ->
+            createGpsData(
+                timestamp = baseTimestamp + i * 40L,
+                speed = 60.0,
+                latitude = 60.1725,
+                longitude = 24.9375,
+                bearing = 0.0,
+                hdop = 1.0
+            )
+        }
+        stableData.forEach { filter.process(it) }
+
+        // 接下来3个点：引入极小幅抖动（Δd < 0.01m，自动跳过一致性检查）
+        val jitterData = (0 until 3).map { i ->
+            // ±0.003m，< 0.01m 阈值
+            val jitter = if (i % 2 == 0) 0.00000003 else -0.00000003
+            createGpsData(
+                timestamp = baseTimestamp + (9 + i) * 40L,
+                speed = 60.0,
+                latitude = 60.1725 + jitter,
+                longitude = 24.9375,
+                bearing = 0.0,
+                hdop = 1.0
+            )
+        }
+
+        // When
+        val results = jitterData.map { filter.process(it) }
+
+        // Then: Δd < 0.01m 时一致性检验自动跳过，factor = 1.0
+        results.forEachIndexed { idx, result ->
+            assertFalse(
+                "极小幅抖动第${idx}个点不应为位置异常",
+                result.isPositionAnomaly
+            )
+            assertEquals(
+                "极小幅抖动第${idx}个点一致性因子应为1.0（Δd<0.01m跳过检查）",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+        }
+    }
 
     // ==================== 触发确认测试 ====================
 
@@ -588,6 +680,41 @@ class GpsDataFilterTest {
             )
             assertFalse(
                 "第${index}个点不应为位置异常",
+                result.isPositionAnomaly
+            )
+        }
+    }
+
+    /**
+     * GF17c: 低速行驶（<5 km/h）应通过一致性检验，容差 3 km/h
+     *
+     * 场景：低速时 GPS 精度可能较差，容差缩小至 3 km/h
+     * 输入：低速 3 km/h 匀速行驶
+     * 预期：consistencyFactor = 1.0
+     */
+    @Test
+    fun GF17c_lowSpeedConsistent_fullFactor() {
+        // Given: 低速匀速序列
+        val movingData = createMovingSequence(
+            startSpeed = 3.0,
+            endSpeed = 3.0,  // 匀速 3 km/h
+            points = 9
+        )
+
+        // When
+        val results = movingData.map { filter.process(it) }
+
+        // Then: 从第2个点开始一致性因子应为 1.0
+        results.drop(2).forEachIndexed { idx, result ->
+            val index = idx + 2
+            assertEquals(
+                "低速第${index}个点一致性因子应为1.0",
+                1.0,
+                result.consistencyFactor,
+                0.01
+            )
+            assertFalse(
+                "低速第${index}个点不应为位置异常",
                 result.isPositionAnomaly
             )
         }

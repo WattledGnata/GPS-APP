@@ -36,8 +36,7 @@ class GpsDataFilter(
 
         // 2.5. 信号丢失重置检查（GPS 信号丢失 > 200ms → 重置 previousPosition，等待新起点）
         val dtFromPrevious = previousRaw?.let { (raw.timestamp - it.timestamp) / 1000.0 } ?: 0.0
-        val signalLost = dtFromPrevious > 0.2
-        if (signalLost) {
+        if (dtFromPrevious > 0.2) {
             previousRaw = null
             previousPosition = null
         }
@@ -190,8 +189,8 @@ class GpsDataFilter(
         val deltaLonM = abs(current.longitude - prevPos.second) * 111320.0 * Math.cos(latRad)
         val distanceM = Math.sqrt(deltaLatM * deltaLatM + deltaLonM * deltaLonM)
 
-        // Δd 过小时跳过一致性检查（0.01m 远小于 GPS 噪声，规避被淹没）
-        if (distanceM < 0.01) return 1.0 to false
+        // Δd 过小时跳过一致性检查（0.5m 远小于 GPS 噪声，规避被淹没）
+        if (distanceM < 0.5) return 1.0 to false
 
         // 计算 v_implied
         val vImpliedKmh = (distanceM / dt) * 3.6
