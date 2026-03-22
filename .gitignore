@@ -14,3 +14,12 @@
 .cxx
 local.properties
 .idea
+
+# 编译产物
+**/build/
+*.apk
+*.aab
+*.class
+*.dex
+*.jar
+*.odex
