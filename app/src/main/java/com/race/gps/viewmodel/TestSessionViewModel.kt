@@ -91,6 +91,7 @@ class TestSessionViewModel(
         isStartReady = false
         standstillCount = 0
         consecutiveTriggerCount = 0
+        isFinishing = false  // 重置完成标记，允许新测试
         _testState.value = TestState.Preparing(template, carModel)
         startCountdown()
     }
@@ -246,12 +247,23 @@ class TestSessionViewModel(
         )
     }
 
+    // 防止重复调用 finishTest
+    private var isFinishing = false
+
     private fun finishTest(session: TestSession) {
+        // 同步检查并设置标记，防止异步期间重复调用
+        if (isFinishing) return
+        isFinishing = true
+
         viewModelScope.launch {
             val dataFilePath = "pending"
             val result = calculateResultUseCase(session, dataFilePath)
             testResultRepository.saveResult(result)
             _testState.value = TestState.Completed(result)
         }
+    }
+
+    fun resetFinishingFlag() {
+        isFinishing = false
     }
 }

@@ -19,6 +19,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun TestSelectionScreen(
     onTestSelected: (TestTemplate, String) -> Unit,
+    onHistoryClick: () -> Unit = {},
     gpsDataViewModel: GpsDataViewModel = koinViewModel()
 ) {
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
@@ -78,6 +79,14 @@ fun TestSelectionScreen(
             modifier = Modifier.fillMaxWidth().height(56.dp)
         ) {
             Text("进入测试 →", fontSize = 16.sp)
+        }
+
+        // 历史记录按钮
+        OutlinedButton(
+            onClick = onHistoryClick,
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text("查看历史记录", fontSize = 14.sp)
         }
     }
 }

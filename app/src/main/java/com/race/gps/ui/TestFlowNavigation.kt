@@ -64,6 +64,9 @@ fun TestFlowNavigation(
                     selectedCarModel = carModel
                     testSessionViewModel.enterSmartLaunch(template, carModel)
                     currentRoute = TestNavRoute.Execution
+                },
+                onHistoryClick = {
+                    currentRoute = TestNavRoute.History
                 }
             )
         }
