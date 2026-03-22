@@ -16,6 +16,9 @@ class RaceChronoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // 初始化文件日志
+        FileLogger.init(this)
+
         startKoin {
             androidLogger(Level.ERROR)
             androidContext(this@RaceChronoApplication)

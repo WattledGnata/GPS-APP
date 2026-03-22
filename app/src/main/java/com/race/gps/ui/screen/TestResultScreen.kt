@@ -53,7 +53,7 @@ fun TestResultScreen(
     ) {
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = onBack) { Text("← 返回") }
+                TextButton(onClick = onBack) { Text("← 返回", color = MaterialTheme.colorScheme.primary) }
             }
         }
 
@@ -78,14 +78,15 @@ fun TestResultScreen(
             item {
                 GForceChart(
                     dataPoints = dataPoints,
+                    maxAcceleration = record.maxAcceleration,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         }
 
-        // 分段数据（从数据库加载）
+        // 分段数据（从���据库加载）
         item {
-            Text("速度分段", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("速度分段", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.onBackground)
         }
 
         // TODO: 从数据库加载分段数据
@@ -132,7 +133,7 @@ private fun ResultSummaryCard(record: TestRecordEntity) {
 private fun KeyMetricsCard(record: TestRecordEntity) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("关键指标", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("关键指标", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MetricItem("总时间", String.format("%.2f s", record.totalTime))
                 MetricItem("总距离", String.format("%.1f m", record.totalDistance))
@@ -146,7 +147,7 @@ private fun KeyMetricsCard(record: TestRecordEntity) {
 @Composable
 private fun MetricItem(label: String, value: String) {
     Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Text(label, fontSize = 12.sp, color = Color.Gray)
+        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Bold, fontSize = 16.sp)
     }
 }
@@ -166,23 +167,103 @@ private fun SegmentRow(segment: SpeedSegment) {
             )
             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(String.format("%.3f s", segment.time), fontWeight = FontWeight.Bold)
-                Text(String.format("%.1f m", segment.distance), fontSize = 12.sp, color = Color.Gray)
+                Text(String.format("%.1f m", segment.distance), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
-// 临时辅助函数，从数据点计算分段
+// 从数据点计算分段
 private fun calculateSegmentsFromPoints(
     dataPoints: List<com.race.gps.domain.model.GpsDataPoint>,
     template: TestTemplate
 ): List<SpeedSegment> {
+    if (dataPoints.isEmpty()) return emptyList()
+
     return when (template) {
-        is TestTemplate.Acceleration0To100 -> (0..90 step 10).map { s ->
-            SpeedSegment(s, s + 10, 0.0, 0.0)
+        is TestTemplate.Acceleration0To100 -> {
+            // 0-10 到 80-90（9段）
+            (0..80 step 10).map { startSpeed ->
+                calculateSegment(dataPoints, startSpeed, startSpeed + 10, ascending = true, isLastSegment = false)
+            } + listOf(
+                // 90-100 段（最后一段）
+                calculateSegment(dataPoints, 90, 100, ascending = true, isLastSegment = true)
+            )
         }
-        is TestTemplate.Braking100To0 -> (100 downTo 10 step 10).map { s ->
-            SpeedSegment(s, s - 10, 0.0, 0.0)
+        is TestTemplate.Braking100To0 -> {
+            (100 downTo 10 step 10).mapIndexed { index, startSpeed ->
+                val isLast = index == 9
+                calculateSegment(dataPoints, startSpeed, startSpeed - 10, ascending = false, isLastSegment = isLast)
+            }
         }
     }
+}
+
+private fun calculateSegment(
+    dataPoints: List<com.race.gps.domain.model.GpsDataPoint>,
+    fromSpeed: Int,
+    toSpeed: Int,
+    ascending: Boolean,
+    isLastSegment: Boolean = false
+): SpeedSegment {
+    if (dataPoints.isEmpty()) {
+        return SpeedSegment(fromSpeed, toSpeed, 0.0, 0.0)
+    }
+
+    val from = fromSpeed.toDouble()
+    val to = toSpeed.toDouble()
+
+    // 找到第一个速度达到 fromSpeed 的点作为起点
+    val startIdx = dataPoints.indexOfFirst { point ->
+        if (ascending) point.speed >= from else point.speed <= from
+    }
+    // 找到终点
+    val endIdx = if (isLastSegment) {
+        dataPoints.lastIndex
+    } else {
+        dataPoints.indexOfFirst { point ->
+            if (ascending) point.speed >= to else point.speed <= to
+        }
+    }
+
+    if (startIdx < 0 || endIdx < 0 || startIdx >= endIdx) {
+        return SpeedSegment(fromSpeed, toSpeed, 0.0, 0.0)
+    }
+
+    val startTime = dataPoints[startIdx].elapsedTime
+    val endTime = dataPoints[endIdx].elapsedTime
+    val time = endTime - startTime
+
+    // 计算该区间的距离
+    val segmentPoints = dataPoints.subList(startIdx, endIdx + 1)
+    val distance = calculateSegmentDistance(segmentPoints)
+
+    return SpeedSegment(
+        startSpeed = fromSpeed,
+        endSpeed = toSpeed,
+        time = time,
+        distance = distance
+    )
+}
+
+private fun calculateSegmentDistance(
+    dataPoints: List<com.race.gps.domain.model.GpsDataPoint>
+): Double {
+    if (dataPoints.size < 2) return 0.0
+
+    var total = 0.0
+    for (i in 1 until dataPoints.size) {
+        val prev = dataPoints[i - 1]
+        val curr = dataPoints[i]
+        if (prev.latitude != 0.0 && curr.latitude != 0.0) {
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(
+                prev.latitude, prev.longitude,
+                curr.latitude, curr.longitude,
+                results
+            )
+            total += results[0]
+        }
+    }
+    return total
 }

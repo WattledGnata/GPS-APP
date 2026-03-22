@@ -64,18 +64,12 @@ fun SimulatorScreen(
             // 蓝牙状态
             BluetoothStatusCard(uiState.isBluetoothEnabled)
 
-            // 数据预览
-            DataPreviewCard(
-                currentSpeed = uiState.currentSpeed,
-                currentLatitude = uiState.currentLatitude,
-                currentLongitude = uiState.currentLongitude
-            )
-
             // 控制按钮
             ControlCard(
                 isAdvertising = uiState.isAdvertising,
                 isServerReady = uiState.isServerReady,
                 connectedDevices = uiState.connectedDevices.size,
+                activeDeviceCount = uiState.connectedDevices.size, // 使用活跃设备数
                 onStartAdvertising = {
                     if (uiState.hasPermissions) {
                         viewModel.startAdvertising(context)
@@ -208,6 +202,7 @@ fun ControlCard(
     isAdvertising: Boolean,
     isServerReady: Boolean,
     connectedDevices: Int,
+    activeDeviceCount: Int = connectedDevices,
     onStartAdvertising: () -> Unit,
     onStopAdvertising: () -> Unit
 ) {
@@ -250,11 +245,16 @@ fun ControlCard(
                     when {
                         !isAdvertising -> "未广播"
                         !isServerReady -> "服务器初始化中..."
-                        else -> "广播中 | 已连接: $connectedDevices 台设备"
+                        else -> "广播中 | 已连接: $connectedDevices 台设备 | 活跃: $activeDeviceCount 台"
                     }
                 }",
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (isServerReady) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                color = when {
+                    !isServerReady -> Color(0xFFFF9800)
+                    connectedDevices > 0 && connectedDevices == activeDeviceCount -> Color(0xFF4CAF50)
+                    connectedDevices > 0 && connectedDevices != activeDeviceCount -> Color(0xFFFF9800)
+                    else -> Color(0xFF9E9E9E)
+                }
             )
         }
     }

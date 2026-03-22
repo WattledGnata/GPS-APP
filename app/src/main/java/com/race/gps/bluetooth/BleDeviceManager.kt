@@ -117,13 +117,16 @@ class BleDeviceManager(
      * 连接指定设备
      */
     fun connect(deviceAddress: String) {
+        Log.d(TAG, "connect() called with address: $deviceAddress")
         scope.launch {
             try {
                 // 停止当前扫描
                 stopScan()
+                Log.d(TAG, "停止扫描，开始连接")
 
                 // 连接设备
                 bluetoothDataSource.connect(deviceAddress)
+                Log.d(TAG, "bluetoothDataSource.connect() 调用完成")
 
                 // TODO: 连接成功后保存设备信息到Repository
                 // deviceRepository.saveDevice(deviceAddress, deviceName)

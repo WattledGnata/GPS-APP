@@ -192,6 +192,13 @@ class GpsPeripheralManager(private val context: Context) {
     }
 
     /**
+     * 获取活跃设备数量
+     */
+    fun getActiveDeviceCount(): Int {
+        return gattServerManager.getActiveDeviceCount()
+    }
+
+    /**
      * 清理资源
      */
     fun cleanup() {

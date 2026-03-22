@@ -105,7 +105,7 @@ data class TestSession(
     val id: String,
     val template: TestTemplate,
     val carModel: String,
-    val startTime: Long,
+    var startTime: Long,  // 用 var 允许在 markStarted 时更新为触发时刻
     // 触发前2秒的滤波数据（触发时锁定传入）
     val preTriggerData: List<FilteredGpsData> = emptyList(),
     // 测试过程的滤波数据

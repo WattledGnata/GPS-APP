@@ -143,10 +143,14 @@ class CalculateResultUseCase {
             val prev = dataPoints[i - 1]
             val curr = dataPoints[i]
             val dt = curr.elapsedTime - prev.elapsedTime
-            if (dt > 0) {
+            // 过滤异常数据：采样间隔太短(<10ms)或太长(>1s)会导致异常值
+            if (dt > 0.01 && dt < 1.0) {
                 val dv = (curr.speed - prev.speed) / 3.6  // 转换为 m/s
                 val accel = Math.abs(dv / dt) / 9.81       // 转换为 G
-                accelerations.add(accel)
+                // 过滤物理上不可能的值：超过3G通常是GPS噪声
+                if (accel < 3.0) {
+                    accelerations.add(accel)
+                }
             }
         }
         return accelerations
@@ -158,13 +162,18 @@ class CalculateResultUseCase {
     ): List<SpeedSegment> {
         return when (template) {
             is TestTemplate.Acceleration0To100 -> {
-                (0..90 step 10).map { startSpeed ->
-                    calculateSegment(dataPoints, startSpeed, startSpeed + 10, ascending = true)
-                }
+                // 0-10 到 80-90（9段）
+                (0..80 step 10).map { startSpeed ->
+                    calculateSegment(dataPoints, startSpeed, startSpeed + 10, ascending = true, isLastSegment = false)
+                } + listOf(
+                    // 90-100 段（最后一段，用最后一个数据点作为终点）
+                    calculateSegment(dataPoints, 90, 100, ascending = true, isLastSegment = true)
+                )
             }
             is TestTemplate.Braking100To0 -> {
-                (100 downTo 10 step 10).map { startSpeed ->
-                    calculateSegment(dataPoints, startSpeed, startSpeed - 10, ascending = false)
+                (100 downTo 10 step 10).mapIndexed { index, startSpeed ->
+                    val isLast = index == 9  // 最后一个是 10-0
+                    calculateSegment(dataPoints, startSpeed, startSpeed - 10, ascending = false, isLastSegment = isLast)
                 }
             }
         }
@@ -174,7 +183,8 @@ class CalculateResultUseCase {
         dataPoints: List<GpsDataPoint>,
         fromSpeed: Int,
         toSpeed: Int,
-        ascending: Boolean
+        ascending: Boolean,
+        isLastSegment: Boolean = false
     ): SpeedSegment {
         if (dataPoints.isEmpty()) {
             return SpeedSegment(fromSpeed, toSpeed, 0.0, 0.0)
@@ -183,13 +193,19 @@ class CalculateResultUseCase {
         val from = fromSpeed.toDouble()
         val to = toSpeed.toDouble()
 
-        // 找到第一个速度 >= fromSpeed 的点作为起点
+        // 找到第一个速度达到 fromSpeed 的点作为起点
         val startIdx = dataPoints.indexOfFirst { point ->
             if (ascending) point.speed >= from else point.speed <= from
         }
-        // 找到最后一个速度 >= toSpeed 的点作为终点
-        val endIdx = dataPoints.indexOfLast { point ->
-            if (ascending) point.speed >= to else point.speed <= to
+        // 找到终点
+        // 如果是最后一段（100km/h），用最后一个数据点作为终点
+        // 否则找第一个达到目标速度的点
+        val endIdx = if (isLastSegment) {
+            dataPoints.lastIndex
+        } else {
+            dataPoints.indexOfFirst { point ->
+                if (ascending) point.speed >= to else point.speed <= to
+            }
         }
 
         if (startIdx < 0 || endIdx < 0 || startIdx >= endIdx) {
@@ -200,7 +216,7 @@ class CalculateResultUseCase {
         val endTime = dataPoints[endIdx].elapsedTime
         val time = endTime - startTime
 
-        // 计算该区间的距离
+        // 计算该区间的距离（使用GPS坐标累加）
         val segmentPoints = dataPoints.subList(startIdx, endIdx + 1)
         val distance = calculateTotalDistance(segmentPoints)
 

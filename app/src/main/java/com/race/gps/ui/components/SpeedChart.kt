@@ -135,6 +135,7 @@ fun SpeedChart(
 @Composable
 fun GForceChart(
     dataPoints: List<GpsDataPoint>,
+    maxAcceleration: Double = 0.0,
     modifier: Modifier = Modifier,
     lineColor: Color = Color(0xFF00FF78)
 ) {
@@ -150,20 +151,37 @@ fun GForceChart(
         return
     }
 
-    // 计算G值
-    val gForcePoints = dataPoints.mapIndexed { index, point ->
-        val gForce = if (index > 0) {
-            val prev = dataPoints[index - 1]
-            val timeDiff = point.elapsedTime - prev.elapsedTime
-            if (timeDiff > 0) {
-                (point.speed - prev.speed) / (timeDiff * 9.8)
-            } else 0.0
-        } else 0.0
+    // 计算G值（过滤异常值）- 使用与 CalculateResultUseCase 一致的过滤条件）
+    val gForcePoints = dataPoints.mapIndexedNotNull { index, point ->
+        if (index == 0) return@mapIndexedNotNull Pair(point.elapsedTime, 0.0)
+
+        val prev = dataPoints[index - 1]
+        val dt = point.elapsedTime - prev.elapsedTime
+
+        // 过滤异常采样间隔（与 CalculateResultUseCase 一致）
+        if (dt <= 0.01 || dt > 1.0) {
+            return@mapIndexedNotNull null
+        }
+
+        // 计算G值：km/h → m/s → G
+        val dv = (point.speed - prev.speed) / 3.6    // Δv (m/s)
+        val gForce = dv / dt / 9.81                   // a (m/s²) / g
+
+        // 过滤物理上不可能的G值（与 CalculateResultUseCase 一致：< 3.0G）
+        if (abs(gForce) >= 3.0) {
+            return@mapIndexedNotNull null
+        }
+
         Pair(point.elapsedTime, gForce)
     }
 
     val maxTime = (dataPoints.maxOf { it.elapsedTime } * 1000).toInt()
-    val maxG = gForcePoints.map { abs(it.second) }.max().toFloat().coerceAtLeast(0.5f)
+    // 使用关键指标中传入的maxAcceleration作为显示值，保持与关键指标一致
+    val maxG: Float = if (maxAcceleration > 0) {
+        maxAcceleration.toFloat()
+    } else {
+        (gForcePoints.maxOfOrNull { abs(it.second) } ?: 0.5).toFloat()
+    }
 
     Card(modifier = modifier) {
         Column(modifier = Modifier.padding(16.dp)) {

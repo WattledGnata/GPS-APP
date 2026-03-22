@@ -1,5 +1,6 @@
 package com.race.gps.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.race.gps.domain.model.TestTemplate
@@ -27,6 +28,28 @@ fun TestFlowNavigation(
     var currentRoute by remember { mutableStateOf<TestNavRoute>(TestNavRoute.Connection) }
     var selectedTemplate by remember { mutableStateOf<TestTemplate?>(null) }
     var selectedCarModel by remember { mutableStateOf("") }
+
+    // 返回手势处理
+    BackHandler {
+        when (currentRoute) {
+            is TestNavRoute.Connection -> {
+                // 不处理，保持在连接页面
+            }
+            is TestNavRoute.Selection -> {
+                // 不处理，保持在选择页面
+            }
+            is TestNavRoute.Execution -> {
+                testSessionViewModel.cancelTest()
+                currentRoute = TestNavRoute.Selection
+            }
+            is TestNavRoute.Result -> {
+                currentRoute = TestNavRoute.History
+            }
+            is TestNavRoute.History -> {
+                currentRoute = TestNavRoute.Selection
+            }
+        }
+    }
 
     when (val route = currentRoute) {
         is TestNavRoute.Connection -> {
@@ -64,6 +87,9 @@ fun TestFlowNavigation(
             TestHistoryScreen(
                 onRecordClick = { testId ->
                     currentRoute = TestNavRoute.Result(testId)
+                },
+                onBack = {
+                    currentRoute = TestNavRoute.Selection
                 }
             )
         }

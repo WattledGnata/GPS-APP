@@ -79,7 +79,8 @@ class RaceChronoParser {
         var currentData = inputData
 
         if (data.size < 28) {
-            Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 28")
+            // 注释掉高频错误日志，25Hz数据会刷屏
+            // Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 28")
             return currentData
         }
 

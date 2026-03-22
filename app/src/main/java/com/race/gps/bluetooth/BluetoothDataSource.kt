@@ -1,10 +1,12 @@
 package com.race.gps.bluetooth
 
 import android.content.Context
+import android.util.Log
 import com.race.gps.data.service.parser.RaceChronoParser
 import com.race.gps.domain.model.GpsData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +21,12 @@ class BluetoothDataSource(
     private val context: Context,
     private val parser: RaceChronoParser
 ) {
+    companion object {
+        private const val TAG = "BluetoothDataSource"
+    }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var connectionCollectJob: Job? = null
 
     // 唯一的数据输出口
     private val _dataFlow = MutableStateFlow(GpsData.Empty)
@@ -32,17 +39,34 @@ class BluetoothDataSource(
     private var bleConnection: BleConnection? = null
 
     fun connect(deviceAddress: String) {
+        Log.d(TAG, "connect() called with address: $deviceAddress")
         scope.launch {
             try {
                 _connectionState.value = ConnectionState.CONNECTING
+                Log.d(TAG, "状态设置为 CONNECTING，创建 BleConnection")
+
                 bleConnection = BleConnection(context, deviceAddress) { rawData ->
                     // 收到原始数据后立即解析并发送
                     val gpsData = parser.parseGpsData(rawData, _dataFlow.value)
                     _dataFlow.value = gpsData.copy(isConnected = true)
                 }
+
+                // 在单独的协程中监听 BleConnection 的状态变化
+                bleConnection?.connectionState?.let { stateFlow ->
+                    connectionCollectJob?.cancel()
+                    connectionCollectJob = scope.launch {
+                        stateFlow.collect { state ->
+                            Log.d(TAG, "BleConnection 状态变化: $state")
+                            _connectionState.value = state
+                        }
+                    }
+                }
+
                 bleConnection?.connect()
-                _connectionState.value = ConnectionState.CONNECTED
+                Log.d(TAG, "BleConnection.connect() 调用完成")
+
             } catch (e: Exception) {
+                Log.e(TAG, "连接异常", e)
                 _connectionState.value = ConnectionState.DISCONNECTED
                 _dataFlow.value = _dataFlow.value.copy(
                     isConnected = false,
@@ -54,6 +78,8 @@ class BluetoothDataSource(
 
     fun disconnect() {
         scope.launch {
+            connectionCollectJob?.cancel()
+            connectionCollectJob = null
             bleConnection?.disconnect()
             bleConnection = null
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -65,5 +91,6 @@ class BluetoothDataSource(
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,
-    CONNECTED
+    CONNECTED,
+    DISCONNECTING
 }

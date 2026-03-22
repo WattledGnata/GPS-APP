@@ -30,7 +30,12 @@ fun TestSelectionScreen(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("选择测试类型", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "选择测试类型",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
 
         // 加速测试卡片
         TestTypeCard(

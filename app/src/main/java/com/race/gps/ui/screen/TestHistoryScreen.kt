@@ -1,7 +1,6 @@
 package com.race.gps.ui.screen
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,6 +26,7 @@ import java.util.Locale
 @Composable
 fun TestHistoryScreen(
     onRecordClick: (String) -> Unit,
+    onBack: () -> Unit = {},
     testHistoryViewModel: TestHistoryViewModel = koinViewModel()
 ) {
     val testRecords by testHistoryViewModel.testRecords.collectAsState()
@@ -51,14 +51,35 @@ fun TestHistoryScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("测试历史", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        // 顶部导航栏
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text("← 返回", color = MaterialTheme.colorScheme.primary)
+            }
+            TextButton(onClick = {
+                // 刷新记录 - 重新订阅Flow会自动刷新
+            }) {
+                Text("刷新", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        Text(
+            "测试历史",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
         Spacer(modifier = Modifier.height(8.dp))
 
         if (testRecords.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("暂无测试记录", fontSize = 18.sp, color = Color.Gray)
-                    Text("完成一次测试后记录将显示在这里", fontSize = 14.sp, color = Color.Gray)
+                    Text("暂无测试记录", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("完成一次测试后记录将显示在这里", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         } else {
@@ -92,11 +113,11 @@ private fun StatsSummaryCard(records: List<TestRecordEntity>) {
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("总测试", fontSize = 12.sp, color = Color.Gray)
+                Text("总测试", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${records.size}", fontWeight = FontWeight.Bold, fontSize = 20.sp)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("最佳加速", fontSize = 12.sp, color = Color.Gray)
+                Text("最佳加速", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     bestAcc?.let { String.format("%.2fs", it.totalTime) } ?: "-",
                     fontWeight = FontWeight.Bold,
@@ -104,7 +125,7 @@ private fun StatsSummaryCard(records: List<TestRecordEntity>) {
                 )
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("最佳刹车", fontSize = 12.sp, color = Color.Gray)
+                Text("最佳刹车", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     bestBrake?.let { String.format("%.1fm", it.totalDistance) } ?: "-",
                     fontWeight = FontWeight.Bold,
@@ -135,8 +156,8 @@ private fun TestRecordItem(
         ) {
             Column {
                 Text(record.testType, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(record.carModel, fontSize = 14.sp, color = Color.Gray)
-                Text(dateFormat.format(Date(record.timestamp)), fontSize = 12.sp, color = Color.Gray)
+                Text(record.carModel, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(dateFormat.format(Date(record.timestamp)), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Column(horizontalAlignment = Alignment.End) {
                 val mainResult = when (record.testTemplateId) {

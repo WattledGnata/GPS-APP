@@ -61,6 +61,7 @@ class SmartTestLauncher {
                     ConnectionState.CONNECTED -> ConditionIcon.CHECKED
                     ConnectionState.CONNECTING -> ConditionIcon.WAITING
                     ConnectionState.DISCONNECTED -> ConditionIcon.ERROR
+                    ConnectionState.DISCONNECTING -> ConditionIcon.WAITING
                 }
             ),
             // 2. 数据接收（< 1000ms）

@@ -43,7 +43,12 @@ fun DeviceConnectionScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("GPS 设备", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "GPS 设备",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
 
         // 连接状态卡片
         ConnectionStatusCard(
@@ -54,15 +59,13 @@ fun DeviceConnectionScreen(
         )
 
         // GPS信号质量卡片
-        if (connectionState == ConnectionState.CONNECTED && dataQuality.overall != QualityLevel.POOR) {
-            GpsSignalCard(gpsData)
-        } else if (connectionState == ConnectionState.CONNECTED) {
+        if (connectionState == ConnectionState.CONNECTED) {
             GpsSignalCard(gpsData)
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 数据质量监控卡片
-            DataQualityCard(quality = dataQuality)
+            if (dataQuality.overall == QualityLevel.POOR) {
+                Spacer(modifier = Modifier.height(8.dp))
+                DataQualityCard(quality = dataQuality)
+            }
         }
 
         // 开始测试按钮
@@ -140,6 +143,7 @@ private fun ConnectionStatusCard(
                     ConnectionState.CONNECTED -> "已连接" to Color(0xFF4CAF50)
                     ConnectionState.CONNECTING -> "连接中..." to Color(0xFFFF9800)
                     ConnectionState.DISCONNECTED -> "未连接" to Color(0xFFF44336)
+                    ConnectionState.DISCONNECTING -> "断开中..." to Color(0xFFFF9800)
                 }
                 Surface(
                     modifier = Modifier.size(10.dp),

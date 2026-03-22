@@ -56,6 +56,14 @@ class SimulatorViewModel : ViewModel() {
     private var dataGenerator: GpsDataGenerator? = null
     private val speedController = SpeedController()
 
+    // 物理轨迹计算：记录起点和累计位移
+    private var baseLatitude = 60.1725
+    private var baseLongitude = 24.9375
+    private var totalDistanceNorth = 0.0  // 向北累计位移（米）
+    private var totalDistanceEast = 0.0   // 向东累计位移（米）
+    private var lastUpdateTime = 0L       // 上次更新时间
+    private var bearing = 45.0            // 运动方向（度）
+
     companion object {
         private const val TAG = "SimulatorViewModel"
 
@@ -71,9 +79,7 @@ class SimulatorViewModel : ViewModel() {
                 add(Manifest.permission.BLUETOOTH_ADVERTISE)
                 add(Manifest.permission.BLUETOOTH_SCAN)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            }
+            // NEARBY_WIFI_DEVICES 不需要，BLE操作不依赖此权限
         }.toTypedArray()
     }
 
@@ -165,6 +171,13 @@ class SimulatorViewModel : ViewModel() {
     }
 
     /**
+     * 获取活跃设备数量
+     */
+    fun getActiveDeviceCount(): Int {
+        return peripheralManager?.getActiveDeviceCount() ?: 0
+    }
+
+    /**
      * 开始数据更新
      */
     private fun startDataUpdate() {
@@ -173,19 +186,16 @@ class SimulatorViewModel : ViewModel() {
             val manager = peripheralManager ?: return@launch
 
             generator.startGpsDataStream().collect { (mainData, timeData) ->
-                // 更新速度
-                val currentSpeed = updateSpeed(System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                val currentSpeed = updateSpeed(now)
                 generator.setCurrentSpeed(currentSpeed)
 
-                // 更新位置
-                val currentLat = getCurrentLatitude(currentSpeed)
-                val currentLon = getCurrentLongitude(currentSpeed)
+                // 基于时间积分计算位移（物理真实轨迹）
+                val (currentLat, currentLon) = updatePosition(currentSpeed, now)
                 generator.setCurrentPosition(currentLat, currentLon)
 
-                // 发送数据
                 manager.updateGpsData(mainData, timeData)
 
-                // 更新UI状态
                 _uiState.value = _uiState.value.copy(
                     currentSpeed = currentSpeed,
                     currentLatitude = currentLat,
@@ -288,15 +298,53 @@ class SimulatorViewModel : ViewModel() {
     /**
      * 获取当前纬度
      */
-    private fun getCurrentLatitude(speed: Float = _uiState.value.currentSpeed): Double {
-        return 60.1725 + (speed * 0.0001)
+    /**
+     * 基于时间积分计算当前位置（物理真实轨迹）
+     * 位移 = 速度 × 时间
+     */
+    private fun updatePosition(currentSpeed: Float, now: Long): Pair<Double, Double> {
+        if (lastUpdateTime == 0L) {
+            lastUpdateTime = now
+            return Pair(baseLatitude, baseLongitude)
+        }
+
+        val dt = (now - lastUpdateTime) / 1000.0  // 秒
+        lastUpdateTime = now
+
+        if (dt <= 0 || dt > 1.0) {
+            // 时间间隔异常，跳过这次积分，直接返回当前位置
+            val lat = baseLatitude + totalDistanceNorth / 111000.0
+            val lon = baseLongitude + totalDistanceEast / (111000.0 * kotlin.math.cos(Math.toRadians(baseLatitude)))
+            return Pair(lat, lon)
+        }
+
+        // 速度 m/s
+        val speedMs = currentSpeed / 3.6
+
+        // 位移增量（米）
+        val deltaDistance = speedMs * dt
+
+        // 累加位移
+        val deltaNorth = deltaDistance * kotlin.math.cos(Math.toRadians(bearing))
+        val deltaEast = deltaDistance * kotlin.math.sin(Math.toRadians(bearing))
+        totalDistanceNorth += deltaNorth
+        totalDistanceEast += deltaEast
+
+        // 转换为经纬度
+        // 1度纬度 ≈ 111km，1度经度 ≈ 111km × cos(lat)
+        val latOffset = totalDistanceNorth / 111000.0
+        val lonOffset = totalDistanceEast / (111000.0 * kotlin.math.cos(Math.toRadians(baseLatitude)))
+
+        return Pair(baseLatitude + latOffset, baseLongitude + lonOffset)
     }
 
     /**
-     * 获取当前经度
+     * 重置轨迹（开始新测试时调用）
      */
-    private fun getCurrentLongitude(speed: Float = _uiState.value.currentSpeed): Double {
-        return 24.9375 + (speed * 0.0001)
+    private fun resetTrajectory() {
+        totalDistanceNorth = 0.0
+        totalDistanceEast = 0.0
+        lastUpdateTime = 0L
     }
 
     override fun onCleared() {

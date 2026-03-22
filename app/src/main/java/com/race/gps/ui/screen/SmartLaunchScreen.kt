@@ -1,16 +1,11 @@
 package com.race.gps.ui.screen
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -21,7 +16,11 @@ import com.race.gps.domain.usecase.SmartTestLauncher.ConditionIcon
 
 /**
  * 智能启动测试页面
- * 显示启动条件状态和倒计时，条件就绪后用户手动开始
+ *
+ * 交互流程：
+ * 1. 进入页面 → 显示5秒倒计时（纯心理暗示，橙色"等待条件就绪"）
+ * 2. 倒计时结束 → 显示绿色"条件就绪，可以开始测试了"，隐藏倒计时块
+ * 3. 检测到起步条件 → 切换到加速中布局
  */
 @Composable
 fun SmartLaunchScreen(
@@ -41,7 +40,8 @@ fun SmartLaunchScreen(
         Text(
             text = "启动准备",
             fontSize = 24.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
         )
 
         // 条件卡片
@@ -49,11 +49,10 @@ fun SmartLaunchScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 倒计时/状态区域
-        CountdownSection(
+        // 状态区域
+        StatusSection(
             countdownSeconds = countdownSeconds,
-            canStart = launchStatus.canLaunch,
-            onStartClicked = onStartClicked
+            isReady = launchStatus.canLaunch
         )
 
         Spacer(modifier = Modifier.weight(1f))
@@ -87,22 +86,6 @@ private fun ConditionCard(launchStatus: SmartTestLauncher.LaunchStatus) {
             launchStatus.conditions.forEach { condition ->
                 ConditionRow(condition)
             }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // 总体状态
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (launchStatus.canLaunch) "✅ 所有条件已满足" else "⏳ 等待条件满足...",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (launchStatus.canLaunch) Color(0xFF4CAF50) else Color(0xFFFF9800)
-                )
-            }
         }
     }
 }
@@ -126,78 +109,83 @@ private fun ConditionRow(condition: SmartTestLauncher.LaunchCondition) {
     }
 }
 
+/**
+ * 状态区域
+ *
+ * 倒计时中：橙色卡片，显示"等待条件就绪" + 倒计时数字
+ * 就绪后：绿色卡片，显示"条件就绪，可以开始测试了"，无倒计时
+ */
 @Composable
-private fun CountdownSection(
+private fun StatusSection(
     countdownSeconds: Int,
-    canStart: Boolean,
-    onStartClicked: () -> Unit
+    isReady: Boolean
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (countdownSeconds > 0 && canStart) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else if (countdownSeconds == 0 && canStart) {
-                Color(0xFF4CAF50).copy(alpha = 0.1f)
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(24.dp)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+    if (countdownSeconds > 0) {
+        // 倒计时阶段：橙色卡片
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFFFF9800).copy(alpha = 0.15f)
+            ),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            when {
-                countdownSeconds > 0 -> {
-                    // 倒计时显示
-                    Text(
-                        text = countdownSeconds.toString(),
-                        fontSize = 72.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "条件满足，请保持当前速度",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                    )
-                }
-                canStart -> {
-                    // 就绪状态 - 速度已在起点范围
-                    Text(
-                        text = "\u2705",
-                        fontSize = 48.sp
-                    )
-                    Text(
-                        text = "准备就绪！当前速度已达到起点条件",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF4CAF50),
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "测试将在速度变化时自动触发",
-                        fontSize = 12.sp,
-                        color = Color.Gray,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                else -> {
-                    // 等待条件
-                    Text(
-                        text = "\u23F3",
-                        fontSize = 48.sp
-                    )
-                    Text(
-                        text = "等待所有条件满足...",
-                        fontSize = 14.sp,
-                        color = Color.Gray
-                    )
-                }
+            Column(
+                modifier = Modifier
+                    .padding(32.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "\u23F3 等待条件就绪",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFFF9800)
+                )
+
+                Text(
+                    text = countdownSeconds.toString(),
+                    fontSize = 72.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFF9800)
+                )
+            }
+        }
+    } else {
+        // 就绪阶段：绿色卡片，无倒计时
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF4CAF50).copy(alpha = 0.15f)
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(32.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "\u2705",
+                    fontSize = 48.sp
+                )
+
+                Text(
+                    text = "条件就绪，可以开始测试了",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF4CAF50),
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = "开始加速即可自动触发测试",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }

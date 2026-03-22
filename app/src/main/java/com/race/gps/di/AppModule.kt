@@ -80,6 +80,6 @@ val domainModule = module {
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
     single { GpsDataViewModel(get(), get(), get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }

@@ -46,7 +46,10 @@ object PermissionChecker {
      * 检查是否有所有必需的BLE权限
      */
     fun hasAllRequiredPermissions(context: Context): Boolean {
-        return hasScanPermission(context) && hasConnectPermission(context)
+        val scanPerm = hasScanPermission(context)
+        val connectPerm = hasConnectPermission(context)
+        android.util.Log.d("PermissionChecker", "hasScanPermission=$scanPerm, hasConnectPermission=$connectPerm")
+        return scanPerm && connectPerm
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.race.gps.ui.screen
 
 import androidx.compose.foundation.layout.*
+import kotlinx.coroutines.delay
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -66,7 +67,12 @@ fun TestExecutionScreen(
             is TestState.Running -> state.session.template.name
             else -> "测试"
         }
-        Text(titleText, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text(
+            titleText,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
 
         // 状态提示
         StatusBanner(testState)
@@ -115,6 +121,19 @@ fun TestExecutionScreen(
 
 @Composable
 private fun StatusBanner(testState: TestState) {
+    // Running状态时使用定时器持续更新elapsed time
+    var elapsed by remember { mutableStateOf(0.0) }
+
+    LaunchedEffect(testState) {
+        if (testState is TestState.Running) {
+            val startTime = testState.session.startTime
+            while (true) {
+                elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                delay(100) // 每100ms更新一次
+            }
+        }
+    }
+
     val (text, color) = when (testState) {
         is TestState.Preparing -> {
             val hint = when (testState.template) {
@@ -124,8 +143,12 @@ private fun StatusBanner(testState: TestState) {
             hint to Color(0xFF2196F3)
         }
         is TestState.Running -> {
-            val elapsed = testState.session.dataPoints.lastOrNull()?.elapsedTime ?: 0.0
-            "测试进行中... ${String.format("%.2f", elapsed)}s" to Color(0xFF4CAF50)
+            val elapsedStr = if (elapsed < 10) {
+                String.format("%.2f", elapsed)
+            } else {
+                String.format("%.1f", elapsed)
+            }
+            "测试进行中... ${elapsedStr}s" to Color(0xFF4CAF50)
         }
         else -> "准备中..." to Color.Gray
     }
