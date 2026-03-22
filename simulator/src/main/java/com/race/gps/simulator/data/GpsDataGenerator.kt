@@ -34,67 +34,69 @@ class GpsDataGenerator(
     private var vdop = 1.0f
 
     /**
-     * 生成28字节GPS主数据（RaceChrono协议标准格式）
-     * 格式: [ sync(1) | time(4) | fix+sats(1) | lat(4) | lon(4) | alt(4) | speed(4) | bearing(4) | hdop(1) | vdop(1) ]
+     * 生成20字节GPS主数据（ESP32协议格式）
+     * 格式: [ sync(3bit)|timeHigh(5bit) | timeMid(8bit) | timeLow(8bit) | fixQuality(2bit)|satellites(6bit) | lat(4) | lon(4) | alt(2) | speed(2) | bearing(2) | hdop(1) | vdop(1) ]
      */
     fun generateGpsMainData(): ByteArray {
-        val data = ByteArray(28)
+        val data = ByteArray(20)
 
-        // Byte 0: 同步位 (低3位，0-7循环)
-        data[0] = (syncCounter and 0x07).toByte()
+        // Byte 0: syncBits(高3位) | time高5位
+        val timeMs = getTimeSinceHourStart() / 2
+        val timeHigh = (timeMs shr 16)
+        data[0] = (((syncCounter and 0x07) shl 5) or (timeHigh and 0x1F)).toByte()
 
-        // Byte 1-4: 小时开始时间 (big endian, 毫秒)
-        val timeMs = getTimeSinceHourStart()
-        data[1] = ((timeMs shr 24) and 0xFF).toByte()
-        data[2] = ((timeMs shr 16) and 0xFF).toByte()
-        data[3] = ((timeMs shr 8) and 0xFF).toByte()
-        data[4] = (timeMs and 0xFF).toByte()
+        // Byte 1-2: time 中低16位
+        data[1] = ((timeMs shr 8) and 0xFF).toByte()
+        data[2] = (timeMs and 0xFF).toByte()
 
-        // Byte 5: 定位质量(高2位) + 卫星数(低6位)
+        // Byte 3: fixQuality(高2位) | satellites(低6位)
         val fixQuality = 1 // GPS定位
-        val fixAndSat = ((fixQuality shl 6) or (satellites and 0x3F))
-        data[5] = fixAndSat.toByte()
+        data[3] = (((fixQuality shl 6) or (satellites and 0x3F)) and 0xFF).toByte()
 
-        // Byte 6-9: 纬度 (big endian, 度 * 10,000,000)
+        // Byte 4-7: latitude (big endian, 度 * 10,000,000)
         val latInt = (currentLatitude * 10000000.0).toInt()
-        data[6] = ((latInt shr 24) and 0xFF).toByte()
-        data[7] = ((latInt shr 16) and 0xFF).toByte()
-        data[8] = ((latInt shr 8) and 0xFF).toByte()
-        data[9] = (latInt and 0xFF).toByte()
+        data[4] = ((latInt shr 24) and 0xFF).toByte()
+        data[5] = ((latInt shr 16) and 0xFF).toByte()
+        data[6] = ((latInt shr 8) and 0xFF).toByte()
+        data[7] = (latInt and 0xFF).toByte()
 
-        // Byte 10-13: 经度 (big endian, 度 * 10,000,000)
+        // Byte 8-11: longitude (big endian, 度 * 10,000,000)
         val lonInt = (currentLongitude * 10000000.0).toInt()
-        data[10] = ((lonInt shr 24) and 0xFF).toByte()
-        data[11] = ((lonInt shr 16) and 0xFF).toByte()
-        data[12] = ((lonInt shr 8) and 0xFF).toByte()
-        data[13] = (lonInt and 0xFF).toByte()
+        data[8] = ((lonInt shr 24) and 0xFF).toByte()
+        data[9] = ((lonInt shr 16) and 0xFF).toByte()
+        data[10] = ((lonInt shr 8) and 0xFF).toByte()
+        data[11] = (lonInt and 0xFF).toByte()
 
-        // Byte 14-17: 海拔 (big endian, 米 * 100)
-        val altInt = (altitude * 100.0).toInt()
-        data[14] = ((altInt shr 24) and 0xFF).toByte()
-        data[15] = ((altInt shr 16) and 0xFF).toByte()
-        data[16] = ((altInt shr 8) and 0xFF).toByte()
-        data[17] = (altInt and 0xFF).toByte()
+        // Byte 12-13: altitude (special encoding: 米+500，*10，<6553.5m用正常值，>=用高位置1)
+        val altMeters = altitude.toDouble()
+        val altEncoded = if (altMeters < 6053.5) {
+            (((altMeters + 500.0) * 10.0).toInt() and 0x7FFF)
+        } else {
+            ((((altMeters + 500.0) * 10.0).toInt() and 0x7FFF) or 0x8000)
+        }
+        data[12] = ((altEncoded shr 8) and 0xFF).toByte()
+        data[13] = (altEncoded and 0xFF).toByte()
 
-        // Byte 18-21: 速度 (big endian, km/h * 100)
-        val speedInt = (currentSpeed * 100.0).toInt()
-        data[18] = ((speedInt shr 24) and 0xFF).toByte()
-        data[19] = ((speedInt shr 16) and 0xFF).toByte()
-        data[20] = ((speedInt shr 8) and 0xFF).toByte()
-        data[21] = (speedInt and 0xFF).toByte()
+        // Byte 14-15: speed (special encoding: km/h<655.35用*100，>=用*10，高位置1)
+        val speedKmh = currentSpeed.toDouble()
+        val speedEncoded = if (speedKmh < 655.35) {
+            ((speedKmh * 100.0).toInt() and 0x7FFF)
+        } else {
+            (((speedKmh * 10.0).toInt() and 0x7FFF) or 0x8000)
+        }
+        data[14] = ((speedEncoded shr 8) and 0xFF).toByte()
+        data[15] = (speedEncoded and 0xFF).toByte()
 
-        // Byte 22-25: 方位角 (big endian, 度 * 100)
+        // Byte 16-17: bearing (big endian uint16, 度 * 100)
         val bearingInt = (bearing * 100.0).toInt()
-        data[22] = ((bearingInt shr 24) and 0xFF).toByte()
-        data[23] = ((bearingInt shr 16) and 0xFF).toByte()
-        data[24] = ((bearingInt shr 8) and 0xFF).toByte()
-        data[25] = (bearingInt and 0xFF).toByte()
+        data[16] = ((bearingInt shr 8) and 0xFF).toByte()
+        data[17] = (bearingInt and 0xFF).toByte()
 
-        // Byte 26: HDOP (0.1单位)
-        data[26] = ((hdop * 10.0).toInt().toByte())
+        // Byte 18: HDOP (0.1单位)
+        data[18] = ((hdop * 10.0).toInt() and 0xFF).toByte()
 
-        // Byte 27: VDOP (0.1单位)
-        data[27] = ((vdop * 10.0).toInt().toByte())
+        // Byte 19: VDOP (0.1单位)
+        data[19] = ((vdop * 10.0).toInt() and 0xFF).toByte()
 
         return data
     }
@@ -116,23 +118,27 @@ class GpsDataGenerator(
     }
 
     /**
-     * 生成3字节GPS时间数据
-     * 格式: [ sync+date(1) | time(2) ]
+     * 生成3字节GPS时间数据（ESP32协议格式）
+     * 格式: [ sync(3bit)|dateHigh(5bit) | dateMid(8bit) | dateLow(8bit) ]
+     * dateAndHour = yearOffset*8928 + (month-1)*744 + (day-1)*24 + hour
      */
     fun generateGpsTimeData(): ByteArray {
         val data = ByteArray(3)
 
         val now = System.currentTimeMillis()
-        val dateAndHour = ((now / 3600000L) % 2048).toInt() // 取日期和小时部分
-        val milliseconds = (now % 60000L).toInt() // 取分钟内的毫秒数
+        val calendar = java.util.Calendar.getInstance()
+        calendar.timeInMillis = now
+        val year = calendar.get(java.util.Calendar.YEAR)
+        val month = calendar.get(java.util.Calendar.MONTH) + 1
+        val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
 
-        // Byte 0: 同步位(高3位) + 日期和小时(低13位)
-        val syncAndDate = ((syncCounter shl 5) or (dateAndHour and 0x1FFF))
-        data[0] = ((syncAndDate shr 8) and 0xFF).toByte()
-        data[1] = (syncAndDate and 0xFF).toByte()
+        val yearOffset = if (year > 2000) year - 2000 else 0
+        val dateAndHour = yearOffset * 8928 + (month - 1) * 744 + (day - 1) * 24 + hour
 
-        // Byte 2: 毫秒低8位
-        data[2] = (milliseconds and 0xFF).toByte()
+        data[0] = (((syncCounter and 0x07) shl 5) or (dateAndHour shr 16) and 0x1F).toByte()
+        data[1] = ((dateAndHour shr 8) and 0xFF).toByte()
+        data[2] = (dateAndHour and 0xFF).toByte()
 
         return data
     }
@@ -145,23 +151,25 @@ class GpsDataGenerator(
         val timeHex = timeData.joinToString("") { "%02X".format(it) }
         android.util.Log.d("GpsDataGenerator", "Transmitting - Main: $mainHex, Time: $timeHex")
 
-        // 解析关键字段用于日志
-        val sync = mainData[0].toInt() and 0x07
-        val fixAndSat = mainData[5].toInt() and 0xFF
+        // 解析关键字段用于日志（20字节格式）
+        val sync = (mainData[0].toInt() shr 5) and 0x07
+        val fixAndSat = mainData[3].toInt() and 0xFF
         val fixQuality = (fixAndSat shr 6) and 0x03
         val sats = fixAndSat and 0x3F
 
-        val latInt = ((mainData[6].toInt() and 0xFF) shl 24) or
-                     ((mainData[7].toInt() and 0xFF) shl 16) or
-                     ((mainData[8].toInt() and 0xFF) shl 8) or
-                     (mainData[9].toInt() and 0xFF)
+        val latInt = ((mainData[4].toInt() and 0xFF) shl 24) or
+                     ((mainData[5].toInt() and 0xFF) shl 16) or
+                     ((mainData[6].toInt() and 0xFF) shl 8) or
+                     (mainData[7].toInt() and 0xFF)
         val lat = latInt / 10000000.0
 
-        val speedInt = ((mainData[18].toInt() and 0xFF) shl 24) or
-                       ((mainData[19].toInt() and 0xFF) shl 16) or
-                       ((mainData[20].toInt() and 0xFF) shl 8) or
-                       (mainData[21].toInt() and 0xFF)
-        val speed = speedInt / 100.0
+        // speed 解码（特殊编码）
+        val speedEncoded = ((mainData[14].toInt() and 0xFF) shl 8) or (mainData[15].toInt() and 0xFF)
+        val speed = if (speedEncoded and 0x8000 != 0) {
+            (speedEncoded and 0x7FFF) / 10.0
+        } else {
+            (speedEncoded and 0x7FFF) / 100.0
+        }
 
         android.util.Log.d("GpsDataGenerator", "Fields - Sync=$sync, Fix=$fixQuality, Sats=$sats, Lat=$lat, Speed=$speed km/h, Freq=${frequency}Hz")
     }

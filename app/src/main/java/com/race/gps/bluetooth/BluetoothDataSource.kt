@@ -45,9 +45,13 @@ class BluetoothDataSource(
                 _connectionState.value = ConnectionState.CONNECTING
                 Log.d(TAG, "状态设置为 CONNECTING，创建 BleConnection")
 
-                bleConnection = BleConnection(context, deviceAddress) { rawData ->
-                    // 收到原始数据后立即解析并发送
-                    val gpsData = parser.parseGpsData(rawData, _dataFlow.value)
+                bleConnection = BleConnection(context, deviceAddress) { uuid, rawData ->
+                    // 根据UUID路由数据：Main走parseGpsData，Time走parseGpsTimeData
+                    val gpsData = when (uuid.toString()) {
+                        "00000003-0000-1000-8000-00805f9b34fb" -> parser.parseGpsData(rawData, _dataFlow.value)
+                        "00000004-0000-1000-8000-00805f9b34fb" -> parser.parseGpsTimeData(rawData, _dataFlow.value)
+                        else -> _dataFlow.value
+                    }
                     _dataFlow.value = gpsData.copy(isConnected = true)
                 }
 

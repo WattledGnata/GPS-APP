@@ -21,24 +21,65 @@
 
 ## 3. 数据格式
 
-### 3.1 GPS 主数据格式
+### 3.1 GPS 主数据格式（20 字节）
 
-GPS 主数据通过 `00000003-0000-1000-8000-00805f9b34fb` 特性传输，数据格式如下：
+GPS 主数据通过 `00000003-0000-1000-8000-00805f9b34fb` 特性传输，总长度 20 字节。
 
 | 字段 | 字节偏移 | 大小 | 数据类型 | 描述 |
 |------|---------|------|---------|------|
-| 同步位 | 0 | 1 | uint8_t | 3位同步计数器，取值范围 0-7 |
-| 小时开始时间 | 1 | 4 | int | 从小时开始的毫秒数 |
-| 定位质量和卫星数 | 5 | 1 | uint8_t | 高2位：定位质量，低6位：卫星数量 |
-| 纬度 | 6 | 4 | int32_t | 纬度，单位：度 * 10,000,000 |
-| 经度 | 10 | 4 | int32_t | 经度，单位：度 * 10,000,000 |
-| 海拔 | 14 | 4 | int32_t | 海拔，编码格式 |
-| 速度 | 18 | 4 | int32_t | 速度，编码格式 |
-| 方位角 | 22 | 4 | int32_t | 方位角，单位：度 * 100 |
-| HDOP | 26 | 1 | uint8_t | 水平精度因子，单位：0.1 |
-| VDOP | 27 | 1 | uint8_t | 垂直精度因子，单位：0.1 |
+| 时间戳 | 0-2 | 3 | bitfield | Byte 0 高3位: syncBits; Byte 0 低5位 + Byte 1-2: timeSinceHourStart (每个单位=2ms) |
+| 定位质量 | 3 | 1 | bitfield | 高2位: fixQuality; 低6位: satellites |
+| 纬度 | 4-7 | 4 | int32 (big endian) | 纬度，单位：度 * 10,000,000 |
+| 经度 | 8-11 | 4 | int32 (big endian) | 经度，单位：度 * 10,000,000 |
+| 海拔 | 12-13 | 2 | uint16 (big endian) | 特殊编码，详见 3.3 节 |
+| 速度 | 14-15 | 2 | uint16 (big endian) | 特殊编码，详见 3.3 节 |
+| 方位角 | 16-17 | 2 | uint16 (big endian) | 方位角，单位：度 * 100 |
+| HDOP | 18 | 1 | uint8 | 直接值 * 0.1 |
+| VDOP | 19 | 1 | uint8 | 直接值 * 0.1 |
 
-### 3.2 定位质量值
+**字节布局详解：**
+
+```
+Byte 0: [syncBits:3][timeSinceHourStart高5位:5]
+Byte 1: [timeSinceHourStart[15:8]]
+Byte 2: [timeSinceHourStart[7:0]]
+Byte 3: [fixQuality:2][satellites:6]
+Byte 4-7: latitude (big endian int32)
+Byte 8-11: longitude (big endian int32)
+Byte 12-13: altitude (big endian uint16, 特殊编码)
+Byte 14-15: speed (big endian uint16, 特殊编码)
+Byte 16-17: bearing (big endian uint16)
+Byte 18: HDOP
+Byte 19: VDOP
+```
+
+### 3.2 GPS 时间数据格式（3 字节）
+
+GPS 时间数据通过 `00000004-0000-1000-8000-00805f9b34fb` 特性传输，总长度 3 字节。
+
+| 字段 | 字节偏移 | 大小 | 数据类型 | 描述 |
+|------|---------|------|---------|------|
+| 日期时间 | 0-2 | 3 | bitfield | Byte 0 高3位: syncBits; Byte 0 低5位 + Byte 1-2: dateAndHour |
+
+**编码公式：**
+
+```
+dateAndHour = (year - 2000) * 8928 + (month - 1) * 744 + (day - 1) * 24 + hour
+```
+
+**解码公式：**
+
+```
+yearOffset = dateAndHour / 8928
+remainder = dateAndHour % 8928
+month = remainder / 744
+remainder2 = remainder % 744
+day = remainder2 / 24
+hour = remainder2 % 24
+year = 2000 + yearOffset
+```
+
+### 3.3 定位质量值
 
 | 定位质量 | 描述 |
 |---------|------|
@@ -46,36 +87,105 @@ GPS 主数据通过 `00000003-0000-1000-8000-00805f9b34fb` 特性传输，数据
 | 1 | GPS 定位 |
 | 2 | DGPS 定位 |
 
-### 3.3 数据解析示例
+### 3.4 海拔和速度特殊编码
 
-以下是如何解析 GPS 主数据的示例：
+altitude 和 speed 字段使用 2 字节 uint16，但使用 bit 15 作为 overflow 标志：
+
+**海拔（Altitude）:**
+
+- Bit 15 = 0（无溢出）: `alt = raw / 100.0 - 500.0`
+  - raw 范围: 0-32767, 对应 -500.0m 到 277.67m
+- Bit 15 = 1（有溢出）: `alt = ((raw & 0x7FFF) * 10) / 100.0 - 500.0`
+  - raw 范围: 32768-65535, 对应 277.68m 到 6052.7m
+
+**速度（Speed）:**
+
+- Bit 15 = 0（无溢出）: `speed = raw / 100.0`
+  - raw 范围: 0-32767, 对应 0 到 327.67 km/h
+- Bit 15 = 1（有溢出）: `speed = ((raw & 0x7FFF) * 10) / 100.0`
+  - raw 范围: 32768-65535, 对应 327.68 到 6553.5 km/h
+
+### 3.5 数据解析示例
+
+#### GPS 主数据解析（20 字节）
 
 ```kotlin
 private fun parseGpsData(data: ByteArray) {
-    if (data.size < 28) {
+    if (data.size < 20) {
         return // 数据长度不足
     }
-    
-    val syncBits = data[0].toInt() and 0x07 // 提取低3位
-    val timeSinceHourStart = data.getInt(1)
-    val fixQuality = (data[5].toInt() shr 6) and 0x03 // 提取高2位
-    val satellites = data[5].toInt() and 0x3F // 提取低6位
-    val latitude = data.getInt(6)
-    val longitude = data.getInt(10)
-    val altitude = data.getInt(14)
-    val speed = data.getInt(18)
-    val bearing = data.getInt(22)
-    val hdop = data[26].toInt()
-    val vdop = data[27].toInt()
-    
-    // 转换为实际值
-    val actualLatitude = latitude / 10000000.0
-    val actualLongitude = longitude / 10000000.0
-    val actualAltitude = altitude / 100.0
-    val actualSpeed = speed / 100.0
-    val actualBearing = bearing / 100.0
-    val actualHdop = hdop / 10.0
-    val actualVdop = vdop / 10.0
+
+    // Byte 0: sync + time high
+    val syncBits = (data[0].toInt() shr 5) and 0x07
+    val timeHigh = data[0].toInt() and 0x1F
+    val timeMid = data[1].toInt() and 0xFF
+    val timeLow = data[2].toInt() and 0xFF
+    val timeSinceHourStart = ((timeHigh shl 16) or (timeMid shl 8) or timeLow) * 2  // 每个单位=2ms
+
+    // Byte 3: fix + satellites
+    val fixQuality = (data[3].toInt() shr 6) and 0x03
+    val satellites = data[3].toInt() and 0x3F
+
+    // Byte 4-7: latitude (big endian int32)
+    val latInt = ((data[4].toInt() and 0xFF) shl 24) or
+                 ((data[5].toInt() and 0xFF) shl 16) or
+                 ((data[6].toInt() and 0xFF) shl 8) or
+                 (data[7].toInt() and 0xFF)
+    val latitude = latInt / 10000000.0
+
+    // Byte 8-11: longitude (big endian int32)
+    val lonInt = ((data[8].toInt() and 0xFF) shl 24) or
+                 ((data[9].toInt() and 0xFF) shl 16) or
+                 ((data[10].toInt() and 0xFF) shl 8) or
+                 (data[11].toInt() and 0xFF)
+    val longitude = lonInt / 10000000.0
+
+    // Byte 12-13: altitude special encoding
+    val altRaw = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
+    val altitude = if ((altRaw and 0x8000) == 0) {
+        (altRaw and 0x7FFF) / 100.0 - 500.0
+    } else {
+        ((altRaw and 0x7FFF) * 10) / 100.0 - 500.0
+    }
+
+    // Byte 14-15: speed special encoding
+    val speedRaw = ((data[14].toInt() and 0xFF) shl 8) or (data[15].toInt() and 0xFF)
+    val speed = if ((speedRaw and 0x8000) == 0) {
+        (speedRaw and 0x7FFF) / 100.0
+    } else {
+        ((speedRaw and 0x7FFF) * 10) / 100.0
+    }
+
+    // Byte 16-17: bearing (big endian uint16)
+    val bearingInt = ((data[16].toInt() and 0xFF) shl 8) or (data[17].toInt() and 0xFF)
+    val bearing = bearingInt / 100.0
+
+    // Byte 18-19: HDOP/VDOP
+    val hdop = data[18].toInt() / 10.0
+    val vdop = data[19].toInt() / 10.0
+}
+```
+
+#### GPS 时间数据解析（3 字节）
+
+```kotlin
+private fun parseGpsTimeData(data: ByteArray) {
+    if (data.size < 3) {
+        return // 数据长度不足
+    }
+
+    val syncBits = (data[0].toInt() shr 5) and 0x07
+    val dateAndHour = ((data[0].toInt() and 0x1F) shl 16) or
+                      ((data[1].toInt() and 0xFF) shl 8) or
+                      (data[2].toInt() and 0xFF)
+
+    val yearOffset = dateAndHour / 8928
+    val remainder = dateAndHour % 8928
+    val month = remainder / 744
+    val remainder2 = remainder % 744
+    val day = remainder2 / 24
+    val hour = remainder2 % 24
+    val year = 2000 + yearOffset
 }
 ```
 
@@ -84,7 +194,7 @@ private fun parseGpsData(data: ByteArray) {
 1. 扫描 BLE 设备，查找广播 `00001ff8-0000-1000-8000-00805f9b34fb` 服务 UUID 的设备
 2. 连接到设备
 3. 发现服务和特性
-4. 启用 `00000003-0000-1000-8000-00805f9b34fb` 特性的通知
+4. 启用 `00000003-0000-1000-8000-00805f9b34fb` 和 `00000004-0000-1000-8000-00805f9b34fb` 特性的通知
 5. 接收并解析 GPS 数据
 
 ## 5. 设备信息
@@ -94,8 +204,6 @@ private fun parseGpsData(data: ByteArray) {
 - 传输频率：25Hz（每 40ms 发送一次数据）
 
 ## 6. 硬件实现
-
-ESP32 固件代码可参考：`RaceChrono_ESP32_M9N.ino`
 
 ### 6.1 硬件配置
 
@@ -120,7 +228,7 @@ ESP32 固件代码可参考：`RaceChrono_ESP32_M9N.ino`
 2. 扫描带有指定服务 UUID 的设备
 3. 连接到 GATT 服务器
 4. 发现服务和特性
-5. 注册特性变更监听器
+5. 注册特性变更监听器（根据 characteristic UUID 区分主数据和时间数据）
 6. 解析接收到的数据
 
 ## 8. 数据更新频率
@@ -148,10 +256,11 @@ ESP32 固件代码可参考：`RaceChrono_ESP32_M9N.ino`
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | 1.0 | 2024-01-17 | 初始版本 |
+| 2.0 | 2026-03-22 | 更新为 ESP32 20字节协议格式；添加 GPS Time Data 格式；添加海拔/速度特殊编码说明 |
 
 ## 11. 附录
 
-### 11.1 ESP32 固件主要代码片段
+### 11.1 ESP32 固件 UUID 定义
 
 ```cpp
 // RaceChrono BLE DIY Service UUID
@@ -162,23 +271,32 @@ ESP32 固件代码可参考：`RaceChrono_ESP32_M9N.ino`
 #define GPS_TIME_CHAR_UUID  "00000004-0000-1000-8000-00805f9b34fb"
 ```
 
-### 11.2 数据结构定义
+### 11.2 GPS 主数据结构体定义（ESP32 固件）
 
 ```cpp
-// GPS data structure
-struct GpsData {
-  uint8_t syncBits;          // 3 bits sync counter
-  int timeSinceHourStart;    // Time in milliseconds since hour start
-  uint8_t fixQuality;        // 2 bits: 0=invalid, 1=GPS, 2=DGPS
-  uint8_t satellites;        // 6 bits: number of satellites (0-63)
-  int32_t latitude;          // Latitude in degrees * 10,000,000
-  int32_t longitude;         // Longitude in degrees * 10,000,000
-  int altitude;              // Encoded altitude
-  int speed;                 // Encoded speed
-  int bearing;               // Bearing in degrees * 100
-  uint8_t hdop;              // Horizontal dilution of precision * 10
-  uint8_t vdop;              // Vertical dilution of precision * 10
-};
+// GPS Main Data structure (20 bytes)
+// Byte 0: syncBits[7:5] + timeSinceHourStart[4:0]
+// Byte 1: timeSinceHourStart[15:8]
+// Byte 2: timeSinceHourStart[7:0]
+// Byte 3: fixQuality[7:6] + satellites[5:0]
+// Byte 4-7: latitude (big endian int32, degrees * 10,000,000)
+// Byte 8-11: longitude (big endian int32, degrees * 10,000,000)
+// Byte 12-13: altitude (big endian uint16, special encoding)
+// Byte 14-15: speed (big endian uint16, special encoding)
+// Byte 16-17: bearing (big endian uint16, degrees * 100)
+// Byte 18: HDOP (raw value * 0.1)
+// Byte 19: VDOP (raw value * 0.1)
+```
+
+### 11.3 GPS 时间数据结构体定义（ESP32 固件）
+
+```cpp
+// GPS Time Data structure (3 bytes)
+// Byte 0: syncBits[7:5] + dateAndHour[4:0]
+// Byte 1: dateAndHour[15:8]
+// Byte 2: dateAndHour[7:0]
+//
+// dateAndHour = (year - 2000) * 8928 + (month - 1) * 744 + (day - 1) * 24 + hour
 ```
 
 ## 12. 联系方式

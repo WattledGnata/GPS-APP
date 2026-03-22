@@ -21,7 +21,7 @@ import java.util.UUID
 class BleConnection(
     private val context: Context,
     private val deviceAddress: String,
-    private val onDataReceived: (ByteArray) -> Unit
+    private val onDataReceived: (UUID, ByteArray) -> Unit
 ) {
     companion object {
         private const val TAG = "BleConnection"
@@ -124,7 +124,7 @@ class BleConnection(
 
         private fun handleCharacteristicChange(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             logReceivedData(characteristic.uuid, value)
-            onDataReceived(value)
+            onDataReceived(characteristic.uuid, value)
 
             // 更新数据接收时间
             lastDataTime = System.currentTimeMillis()

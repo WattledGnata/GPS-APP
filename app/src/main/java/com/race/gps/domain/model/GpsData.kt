@@ -17,7 +17,8 @@ data class GpsData(
     val frequency: Double,       // Hz
     val isConnected: Boolean,    // 连接状态
     val isTestReady: Boolean,    // 测试就绪状态
-    val errorMessage: String?    // 错误信息
+    val errorMessage: String?,   // 错误信息
+    val fixQuality: Int = 0      // 0=无效定位, 1=GPS, 2=DGPS
 ) {
     companion object {
         val Empty = GpsData(
@@ -33,7 +34,8 @@ data class GpsData(
             frequency = 0.0,
             isConnected = false,
             isTestReady = false,
-            errorMessage = null
+            errorMessage = null,
+            fixQuality = 0
         )
     }
 }

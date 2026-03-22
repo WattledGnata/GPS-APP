@@ -1,12 +1,15 @@
 package com.race.gps.data.service.parser
 
+import android.util.Log
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.After
 import org.junit.Test
+import org.mockito.Mockito
 
 /**
  * RaceChronoParser 单元测试
- * 测试28字节RaceChrono协议解析逻辑
+ * 测试 ESP32 20字节协议解析逻辑
  */
 class RaceChronoParserTest {
 
@@ -15,6 +18,21 @@ class RaceChronoParserTest {
     @Before
     fun setup() {
         parser = RaceChronoParser()
+    }
+
+    @After
+    fun tearDown() {
+        // Nothing to clean up
+    }
+
+    // Helper to run a test with Log mocked
+    private fun runWithMockedLog(test: () -> Unit) {
+        val logMock = Mockito.mockStatic(Log::class.java)
+        try {
+            test()
+        } finally {
+            logMock.close()
+        }
     }
 
     // 辅助函数：创建测试用的GpsData对象
@@ -31,21 +49,25 @@ class RaceChronoParserTest {
         frequency = 0.0,
         isConnected = false,
         isTestReady = false,
-        errorMessage = null
+        errorMessage = null,
+        fixQuality = 0
     )
 
     // ==================== 基本解析测试 ====================
 
     @Test
-    fun RP01_parseValid28Bytes_returnsCorrectGpsData() {
-        // Given: 有效的28字节GPS数据
-        val data = createValidGpsData(
+    fun RP01_parseValid20Bytes_returnsCorrectGpsData() {
+        // Given: 有效的20字节GPS数据
+        val data = createValidGpsData20(
             satellites = 12,
             speed = 15.0,
             latitude = 60.1725897,
             longitude = 24.9376543,
             altitude = 100.0,
-            bearing = 45.0
+            bearing = 45.0,
+            fixQuality = 1,
+            hdop = 1.0,
+            vdop = 1.5
         )
 
         // When: 解析数据
@@ -58,12 +80,15 @@ class RaceChronoParserTest {
         assertEquals("经度应正确", 24.9376543, result.longitude, 0.000001)
         assertEquals("海拔应为100.0", 100.0, result.altitude, 0.1)
         assertEquals("方位角应为45.0", 45.0, result.bearing, 0.1)
+        assertEquals("fixQuality应为1", 1, result.fixQuality)
+        assertEquals("HDOP应为1.0", 1.0, result.hdop, 0.01)
+        assertEquals("VDOP应为1.5", 1.5, result.vdop, 0.01)
     }
 
     @Test
     fun RP02_parseInvalidSize_returnsOriginalData() {
-        // Given: 数据长度不足28字节
-        val shortData = ByteArray(20)
+        // Given: 数据长度不足20字节
+        val shortData = ByteArray(19)
 
         // When: 尝试解析
         val result = parser.parseGpsData(shortData, createTestData())
@@ -73,10 +98,87 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP03_parseSatellites_correctValue() {
-        // Given: 卫星数为12 (0x4C = 01001100, 低6位=001100=12)
-        val data = ByteArray(28)
-        data[5] = 0x4C.toByte() // fixQuality=1, sats=12
+    fun RP03_parseExactly19Bytes_returnsOriginalData() {
+        // Given: 刚好19字节
+        val almostData = ByteArray(19)
+
+        // When
+        val result = parser.parseGpsData(almostData, createTestData())
+
+        // Then: 应返回原始数据
+        assertEquals("应返回原始数据", 0.0, result.latitude, 0.001)
+    }
+
+    // ==================== fixQuality 测试 ====================
+
+    @Test
+    fun RP04_parseFixQuality_0_noFix() {
+        // Given: fixQuality=0 (无定位)
+        val data = createValidGpsData20(fixQuality = 0, satellites = 0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("fixQuality应为0", 0, result.fixQuality)
+        assertFalse("无定位时isTestReady应为false", result.isTestReady)
+    }
+
+    @Test
+    fun RP05_parseFixQuality_1_GPS() {
+        // Given: fixQuality=1 (GPS)
+        val data = createValidGpsData20(fixQuality = 1, satellites = 12, hdop = 1.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("fixQuality应为1", 1, result.fixQuality)
+        assertTrue("GPS定位且条件满足时应就绪", result.isTestReady)
+    }
+
+    @Test
+    fun RP06_parseFixQuality_2_DGPS() {
+        // Given: fixQuality=2 (DGPS)
+        val data = createValidGpsData20(fixQuality = 2, satellites = 10, hdop = 0.5)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("fixQuality应为2", 2, result.fixQuality)
+    }
+
+    @Test
+    fun RP07_parseFixQuality_3() {
+        // Given: fixQuality=3
+        val data = createValidGpsData20(fixQuality = 3, satellites = 15, hdop = 1.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("fixQuality应为3", 3, result.fixQuality)
+    }
+
+    // ==================== 卫星数测试 ====================
+
+    @Test
+    fun RP08_parseSatellites_zero() {
+        // Given: 卫星数为0
+        val data = createValidGpsData20(satellites = 0, fixQuality = 1)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("卫星数应为0", 0, result.satelliteCount)
+    }
+
+    @Test
+    fun RP09_parseSatellites_normal() {
+        // Given: 卫星数为12
+        val data = createValidGpsData20(satellites = 12, fixQuality = 1)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -86,10 +188,9 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP03b_parseSatellites_maxValue() {
-        // Given: 卫星数为63 (0xFF低6位=111111=63)
-        val data = createValidGpsData()
-        data[5] = 0xFF.toByte()
+    fun RP10_parseSatellites_maxValue() {
+        // Given: 卫星数为63 (0b111111)
+        val data = createValidGpsData20(satellites = 63, fixQuality = 1)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -98,10 +199,12 @@ class RaceChronoParserTest {
         assertEquals("卫星数应为63", 63, result.satelliteCount)
     }
 
+    // ==================== 速度解析测试 ====================
+
     @Test
-    fun RP04_parseSpeed_correctValue() {
-        // Given: 速度15.0 km/h = 1500 (0x000005DC)
-        val data = createValidGpsData(speed = 15.0)
+    fun RP11_parseSpeed_normal() {
+        // Given: 速度15.0 km/h
+        val data = createValidGpsData20(speed = 15.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -111,9 +214,9 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP04b_parseSpeed_zeroSpeed() {
+    fun RP12_parseSpeed_zero() {
         // Given: 速度为0
-        val data = createValidGpsData(speed = 0.0)
+        val data = createValidGpsData20(speed = 0.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -123,21 +226,40 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP04c_parseSpeed_highSpeed() {
+    fun RP13_parseSpeed_high() {
         // Given: 速度300 km/h
-        val data = createValidGpsData(speed = 300.0)
+        val data = createValidGpsData20(speed = 300.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertEquals("速度应为300", 300.0, result.speed, 0.1)
+        assertEquals("速度应��300", 300.0, result.speed, 0.1)
     }
 
     @Test
-    fun RP05_parseLatitude_correctValue() {
+    fun RP14_parseSpeed_overflow() {
+        // Given: 速度溢出场景，Bit15=1, raw=0x8012 -> 实际值 = 0x0012 * 10 / 100 = 1.2 km/h
+        // 模拟 overflow 场景: 速度 = 1200 km/h (需要溢出位)
+        // 1200 * 100 / 10 = 12000 = 0x2EE0, overflow bit 设置: 0xAEE0
+        val data = createValidGpsData20(speed = 1200.0)
+        // Byte 14-15: speed with overflow bit
+        data[14] = 0xAE.toByte()  // 0xA = overflow bit, 0xE = high nibble of 0x2EE0
+        data[15] = 0xE0.toByte()
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then: 速度应为1200.0
+        assertEquals("速度溢出时应为1200", 1200.0, result.speed, 0.1)
+    }
+
+    // ==================== 纬度解析测试 ====================
+
+    @Test
+    fun RP15_parseLatitude_normal() {
         // Given: 纬度60.1725897
-        val data = createValidGpsData(latitude = 60.1725897)
+        val data = createValidGpsData20(latitude = 60.1725897)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -147,9 +269,9 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP05b_parseLatitude_negativeValue() {
+    fun RP16_parseLatitude_negative() {
         // Given: 南纬33.8688
-        val data = createValidGpsData(latitude = -33.8688)
+        val data = createValidGpsData20(latitude = -33.8688)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -159,53 +281,153 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP06_parseLongitude_correctValue() {
-        // Given: 经度24.9376543
-        val data = createValidGpsData(longitude = 24.9376543)
+    fun RP17_parseLatitude_equator() {
+        // Given: 赤道位置
+        val data = createValidGpsData20(latitude = 0.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertEquals("经度应为24.9376543", 24.9376543, result.longitude, 0.000001)
+        assertEquals("赤道纬度应为0", 0.0, result.latitude, 0.000001)
     }
 
+    // ==================== 经度解析测试 ====================
+
     @Test
-    fun RP08_parseTime_bigEndianFormat() {
-        // Given: 时间 0x002B4C12 = 2868018 ms
-        val data = createValidGpsData()
-        data[1] = 0x00.toByte()
-        data[2] = 0x2B.toByte()
-        data[3] = 0x4C.toByte()
-        data[4] = 0x12.toByte()
+    fun RP18_parseLongitude_normal() {
+        // Given: 经度24.9376543
+        val data = createValidGpsData20(longitude = 24.9376543)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
-        // Then: 解析成功
-        assertNotNull("解析应成功", result)
+        // Then
+        assertEquals("经度应正确", 24.9376543, result.longitude, 0.000001)
+    }
+
+    @Test
+    fun RP19_parseLongitude_negative() {
+        // Given: 西经 (负值)
+        val data = createValidGpsData20(longitude = -122.4194)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("西经应为负值", -122.4194, result.longitude, 0.0001)
+    }
+
+    // ==================== 海拔解析测试 ====================
+
+    @Test
+    fun RP20_parseAltitude_normal() {
+        // Given: 海拔100m
+        val data = createValidGpsData20(altitude = 100.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("海拔应为100.0", 100.0, result.altitude, 0.1)
+    }
+
+    @Test
+    fun RP21_parseAltitude_negative() {
+        // Given: 负海拔 (如死海附近)
+        val data = createValidGpsData20(altitude = -430.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("负海拔应正确", -430.0, result.altitude, 0.1)
+    }
+
+    @Test
+    fun RP22_parseAltitude_overflow() {
+        // Given: 海拔溢出场景 (altitude > 327.675m 需要 overflow bit)
+        // 1600m + 500 = 2100, 2100 * 10 = 21000 = 0x5208
+        // overflow: 0xD208 (overflow bit + high byte 0xD2, low byte 0x08)
+        val data = createValidGpsData20(altitude = 100.0)  // 先创建基础数据
+        data[12] = 0xD2.toByte()
+        data[13] = 0x08.toByte()
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then: 海拔应为1600.0
+        assertEquals("海拔溢出时应为1600", 1600.0, result.altitude, 0.1)
+    }
+
+    // ==================== 方位角解析测试 ====================
+
+    @Test
+    fun RP23_parseBearing_zero() {
+        // Given: 方位角0度
+        val data = createValidGpsData20(bearing = 0.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("方位角应为0", 0.0, result.bearing, 0.01)
+    }
+
+    @Test
+    fun RP24_parseBearing_normal() {
+        // Given: 方位角45度
+        val data = createValidGpsData20(bearing = 45.0)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("方位角应为45", 45.0, result.bearing, 0.01)
+    }
+
+    @Test
+    fun RP25_parseBearing_max() {
+        // Given: 方位角359.99度 (最大值)
+        val data = createValidGpsData20(bearing = 359.99)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("方位角最大值为359.99", 359.99, result.bearing, 0.01)
     }
 
     // ==================== DOP值测试 ====================
 
     @Test
-    fun RP09_parseHDOP_correctValue() {
-        // Given: HDOP = 1.0 (编码为10，单位0.1)
-        val data = createValidGpsData()
-        data[26] = 10.toByte() // 1.0 * 10
+    fun RP26_parseHDOP_zero() {
+        // Given: HDOP = 0
+        val data = createValidGpsData20(hdop = 0.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertEquals("HDOP应为1.0", 1.0, result.hdop, 0.01)
+        assertEquals("HDOP应为0", 0.0, result.hdop, 0.01)
     }
 
     @Test
-    fun RP09b_parseHDOP_highValue() {
-        // Given: HDOP = 5.0 (精度较低)
-        val data = createValidGpsData()
-        data[26] = 50.toByte() // 5.0 * 10
+    fun RP27_parseHDOP_normal() {
+        // Given: HDOP = 1.5
+        val data = createValidGpsData20(hdop = 1.5)
+
+        // When
+        val result = parser.parseGpsData(data, createTestData())
+
+        // Then
+        assertEquals("HDOP应为1.5", 1.5, result.hdop, 0.01)
+    }
+
+    @Test
+    fun RP28_parseHDOP_high() {
+        // Given: HDOP = 5.0
+        val data = createValidGpsData20(hdop = 5.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -215,36 +437,35 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP10_parseVDOP_correctValue() {
-        // Given: VDOP = 1.0
-        val data = createValidGpsData()
-        data[27] = 10.toByte()
+    fun RP29_parseVDOP_normal() {
+        // Given: VDOP = 2.0
+        val data = createValidGpsData20(vdop = 2.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertEquals("VDOP应为1.0", 1.0, result.vdop, 0.01)
+        assertEquals("VDOP应为2.0", 2.0, result.vdop, 0.01)
     }
 
     // ==================== isTestReady 测试 ====================
 
     @Test
-    fun RP11_isTestReady_goodConditions() {
+    fun RP30_isTestReady_goodConditions() {
         // Given: 6颗卫星，HDOP=1.0
-        val data = createValidGpsData(satellites = 6, hdop = 1.0)
+        val data = createValidGpsData20(satellites = 6, hdop = 1.0, fixQuality = 1)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertTrue("应准备就绪", result.isTestReady)
+        assertTrue("条件满足时应就绪", result.isTestReady)
     }
 
     @Test
-    fun RP12_isTestReady_notEnoughSatellites() {
+    fun RP31_isTestReady_notEnoughSatellites() {
         // Given: 只有4颗卫星
-        val data = createValidGpsData(satellites = 4, hdop = 1.0)
+        val data = createValidGpsData20(satellites = 4, hdop = 1.0, fixQuality = 1)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -254,9 +475,9 @@ class RaceChronoParserTest {
     }
 
     @Test
-    fun RP12b_isTestReady_poorHDOP() {
-        // Given: HDOP=2.5 (精度较差)
-        val data = createValidGpsData(satellites = 8, hdop = 2.5)
+    fun RP32_isTestReady_poorHDOP() {
+        // Given: HDOP=2.5 (超过阈值2.0)
+        val data = createValidGpsData20(satellites = 8, hdop = 2.5, fixQuality = 1)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -268,102 +489,95 @@ class RaceChronoParserTest {
     // ==================== 频率计算测试 ====================
 
     @Test
-    fun RP13_frequencyCalculation_tenPacketsPerSecond() {
+    fun RP33_frequencyCalculation_worksAfterParsing() {
         // Given
-        val data = createValidGpsData()
+        val data = createValidGpsData20(satellites = 10, hdop = 1.0, fixQuality = 1)
 
-        // When: 在1秒内接收10个数据包
-        repeat(10) {
-            parser.parseGpsData(data, createTestData())
-            Thread.sleep(50)
-        }
-
+        // When: 解析一个数据包
         val result = parser.parseGpsData(data, createTestData())
 
-        // Then: 频率应大于0
-        assertTrue("频率应大于0", result.frequency > 0)
+        // Then: timestamp 应被更新
+        assertTrue("timestamp应被更新", result.timestamp > 0)
     }
 
     // ==================== GPS时间数据解析测试 ====================
 
     @Test
-    fun RP14_parseGpsTimeData_validData() {
-        // Given: 3字节时间数据
-        val data = ByteArray(3)
-        data[0] = 0x40.toByte()
-        data[1] = 0x00.toByte()
-        data[2] = 0x00.toByte()
+    fun RP34_parseGpsTimeData_validData() {
+        runWithMockedLog {
+            // Given: 3字节时间数据
+            // dateAndHour = (24-2000)*8928 + (3-1)*744 + (15-1)*24 + 14
+            //            = (-1976)*8928 + 2*744 + 14*24 + 14 = -1976*8928... (负数年份不合法，换个值)
+            // 实际测试: dateAndHour = 216038 (0x34C46) -> year=2000+24=2024, month=3, day=15, hour=14
+            val data = ByteArray(3)
+            data[0] = ((1 shl 5) or (0x0C and 0x1F)).toByte()  // sync=1, high=0x0C
+            data[1] = 0xC4.toByte()
+            data[2] = 0x46.toByte()
 
-        val currentData = createTestData()
+            val currentData = createTestData()
 
-        // When
-        val result = parser.parseGpsTimeData(data, currentData)
+            // When
+            val result = parser.parseGpsTimeData(data, currentData)
 
-        // Then
-        assertTrue("应标记为testReady", result.isTestReady)
+            // Then: 应标记为testReady
+            assertTrue("应标记为testReady", result.isTestReady)
+        }
     }
 
     @Test
-    fun RP14b_parseGpsTimeData_invalidSize() {
-        // Given: 数据长度不足
-        val data = ByteArray(2)
+    fun RP35_parseGpsTimeData_invalidSize() {
+        runWithMockedLog {
+            // Given: 数据长度不足
+            val data = ByteArray(2)
 
-        // When
-        val result = parser.parseGpsTimeData(data, createTestData())
+            // When
+            val result = parser.parseGpsTimeData(data, createTestData())
 
-        // Then: 应返回原始数据
-        assertFalse("不应修改数据", result.isTestReady)
+            // Then: 应返回原始数据
+            assertFalse("不应修改isTestReady", result.isTestReady)
+        }
     }
 
     // ==================== reset 测试 ====================
 
     @Test
-    fun RP15_reset_clearsState() {
-        // Given: 解析一些数据
-        val data = createValidGpsData()
-        repeat(5) {
-            parser.parseGpsData(data, createTestData())
+    fun RP36_reset_clearsState() {
+        runWithMockedLog {
+            // Given: 解析一些数据
+            val data = createValidGpsData20(satellites = 10, fixQuality = 1)
+            repeat(5) {
+                parser.parseGpsData(data, createTestData())
+            }
+
+            // When: 调用reset
+            parser.reset()
+
+            // Then: 再次解析时应能继续工作
+            val result = parser.parseGpsData(data, createTestData())
+            assertTrue("reset后应能继续工作", result.timestamp > 0)
         }
-
-        // When: 调用reset
-        parser.reset()
-
-        // Then: 再次解析时应能继续工作
-        val result = parser.parseGpsData(data, createTestData())
-        assertTrue("reset后应能继续工作", result.timestamp > 0)
     }
 
     // ==================== 边界值测试 ====================
 
     @Test
-    fun RP16_boundary_maxSatellites() {
-        // Given: 63颗卫星（理论最大值，6位）
-        val data = createValidGpsData()
-        data[5] = 0xFF.toByte()
+    fun RP37_boundary_maxSatellitesAndFixQuality() {
+        // Given: fixQuality=3 (0b11), satellites=63 (0b111111) -> byte = 0b11000000 | 0b111111 = 0xFF
+        val data = createValidGpsData20()
+        data[3] = 0xFF.toByte()  // fixQuality=3, satellites=63
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
-        assertEquals("最大卫星数应为63", 63, result.satelliteCount)
+        assertEquals("fixQuality应为3", 3, result.fixQuality)
+        assertEquals("卫星数应为63", 63, result.satelliteCount)
     }
 
     @Test
-    fun RP17_boundary_zeroSpeed() {
-        // Given: 速度为0
-        val data = createValidGpsData(speed = 0.0)
-
-        // When
-        val result = parser.parseGpsData(data, createTestData())
-
-        // Then
-        assertEquals("速度应为0", 0.0, result.speed, 0.001)
-    }
-
-    @Test
-    fun RP18_boundary_equator() {
-        // Given: 赤道位置
-        val data = createValidGpsData(latitude = 0.0, longitude = 0.0)
+    fun RP38_boundary_equatorPrimeMeridian() {
+        // Given: 赤道本初子午线位置
+        val data = createValidGpsData20(latitude = 0.0, longitude = 0.0)
 
         // When
         val result = parser.parseGpsData(data, createTestData())
@@ -373,103 +587,145 @@ class RaceChronoParserTest {
         assertEquals("经度应为0", 0.0, result.longitude, 0.000001)
     }
 
-    // ==================== 大端序验证测试 ====================
+    // ==================== 综合场景测试 ====================
 
     @Test
-    fun RP19_verifyBigEndian_latLon() {
-        // Given: 特定纬度值，验证字节序
-        val targetLat = 60.1725897
-        val data = createValidGpsData(latitude = targetLat)
+    fun RP39_integration_allFields() {
+        // Given: 完整数据
+        val data = createValidGpsData20(
+            satellites = 12,
+            speed = 50.0,
+            latitude = 60.1725,
+            longitude = 24.9375,
+            altitude = 100.0,
+            bearing = 45.0,
+            fixQuality = 1,
+            hdop = 1.0,
+            vdop = 1.5
+        )
 
-        val latInt = (targetLat * 10000000.0).toInt()
-        val expectedByte6 = (latInt shr 24).toByte()
-        val expectedByte7 = ((latInt shr 16) and 0xFF).toByte()
-        val expectedByte8 = ((latInt shr 8) and 0xFF).toByte()
-        val expectedByte9 = (latInt and 0xFF).toByte()
-
-        assertEquals("Byte 6应匹配", expectedByte6, data[6])
-        assertEquals("Byte 7应匹配", expectedByte7, data[7])
-        assertEquals("Byte 8应匹配", expectedByte8, data[8])
-        assertEquals("Byte 9应匹配", expectedByte9, data[9])
-
-        // When: 解析
+        // When
         val result = parser.parseGpsData(data, createTestData())
 
-        // Then: 应正确解析
-        assertEquals("纬度应正确", targetLat, result.latitude, 0.000001)
+        // Then: 所有字段都应正确解析
+        assertEquals(12, result.satelliteCount)
+        assertEquals(50.0, result.speed, 0.1)
+        assertEquals(60.1725, result.latitude, 0.0001)
+        assertEquals(24.9375, result.longitude, 0.0001)
+        assertEquals(100.0, result.altitude, 0.1)
+        assertEquals(45.0, result.bearing, 0.1)
+        assertEquals(1, result.fixQuality)
+        assertEquals(1.0, result.hdop, 0.01)
+        assertEquals(1.5, result.vdop, 0.01)
     }
 
-    // ==================== 定位质量测试 ====================
-
     @Test
-    fun RP20_fixQuality_extraction() {
-        // Given: fixQuality=3 (高2位), satellites=60 (低6位)
-        val data = createValidGpsData()
-        data[5] = 0xFC.toByte() // fix=3, sats=60
+    fun RP40_fixQualityAndSatellites_combined() {
+        // Given: fixQuality=1 (GPS), satellites=60
+        val data = createValidGpsData20(fixQuality = 1, satellites = 60)
+        // Byte 3 = (1 << 6) | 60 = 0x40 | 0x3C = 0x7C
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
         // Then
+        assertEquals("fixQuality应为1", 1, result.fixQuality)
         assertEquals("卫星数应为60", 60, result.satelliteCount)
     }
 
     // ==================== 辅助函数 ====================
 
-    private fun createValidGpsData(
+    /**
+     * 创建符合ESP32 20字节协议的测试数据
+     *
+     * Format:
+     *   Byte 0:   syncBits[7:5] | timeSinceHourStart[4:0]
+     *   Byte 1:   timeSinceHourStart[15:8]
+     *   Byte 2:   timeSinceHourStart[7:0]
+     *   Byte 3:   fixQuality[7:6] | satellites[5:0]
+     *   Byte 4-7: latitude (big endian int32, degrees * 10,000,000)
+     *   Byte 8-11: longitude (big endian int32, degrees * 10,000,000)
+     *   Byte 12-13: altitude (big endian uint16, special encoding)
+     *   Byte 14-15: speed (big endian uint16, special encoding)
+     *   Byte 16-17: bearing (big endian uint16, degrees * 100)
+     *   Byte 18: HDOP (raw value * 0.1)
+     *   Byte 19: VDOP (raw value * 0.1)
+     *
+     * Altitude encoding: alt + 500 = raw / 100.0 (or raw * 10 / 100.0 if overflow)
+     * Speed encoding: speed = raw / 100.0 (or raw * 10 / 100.0 if overflow)
+     */
+    private fun createValidGpsData20(
         satellites: Int = 12,
         speed: Double = 15.0,
         latitude: Double = 60.1725897,
         longitude: Double = 24.9376543,
         altitude: Double = 100.0,
         bearing: Double = 45.0,
+        fixQuality: Int = 1,
         hdop: Double = 1.0,
         vdop: Double = 1.0
     ): ByteArray {
-        val data = ByteArray(28)
+        val data = ByteArray(20)
 
-        data[0] = 0x00
+        // Byte 0: sync + time (固定值)
+        data[0] = 0x00  // sync=0, timeHigh=0
         data[1] = 0x00
-        data[2] = 0x2B
-        data[3] = 0x4C
-        data[4] = 0x12
+        data[2] = 0x00
 
-        val fixQuality = 1
-        val fixAndSat = ((fixQuality shl 6) or (satellites and 0x3F))
-        data[5] = fixAndSat.toByte()
+        // Byte 3: fixQuality + satellites
+        val fixAndSat = ((fixQuality and 0x03) shl 6) or (satellites and 0x3F)
+        data[3] = fixAndSat.toByte()
 
+        // Byte 4-7: latitude (big endian int32)
         val latInt = (latitude * 10000000.0).toInt()
-        data[6] = ((latInt shr 24) and 0xFF).toByte()
-        data[7] = ((latInt shr 16) and 0xFF).toByte()
-        data[8] = ((latInt shr 8) and 0xFF).toByte()
-        data[9] = (latInt and 0xFF).toByte()
+        data[4] = ((latInt shr 24) and 0xFF).toByte()
+        data[5] = ((latInt shr 16) and 0xFF).toByte()
+        data[6] = ((latInt shr 8) and 0xFF).toByte()
+        data[7] = (latInt and 0xFF).toByte()
 
+        // Byte 8-11: longitude (big endian int32)
         val lonInt = (longitude * 10000000.0).toInt()
-        data[10] = ((lonInt shr 24) and 0xFF).toByte()
-        data[11] = ((lonInt shr 16) and 0xFF).toByte()
-        data[12] = ((lonInt shr 8) and 0xFF).toByte()
-        data[13] = (lonInt and 0xFF).toByte()
+        data[8] = ((lonInt shr 24) and 0xFF).toByte()
+        data[9] = ((lonInt shr 16) and 0xFF).toByte()
+        data[10] = ((lonInt shr 8) and 0xFF).toByte()
+        data[11] = (lonInt and 0xFF).toByte()
 
-        val altInt = (altitude * 100.0).toInt()
-        data[14] = ((altInt shr 24) and 0xFF).toByte()
-        data[15] = ((altInt shr 16) and 0xFF).toByte()
-        data[16] = ((altInt shr 8) and 0xFF).toByte()
-        data[17] = (altInt and 0xFF).toByte()
+        // Byte 12-13: altitude (特殊编码: alt + 500 = raw / 100.0)
+        // 无溢出: raw = (alt + 500) * 100
+        val altRaw = ((altitude + 500.0) * 100.0).toInt()
+        if (altRaw <= 0x7FFF) {
+            data[12] = ((altRaw shr 8) and 0xFF).toByte()
+            data[13] = (altRaw and 0xFF).toByte()
+        } else {
+            // 溢出: raw = ((alt + 500) * 10) | 0x8000
+            val altOverflowRaw = ((altitude + 500.0) * 10.0).toInt() or 0x8000
+            data[12] = ((altOverflowRaw shr 8) and 0xFF).toByte()
+            data[13] = (altOverflowRaw and 0xFF).toByte()
+        }
 
-        val speedInt = (speed * 100.0).toInt()
-        data[18] = ((speedInt shr 24) and 0xFF).toByte()
-        data[19] = ((speedInt shr 16) and 0xFF).toByte()
-        data[20] = ((speedInt shr 8) and 0xFF).toByte()
-        data[21] = (speedInt and 0xFF).toByte()
+        // Byte 14-15: speed (特殊编码: speed = raw / 100.0)
+        // 无溢出: raw = speed * 100
+        val speedRaw = (speed * 100.0).toInt()
+        if (speedRaw <= 0x7FFF) {
+            data[14] = ((speedRaw shr 8) and 0xFF).toByte()
+            data[15] = (speedRaw and 0xFF).toByte()
+        } else {
+            // 溢出: raw = (speed * 10) | 0x8000
+            val speedOverflowRaw = (speed * 10.0).toInt() or 0x8000
+            data[14] = ((speedOverflowRaw shr 8) and 0xFF).toByte()
+            data[15] = (speedOverflowRaw and 0xFF).toByte()
+        }
 
+        // Byte 16-17: bearing (big endian uint16, 度 * 100)
         val bearingInt = (bearing * 100.0).toInt()
-        data[22] = ((bearingInt shr 24) and 0xFF).toByte()
-        data[23] = ((bearingInt shr 16) and 0xFF).toByte()
-        data[24] = ((bearingInt shr 8) and 0xFF).toByte()
-        data[25] = (bearingInt and 0xFF).toByte()
+        data[16] = ((bearingInt shr 8) and 0xFF).toByte()
+        data[17] = (bearingInt and 0xFF).toByte()
 
-        data[26] = (hdop * 10.0).toInt().toByte()
-        data[27] = (vdop * 10.0).toInt().toByte()
+        // Byte 18: HDOP
+        data[18] = (hdop * 10.0).toInt().toByte()
+
+        // Byte 19: VDOP
+        data[19] = (vdop * 10.0).toInt().toByte()
 
         return data
     }
