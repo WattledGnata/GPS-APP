@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.race.gps.simulator"
+    namespace = "com.blazepush.simulator"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.race.gps.simulator"
+        applicationId = "com.blazepush.simulator"
         minSdk = 21
         targetSdk = 34
         versionCode = 1

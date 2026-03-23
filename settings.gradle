@@ -25,5 +25,15 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "GPSTestApp"
+
+// Core modules
+include ':core:domain'
+include ':core:data'
+include ':core:bluetooth'
+
+// Feature modules
+include ':feature:test'
+
+// App modules
 include ':app'
 include ':simulator'

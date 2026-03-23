@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Theme.GPSTestApp" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+    <style name="Theme.BlazePush" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <!-- Status bar color. -->
         <item name="android:statusBarColor">@color/purple_700</item>
         <!-- Customize your theme here. -->

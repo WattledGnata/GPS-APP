@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">GPSTestApp</string>
+    <string name="app_name">BlazePush</string>
     <string name="unknown_device">Unknown Device</string>
 </resources>
