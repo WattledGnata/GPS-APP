@@ -1,5 +1,7 @@
 package com.blazepush.core.domain.model
 
+import com.blazepush.core.domain.CoordTransform
+
 /**
  * GPS数据模型
  * 统一的GPS数据结构，替代原有的BluetoothData
@@ -20,6 +22,15 @@ data class GpsData(
     val errorMessage: String?,   // 错误信息
     val fixQuality: Int = 0      // 0=无效定位, 1=GPS, 2=DGPS
 ) {
+    /**
+     * 将 GPS 坐标 (WGS84) 转换为高德地图坐标 (GCJ-02)
+     * 用于在地图上显示时调用
+     */
+    fun toGcj02(): GpsData {
+        val (lat, lon) = CoordTransform.wgs84ToGcj02(this.latitude, this.longitude)
+        return this.copy(latitude = lat, longitude = lon)
+    }
+
     companion object {
         val Empty = GpsData(
             timestamp = 0L,

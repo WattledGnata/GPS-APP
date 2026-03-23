@@ -4,7 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.blazepush.core.domain.model.TestTemplate
-import com.blazepush.feature.test.ui.screen.*
+import com.blazepush.feature.test.ui.screen.DeviceConnectionScreen
+import com.blazepush.feature.test.ui.screen.TestExecutionScreen
+import com.blazepush.feature.test.ui.screen.TestHistoryScreen
+import com.blazepush.feature.test.ui.screen.TestResultScreen
+import com.blazepush.feature.test.ui.screen.TestSelectionScreen
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
 
