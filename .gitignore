@@ -23,3 +23,9 @@ local.properties
 *.dex
 *.jar
 *.odex
+
+# 签名文件
+*.jks
+*.keystore
+keystore.properties
+.worktrees/

@@ -5,6 +5,11 @@ plugins {
     id 'kotlin-parcelize'
 }
 
+// 加载 keystore 配置
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+
 android {
     namespace 'com.blazepush'
     compileSdk 34
@@ -21,10 +26,10 @@ android {
 
     signingConfigs {
         release {
-            storeFile file(RELEASE_STORE_FILE)
-            storePassword RELEASE_STORE_PASSWORD
-            keyAlias RELEASE_KEY_ALIAS
-            keyPassword RELEASE_KEY_PASSWORD
+            storeFile file(keystoreProperties['storeFile'])
+            storePassword keystoreProperties['storePassword']
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
         }
     }
 
@@ -47,6 +52,13 @@ android {
     }
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.0'
+    }
+}
+
+android.applicationVariants.all { variant ->
+    variant.outputs.all { output ->
+        def version = variant.versionName ?: android.defaultConfig.versionName
+        outputFileName = "BlazePush_v${version}_${variant.buildType.name}.apk"
     }
 }
 
