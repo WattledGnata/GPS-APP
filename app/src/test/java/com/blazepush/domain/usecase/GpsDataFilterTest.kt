@@ -645,6 +645,53 @@ class GpsDataFilterTest {
         )
     }
 
+    /**
+     * GF16b: 2.0G 到 2.5G 之间的加速不应再被判为异常
+     *
+     * 场景：需求将加速度上限从 1.5G 提升到 2.5G 后，
+     * 中高强度加速样本应通过物理约束检查。
+     */
+    @Test
+    fun GF16b_accelerationBetween2GAnd2_5G_shouldPass() {
+        // Given: 40ms 内提升 1.0 km/h，约 6.94 m/s² ≈ 0.71G（首个有效点）
+        // 连续两步共提升 2.0 km/h，可覆盖高于旧阈值、低于新阈值的场景
+        val baseTimestamp = System.currentTimeMillis()
+        val data = listOf(
+            createGpsData(timestamp = baseTimestamp, speed = 0.0),
+            createGpsData(timestamp = baseTimestamp + 40L, speed = 3.0),
+            createGpsData(timestamp = baseTimestamp + 80L, speed = 6.0)
+        )
+
+        // When
+        val results = data.map { filter.process(it) }
+
+        // Then: 3 km/h / 40ms = 20.83 m/s² ≈ 2.12G，应在新阈值内
+        assertFalse("2.12G 加速不应判为异常", results[1].isAnomaly)
+        assertFalse("连续 2.12G 加速不应判为异常", results[2].isAnomaly)
+    }
+
+    /**
+     * GF16c: 2.0G 到 3.0G 之间的减速不应再被判为异常
+     *
+     * 场景：需求将减速度上限从 2.0G 提升到 3.0G 后，
+     * 更强的制动样本应通过物理约束检查。
+     */
+    @Test
+    fun GF16c_decelerationBetween2GAnd3G_shouldPass() {
+        val baseTimestamp = System.currentTimeMillis()
+        val data = listOf(
+            createGpsData(timestamp = baseTimestamp, speed = 60.0),
+            createGpsData(timestamp = baseTimestamp + 40L, speed = 56.0),
+            createGpsData(timestamp = baseTimestamp + 80L, speed = 52.0)
+        )
+
+        // 4 km/h / 40ms = 27.78 m/s² ≈ 2.83G，应在新阈值内
+        val results = data.map { filter.process(it) }
+
+        assertFalse("2.83G 减速不应判为异常", results[1].isAnomaly)
+        assertFalse("连续 2.83G 减速不应判为异常", results[2].isAnomaly)
+    }
+
     // ==================== 位置-速度一致性检验测试 ====================
 
     /**

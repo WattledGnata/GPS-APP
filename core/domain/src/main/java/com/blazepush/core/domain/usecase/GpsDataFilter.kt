@@ -11,8 +11,8 @@ import kotlin.math.abs
  */
 class GpsDataFilter(
     private val windowSize: Int = 9,
-    private val maxAcceleration: Double = 15.0,  // 1.5G ≈ 15 m/s²
-    private val maxDeceleration: Double = 20.0   // 2.0G ≈ 20 m/s²
+    private val maxAcceleration: Double = 25.0,  // 2.5G ≈ 25 m/s²
+    private val maxDeceleration: Double = 30.0   // 3.0G ≈ 30 m/s²
 ) {
     // 滚动窗口：存储最近的原始速度用于中位数滤波
     private val speedWindow = mutableListOf<Double>()
@@ -138,8 +138,8 @@ class GpsDataFilter(
         val speedDelta = abs(current.speed - prev.speed)
 
         // 计算允许的最大速度变化 (km/h)
-        // 加速度上限 1.5G = 15 m/s² → 54 km/h/s
-        // 减速度上限 2.0G = 20 m/s² → 72 km/h/s
+        // 加速度上限 2.5G = 25 m/s² → 90 km/h/s
+        // 减速度上限 3.0G = 30 m/s² → 108 km/h/s
         val isAccelerating = current.speed > prev.speed
         val maxDeltaPerSecond = if (isAccelerating) {
             maxAcceleration * 3.6 // m/s² → km/h/s

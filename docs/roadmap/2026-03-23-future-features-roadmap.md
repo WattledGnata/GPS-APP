@@ -161,17 +161,17 @@
 ## 六、后续行动项
 
 ### 加速度阈值调整（P0）
-- [ ] 修改 `GpsDataFilter.kt` 中的阈值常量
-- [ ] 加速度上限: 1.5G → 2.5G
-- [ ] 刹车上限: 2.0G → 3.0G
+- [x] 修改 `GpsDataFilter.kt` 中的阈值常量
+- [x] 加速度上限: 1.5G → 2.5G
+- [x] 刹车上限: 2.0G → 3.0G
 - [ ] 添加设置页面让用户选择模式
-- [ ] 更新相关单元测试
+- [x] 更新相关单元测试
 
 ### 语音播报（P1）
-- [ ] 创建 VoiceAnnouncer 服务类
-- [ ] 集成 Android TTS API
+- [x] 创建 VoiceAnnouncer 服务类
+- [x] 集成 Android TTS API
 - [ ] 在 TestSessionViewModel 中添加播报触发点
-- [ ] 添加设置选项（开启/关闭语音）
+- [x] 添加设置选项（开启/关闭语音）
 
 ### 视频拍摄+叠加（P2）
 - [ ] 技术预研：CameraX + OpenGL 方案验证
