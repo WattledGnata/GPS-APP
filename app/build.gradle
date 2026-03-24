@@ -22,6 +22,9 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // 高德地图 Key
+        manifestPlaceholders = [AMAP_KEY: "21ba943c045c810f57717c0ed7ea057d"]
     }
 
     signingConfigs {
@@ -91,6 +94,9 @@ dependencies {
     // Koin
     implementation libs.koin.android
     implementation libs.koin.androidx.compose
+
+    // 高德地图（本地依赖）
+    implementation files('libs/AMap3DMap_11.1.000_AMapSearch_9.7.4_AMapLocation_11.1.000_20260306.jar')
 
     // Testing
     testImplementation libs.junit

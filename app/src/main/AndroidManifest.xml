@@ -15,7 +15,12 @@
     <!-- 位置权限 (BLE扫描需要) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    
+
+    <!-- 高德地图权限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
 
     <uses-feature
@@ -33,6 +38,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.BlazePush"
         tools:targetApi="31">
+
+        <!-- 高德地图 Key -->
+        <meta-data
+            android:name="com.amap.api.v2.apikey"
+            android:value="21ba943c045c810f57717c0ed7ea057d" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

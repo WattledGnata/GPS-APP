@@ -21,7 +21,6 @@ local.properties
 *.aab
 *.class
 *.dex
-*.jar
 *.odex
 
 # 签名文件

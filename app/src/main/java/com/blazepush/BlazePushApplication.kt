@@ -1,6 +1,7 @@
 package com.blazepush
 
 import android.app.Application
+import com.amap.api.maps.MapsInitializer
 import com.blazepush.feature.test.di.bluetoothModule
 import com.blazepush.feature.test.di.databaseModule
 import com.blazepush.feature.test.di.domainModule
@@ -20,6 +21,10 @@ class BlazePushApplication : Application() {
 
         // 初始化文件日志
         FileLogger.init(this)
+
+        // 高德地图隐私合规设置（必须在任何 SDK 调用前设置）
+        MapsInitializer.updatePrivacyShow(this, true, true)
+        MapsInitializer.updatePrivacyAgree(this, true)
 
         startKoin {
             androidLogger(Level.ERROR)

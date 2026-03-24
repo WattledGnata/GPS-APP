@@ -77,6 +77,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
 
+    // 高德地图 SDK
+    implementation(files("../../app/libs/AMap3DMap_11.1.000_AMapSearch_9.7.4_AMapLocation_11.1.000_20260306.jar"))
+
     // Testing
     testImplementation(libs.junit)
     testImplementation("org.mockito:mockito-core:5.2.0")
