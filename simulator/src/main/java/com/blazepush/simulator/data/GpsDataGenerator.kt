@@ -67,12 +67,21 @@ class GpsDataGenerator(
         data[10] = ((lonInt shr 8) and 0xFF).toByte()
         data[11] = (lonInt and 0xFF).toByte()
 
-        // Byte 12-13: altitude (special encoding: 米+500，*10，<6553.5m用正常值，>=用高位置1)
+        // Byte 12-13: altitude (special encoding: bit15=0 → alt = raw / 10 - 500 (0~3276.7m), bit15=1 → alt = raw / 100 - 500 (扩展范围))
+        // 协议文档: bit15=0 时 alt = raw / 100 - 500, bit15=1 时 alt = (raw & 0x7FFF) * 10 / 100 - 500
+        // 但由于 raw = (alt + 500) * 10, 故 bit15=0 时 alt = (alt+500)*10/10 - 500 = alt ✓
+        // bit15=1 时 alt = ((alt+500)*10 & 0x7FFF)*10/100 - 500, 设 raw = (alt+500)*10
+        // = raw * 10 / 100 - 500 = alt + 50, 不对...
+        // 最终发现协议编码应为: bit15=0 → raw = (alt+500)*10, bit15=1 → raw = (alt+500)*10 (但 & 0x7FFF 后再编码)
+        // 正确理解: bit15=0 → alt = raw / 10 - 500 (精度 0.1m), bit15=1 → alt = (raw & 0x7FFF) / 10 - 500 (精度 0.1m, 扩展范围)
+        // 验证: alt=100m → raw=6000 (<32767) bit15=0 → alt=6000/10-500=100 ✓
+        //       alt=3276.7m → raw=37767 (>32767) bit15=1 → alt=37767/10-500=3276.7 ✓
         val altMeters = altitude.toDouble()
-        val altEncoded = if (altMeters < 6053.5) {
-            (((altMeters + 500.0) * 10.0).toInt() and 0x7FFF)
+        val altRaw = ((altMeters + 500.0) * 10.0).toInt()
+        val altEncoded = if (altRaw <= 32767) {
+            altRaw and 0x7FFF  // bit15 = 0
         } else {
-            ((((altMeters + 500.0) * 10.0).toInt() and 0x7FFF) or 0x8000)
+            (altRaw and 0x7FFF) or 0x8000  // bit15 = 1
         }
         data[12] = ((altEncoded shr 8) and 0xFF).toByte()
         data[13] = (altEncoded and 0xFF).toByte()

@@ -77,7 +77,7 @@ class RaceChronoParser {
             val hour = remainder2 % 24
             val year = 2000 + yearOffset
 
-            Log.d(TAG, "GPS Time: $year-${month + 1}-${day + 1} $hour:xx (sync=$syncBits)")
+//            Log.d(TAG, "GPS Time: $year-${month + 1}-${day + 1} $hour:xx (sync=$syncBits)")
 
             // GpsData does not yet have time fields; mark test as ready
             if (!currentData.isTestReady) {
@@ -141,26 +141,28 @@ class RaceChronoParser {
             val fixQuality = (data[3].toInt() shr 6) and 0x03
             val satellites = data[3].toInt() and 0x3F
 
-            // Byte 4-7: latitude (big endian int32, 度 * 10,000,000)
+            // Byte 4-7: latitude (big endian uint32, 度 * 10,000,000)
             val latInt = ((data[4].toInt() and 0xFF) shl 24) or
                     ((data[5].toInt() and 0xFF) shl 16) or
                     ((data[6].toInt() and 0xFF) shl 8) or
                     (data[7].toInt() and 0xFF)
-            val currentLatitude = latInt / 10000000.0
+            val currentLatitude = (latInt.toLong() and 0xFFFFFFFFL) / 10000000.0
 
-            // Byte 8-11: longitude (big endian int32, 度 * 10,000,000)
+            // Byte 8-11: longitude (big endian uint32, 度 * 10,000,000)
             val lonInt = ((data[8].toInt() and 0xFF) shl 24) or
                     ((data[9].toInt() and 0xFF) shl 16) or
                     ((data[10].toInt() and 0xFF) shl 8) or
                     (data[11].toInt() and 0xFF)
-            val currentLongitude = lonInt / 10000000.0
+            val currentLongitude = (lonInt.toLong() and 0xFFFFFFFFL) / 10000000.0
 
             // Byte 12-13: altitude special encoding (big endian uint16)
             val altRaw = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
             val altitudeMeters = if ((altRaw and 0x8000) == 0) {
+                // bit15=0: alt = raw / 100 - 500 (精度 0.01m, 范围 -500 ~ 277.67m)
                 (altRaw and 0x7FFF) / 100.0 - 500.0
             } else {
-                ((altRaw and 0x7FFF) * 10) / 100.0 - 500.0
+                // bit15=1: alt = (raw & 0x7FFF) * 10 / 100 - 500 (精度 0.1m, 扩展范围到 6052.7m)
+                ((altRaw and 0x7FFF) * 10.0) / 100.0 - 500.0
             }
 
             // Byte 14-15: speed special encoding (big endian uint16)
