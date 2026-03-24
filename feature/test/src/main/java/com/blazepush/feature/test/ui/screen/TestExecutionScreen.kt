@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.utils.VoiceAnnouncer
+import org.koin.compose.koinInject
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -32,10 +34,27 @@ fun TestExecutionScreen(
     val launchStatus by testSessionViewModel.launchStatus.collectAsState()
     val countdownSeconds by testSessionViewModel.countdownSeconds.collectAsState()
 
-    // 测试完成时跳转
+    // 语音播报
+    val voiceAnnouncer: VoiceAnnouncer = koinInject()
+
+    // 初始化 TTS
+    LaunchedEffect(Unit) {
+        voiceAnnouncer.init()
+    }
+
+    // 测试完成时跳转 + 语音播报
     LaunchedEffect(testState) {
         if (testState is TestState.Completed) {
             val result = (testState as TestState.Completed).result
+            // 语音播报成绩
+            when (result.template) {
+                is TestTemplate.Acceleration0To100 -> {
+                    voiceAnnouncer.announceAccelerationResult(result.totalTime)
+                }
+                is TestTemplate.Braking100To0 -> {
+                    voiceAnnouncer.announceBrakingResult(result.totalTime)
+                }
+            }
             onTestCompleted(result.id)
         }
     }

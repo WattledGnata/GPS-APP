@@ -16,6 +16,7 @@ import com.blazepush.core.domain.usecase.DataInterpolator
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import com.blazepush.core.domain.usecase.DataSmoothing
 import com.blazepush.core.domain.usecase.SmartTestLauncher
+import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestHistoryViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
@@ -83,4 +84,11 @@ val viewModelModule = module {
     single { GpsDataViewModel(get(), get(), get(), get()) }
     viewModel { TestSessionViewModel(get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
+}
+
+/**
+ * 工具模块
+ */
+val utilsModule = module {
+    single { VoiceAnnouncer(androidContext()) }
 }

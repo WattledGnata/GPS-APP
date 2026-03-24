@@ -5,6 +5,7 @@ import com.blazepush.feature.test.di.bluetoothModule
 import com.blazepush.feature.test.di.databaseModule
 import com.blazepush.feature.test.di.domainModule
 import com.blazepush.feature.test.di.repositoryModule
+import com.blazepush.feature.test.di.utilsModule
 import com.blazepush.feature.test.di.viewModelModule
 import com.blazepush.feature.test.FileLogger
 import org.koin.android.ext.koin.androidContext
@@ -28,7 +29,8 @@ class BlazePushApplication : Application() {
                 bluetoothModule,
                 repositoryModule,
                 domainModule,
-                viewModelModule
+                viewModelModule,
+                utilsModule
             )
         }
     }
