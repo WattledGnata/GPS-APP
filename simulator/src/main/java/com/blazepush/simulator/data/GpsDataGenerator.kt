@@ -1,5 +1,6 @@
 package com.blazepush.simulator.data
 
+import com.blazepush.simulator.data.replay.ReplaySample
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -196,6 +197,17 @@ class GpsDataGenerator(
     fun setCurrentPosition(lat: Double, lon: Double) {
         currentLatitude = lat
         currentLongitude = lon
+    }
+
+    fun applyReplaySample(sample: ReplaySample) {
+        currentLatitude = sample.latitude
+        currentLongitude = sample.longitude
+        currentSpeed = sample.speedKmh.toFloat()
+        bearing = sample.bearingDegrees.toFloat()
+        satellites = sample.satellites
+        altitude = sample.altitudeMeters.toFloat()
+        hdop = sample.hdop.toFloat()
+        vdop = sample.altitudePrecisionMeters.toFloat().coerceAtLeast(0f)
     }
 
     /**

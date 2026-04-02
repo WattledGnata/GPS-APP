@@ -15,6 +15,9 @@ import com.blazepush.simulator.data.GpsDataGenerator
 import com.blazepush.simulator.data.SpeedController
 import com.blazepush.simulator.data.SpeedMode
 import com.blazepush.simulator.data.TestScenario
+import com.blazepush.simulator.data.replay.ReplayAssetLoader
+import com.blazepush.simulator.data.replay.ReplayPlaybackPlanner
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,7 +57,11 @@ class SimulatorViewModel : ViewModel() {
 
     private var peripheralManager: GpsPeripheralManager? = null
     private var dataGenerator: GpsDataGenerator? = null
+    private var replayJob: Job? = null
+    private var appContext: Context? = null
     private val speedController = SpeedController()
+    private val replayAssetLoader = ReplayAssetLoader()
+    private val replayPlaybackPlanner = ReplayPlaybackPlanner()
 
     // 物理轨迹计算：记录起点和累计位移
     private var baseLatitude = 60.1725
@@ -110,6 +117,7 @@ class SimulatorViewModel : ViewModel() {
      * 开始广播
      */
     fun startAdvertising(context: Context) {
+        appContext = context.applicationContext
         if (peripheralManager == null) {
             peripheralManager = GpsPeripheralManager(context.applicationContext)
         }
@@ -162,6 +170,8 @@ class SimulatorViewModel : ViewModel() {
      * 停止广播
      */
     fun stopAdvertising() {
+        replayJob?.cancel()
+        replayJob = null
         peripheralManager?.stopAdvertising()
         _uiState.value = _uiState.value.copy(
             isAdvertising = false,
@@ -181,6 +191,14 @@ class SimulatorViewModel : ViewModel() {
      * 开始数据更新
      */
     private fun startDataUpdate() {
+        replayJob?.cancel()
+        replayJob = null
+
+        if (_uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) {
+            startReplayDataUpdate()
+            return
+        }
+
         viewModelScope.launch {
             val generator = dataGenerator ?: return@launch
             val manager = peripheralManager ?: return@launch
@@ -190,7 +208,6 @@ class SimulatorViewModel : ViewModel() {
                 val currentSpeed = updateSpeed(now)
                 generator.setCurrentSpeed(currentSpeed)
 
-                // 基于时间积分计算位移（物理真实轨迹）
                 val (currentLat, currentLon) = updatePosition(currentSpeed, now)
                 generator.setCurrentPosition(currentLat, currentLon)
 
@@ -205,16 +222,42 @@ class SimulatorViewModel : ViewModel() {
         }
     }
 
+    private fun startReplayDataUpdate() {
+        replayJob = viewModelScope.launch {
+            val context = appContext ?: return@launch
+            val generator = dataGenerator ?: return@launch
+            val manager = peripheralManager ?: return@launch
+            val replayJson = context.assets.open("replay/tianfu_track_replay_5hz.json").bufferedReader().use { it.readText() }
+            val replay = replayAssetLoader.loadReplayJson(replayJson)
+            val frames = replayPlaybackPlanner.plan(replay.samples)
+
+            for (frame in frames) {
+                if (frame.delayMillis > 0) delay(frame.delayMillis)
+                generator.applyReplaySample(frame.sample)
+                val mainData = generator.generateGpsMainData()
+                val timeData = generator.generateGpsTimeData()
+                manager.updateGpsData(mainData, timeData)
+                _uiState.value = _uiState.value.copy(
+                    currentSpeed = frame.sample.speedKmh.toFloat(),
+                    currentLatitude = frame.sample.latitude,
+                    currentLongitude = frame.sample.longitude,
+                    satellites = frame.sample.satellites,
+                    frequency = 5
+                )
+            }
+        }
+    }
+
     /**
      * 设置测试场景
      */
     fun setScenario(scenario: TestScenario) {
-        _uiState.value = _uiState.value.copy(currentScenario = scenario)
-        dataGenerator?.let { generator ->
-            // 重新创建生成器以应用新场景
+        val frequency = if (scenario == TestScenario.REAL_TRACK_REPLAY) 5 else _uiState.value.frequency
+        _uiState.value = _uiState.value.copy(currentScenario = scenario, frequency = frequency)
+        dataGenerator?.let {
             dataGenerator = GpsDataGenerator(
                 scenario = scenario,
-                frequency = _uiState.value.frequency,
+                frequency = frequency,
                 initialSpeed = _uiState.value.initialSpeed,
                 satellites = _uiState.value.satellites
             )
@@ -225,6 +268,7 @@ class SimulatorViewModel : ViewModel() {
      * 设置频率
      */
     fun setFrequency(hz: Int) {
+        if (_uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) return
         _uiState.value = _uiState.value.copy(frequency = hz)
         dataGenerator?.setFrequency(hz)
     }

@@ -18,10 +18,13 @@ class GateCrossingDetector {
         current: GpsSample,
         gate: TimingGate
     ): GateCrossingDetection {
-        val gateLatitude = gate.line.start.latitude
+        val previousSide = signedSide(previous.latitude, previous.longitude, gate)
+        val currentSide = signedSide(current.latitude, current.longitude, gate)
         val crossedGateLine =
-            (previous.latitude <= gateLatitude && current.latitude >= gateLatitude) ||
-                (previous.latitude >= gateLatitude && current.latitude <= gateLatitude)
+            previousSide == 0.0 ||
+                currentSide == 0.0 ||
+                (previousSide < 0.0 && currentSide > 0.0) ||
+                (previousSide > 0.0 && currentSide < 0.0)
 
         if (!crossedGateLine) {
             return GateCrossingDetection(
@@ -64,5 +67,15 @@ class GateCrossingDetector {
             directionalSpeedMps = directionalSpeedMps,
             directionScore = directionScore
         )
+    }
+
+    private fun signedSide(latitude: Double, longitude: Double, gate: TimingGate): Double {
+        val start = gate.line.start
+        val end = gate.line.end
+        val gateVectorX = end.latitude - start.latitude
+        val gateVectorY = end.longitude - start.longitude
+        val pointVectorX = latitude - start.latitude
+        val pointVectorY = longitude - start.longitude
+        return (gateVectorX * pointVectorY) - (gateVectorY * pointVectorX)
     }
 }

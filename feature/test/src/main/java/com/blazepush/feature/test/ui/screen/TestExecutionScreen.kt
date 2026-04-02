@@ -12,9 +12,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.utils.VoiceAnnouncer
 import org.koin.compose.koinInject
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
+import com.blazepush.feature.test.viewmodel.TestMode
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
 
@@ -26,6 +28,7 @@ import org.koin.androidx.compose.koinViewModel
 fun TestExecutionScreen(
     onTestCompleted: (String) -> Unit,
     onCancel: () -> Unit,
+    onLapDebugStopped: () -> Unit,
     gpsDataViewModel: GpsDataViewModel = koinViewModel(),
     testSessionViewModel: TestSessionViewModel = koinViewModel()
 ) {
@@ -33,6 +36,14 @@ fun TestExecutionScreen(
     val testState by testSessionViewModel.testState.collectAsState()
     val launchStatus by testSessionViewModel.launchStatus.collectAsState()
     val countdownSeconds by testSessionViewModel.countdownSeconds.collectAsState()
+    val currentMode by testSessionViewModel.currentMode.collectAsState()
+    val lapSession by testSessionViewModel.lapSession.collectAsState()
+    val lapRunConfig by testSessionViewModel.lapRunConfig.collectAsState()
+    val trackCatalog: TrackCatalog = koinInject()
+    val selectedTrack = remember(lapRunConfig?.trackId, trackCatalog) {
+        lapRunConfig?.trackId?.let(trackCatalog::getTrack)
+    }
+    val latestCrossing = lapSession?.crossingEvents?.lastOrNull()
 
     // 语音播报
     val voiceAnnouncer: VoiceAnnouncer = koinInject()
@@ -57,6 +68,45 @@ fun TestExecutionScreen(
             }
             onTestCompleted(result.id)
         }
+    }
+
+    if (currentMode == TestMode.LapDebug) {
+        val track = selectedTrack
+        if (track != null) {
+            LapDebugExecutionScreen(
+                track = track,
+                lapRunConfig = lapRunConfig,
+                lapSession = lapSession,
+                latestCrossing = latestCrossing,
+                onStop = {
+                    testSessionViewModel.stopLapDebugSession()
+                    onLapDebugStopped()
+                }
+            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "圈速调试",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text("未找到所选 Track，无法开始圈速调试。")
+                OutlinedButton(
+                    onClick = {
+                        testSessionViewModel.exitLapDebugMode()
+                        onCancel()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("返回")
+                }
+            }
+        }
+        return
     }
 
     // Preparing 状态显示智能启动检查界面

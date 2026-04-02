@@ -4,7 +4,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.model.LapRunConfig
 import com.blazepush.feature.test.ui.screen.DeviceConnectionScreen
+import com.blazepush.feature.test.ui.screen.LapDebugConfigScreen
+import com.blazepush.feature.test.ui.screen.LapDebugResultScreen
 import com.blazepush.feature.test.ui.screen.TestExecutionScreen
 import com.blazepush.feature.test.ui.screen.TestHistoryScreen
 import com.blazepush.feature.test.ui.screen.TestResultScreen
@@ -19,7 +22,9 @@ import org.koin.androidx.compose.koinViewModel
 sealed class TestNavRoute {
     object Connection : TestNavRoute()
     object Selection : TestNavRoute()
+    object LapDebugConfig : TestNavRoute()
     object Execution : TestNavRoute()
+    object LapDebugResult : TestNavRoute()
     data class Result(val testId: String) : TestNavRoute()
     object History : TestNavRoute()
 }
@@ -32,6 +37,10 @@ fun TestFlowNavigation(
     var currentRoute by remember { mutableStateOf<TestNavRoute>(TestNavRoute.Connection) }
     var selectedTemplate by remember { mutableStateOf<TestTemplate?>(null) }
     var selectedCarModel by remember { mutableStateOf("") }
+    val availableTracks by testSessionViewModel.availableTracks.collectAsState()
+    val lapRunConfig by testSessionViewModel.lapRunConfig.collectAsState()
+    val latestLapRecords by testSessionViewModel.latestLapRecords.collectAsState()
+    val lapSession by testSessionViewModel.lapSession.collectAsState()
 
     // 返回手势处理
     BackHandler {
@@ -42,8 +51,19 @@ fun TestFlowNavigation(
             is TestNavRoute.Selection -> {
                 // 不处理，保持在选择页面
             }
+            is TestNavRoute.LapDebugConfig -> {
+                currentRoute = TestNavRoute.Selection
+            }
             is TestNavRoute.Execution -> {
-                testSessionViewModel.cancelTest()
+                if (testSessionViewModel.currentMode.value == com.blazepush.feature.test.viewmodel.TestMode.LapDebug) {
+                    testSessionViewModel.stopLapDebugSession()
+                    currentRoute = TestNavRoute.LapDebugResult
+                } else {
+                    testSessionViewModel.cancelTest()
+                    currentRoute = TestNavRoute.Selection
+                }
+            }
+            is TestNavRoute.LapDebugResult -> {
                 currentRoute = TestNavRoute.Selection
             }
             is TestNavRoute.Result -> {
@@ -69,8 +89,24 @@ fun TestFlowNavigation(
                     testSessionViewModel.enterSmartLaunch(template, carModel)
                     currentRoute = TestNavRoute.Execution
                 },
+                onLapDebugClick = {
+                    currentRoute = TestNavRoute.LapDebugConfig
+                },
                 onHistoryClick = {
                     currentRoute = TestNavRoute.History
+                }
+            )
+        }
+        is TestNavRoute.LapDebugConfig -> {
+            LapDebugConfigScreen(
+                availableTracks = availableTracks,
+                initialConfig = lapRunConfig,
+                onConfirm = { config: LapRunConfig ->
+                    testSessionViewModel.selectLapDebugMode(config)
+                    currentRoute = TestNavRoute.Execution
+                },
+                onBack = {
+                    currentRoute = TestNavRoute.Selection
                 }
             )
         }
@@ -80,6 +116,18 @@ fun TestFlowNavigation(
                     currentRoute = TestNavRoute.Result(testId)
                 },
                 onCancel = {
+                    currentRoute = TestNavRoute.Selection
+                },
+                onLapDebugStopped = {
+                    currentRoute = TestNavRoute.LapDebugResult
+                }
+            )
+        }
+        is TestNavRoute.LapDebugResult -> {
+            LapDebugResultScreen(
+                latestLapRecords = latestLapRecords,
+                latestCrossing = lapSession?.crossingEvents?.lastOrNull(),
+                onBackToSelection = {
                     currentRoute = TestNavRoute.Selection
                 }
             )

@@ -15,6 +15,14 @@ import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
+import com.blazepush.feature.test.model.LapRunConfig
+import com.blazepush.feature.test.model.laptiming.GpsSample
+import com.blazepush.feature.test.model.laptiming.LapRecord
+import com.blazepush.feature.test.model.laptiming.LapSession
+import com.blazepush.feature.test.model.laptiming.LapSessionStatus
+import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.repository.TrackCatalog
+import com.blazepush.feature.test.usecase.LapTimingEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +30,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+enum class TestMode {
+    Acceleration,
+    Braking,
+    LapDebug
+}
 
 /**
  * 测试会话ViewModel - 管理测试状态机
@@ -32,7 +46,9 @@ class TestSessionViewModel(
     private val testResultRepository: TestResultRepository,
     private val calculateResultUseCase: CalculateResultUseCase,
     private val smartTestLauncher: SmartTestLauncher = SmartTestLauncher(),
-    private val gpsDataFilter: GpsDataFilter = GpsDataFilter()
+    private val gpsDataFilter: GpsDataFilter = GpsDataFilter(),
+    private val trackCatalog: TrackCatalog,
+    private val lapTimingEngine: LapTimingEngine
 ) : ViewModel() {
 
     companion object {
@@ -47,6 +63,24 @@ class TestSessionViewModel(
 
     private val _testState = MutableStateFlow<TestState>(TestState.Idle)
     val testState: StateFlow<TestState> = _testState.asStateFlow()
+
+    private val _currentMode = MutableStateFlow(TestMode.Acceleration)
+    val currentMode: StateFlow<TestMode> = _currentMode.asStateFlow()
+
+    private val _availableTracks = MutableStateFlow(trackCatalog.getAllTracks())
+    val availableTracks: StateFlow<List<Track>> = _availableTracks.asStateFlow()
+
+    private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
+    val lapRunConfig: StateFlow<LapRunConfig?> = _lapRunConfig.asStateFlow()
+
+    private val _lapSession = MutableStateFlow<LapSession?>(null)
+    val lapSession: StateFlow<LapSession?> = _lapSession.asStateFlow()
+
+    private val _latestLapRecords = MutableStateFlow<List<LapRecord>>(emptyList())
+    val latestLapRecords: StateFlow<List<LapRecord>> = _latestLapRecords.asStateFlow()
+
+    private var lastLapGpsSample: GpsSample? = null
+    private var isLapRecording = false
 
     private val _launchStatus = MutableStateFlow(
         SmartTestLauncher.LaunchStatus(
@@ -83,17 +117,56 @@ class TestSessionViewModel(
                 updatePreTriggerBuffer(filteredData)
                 updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
+
+                bridgeGpsToLapTiming(gpsData)
             }
         }
     }
 
     fun enterSmartLaunch(template: TestTemplate, carModel: String) {
+        _currentMode.value = when (template) {
+            is TestTemplate.Acceleration0To100 -> TestMode.Acceleration
+            is TestTemplate.Braking100To0 -> TestMode.Braking
+        }
         isStartReady = false
         standstillCount = 0
         consecutiveTriggerCount = 0
         isFinishing = false  // 重置完成标记，允许新测试
         _testState.value = TestState.Preparing(template, carModel)
         startCountdown()
+    }
+
+    fun selectLapDebugMode(trackId: String) {
+        selectLapDebugMode(LapRunConfig(trackId = trackId))
+    }
+
+    fun selectLapDebugMode(config: LapRunConfig) {
+        val track = trackCatalog.getTrack(config.trackId) ?: return
+        _currentMode.value = TestMode.LapDebug
+        _lapRunConfig.value = config
+        _lapSession.value = LapSession(
+            sessionId = UUID.randomUUID().toString(),
+            trackId = track.id,
+            status = LapSessionStatus.Ready
+        )
+        isLapRecording = true
+        _latestLapRecords.value = emptyList()
+        lastLapGpsSample = null
+    }
+
+    fun stopLapDebugSession() {
+        isLapRecording = false
+        _lapSession.value = _lapSession.value?.copy(status = LapSessionStatus.Finished)
+        lastLapGpsSample = null
+    }
+
+    fun exitLapDebugMode() {
+        isLapRecording = false
+        lastLapGpsSample = null
+        _currentMode.value = TestMode.Acceleration
+        _lapRunConfig.value = null
+        _lapSession.value = null
+        _latestLapRecords.value = emptyList()
     }
 
     fun skipCountdown() {
@@ -154,7 +227,6 @@ class TestSessionViewModel(
         return when (template) {
             is TestTemplate.Acceleration0To100 -> checkAccelerationTrigger(filteredData)
             is TestTemplate.Braking100To0 -> checkBrakingTrigger(filteredData)
-            else -> filteredData.acceleration > TRIGGER_ACCELERATION_THRESHOLD
         }
     }
 
@@ -221,6 +293,41 @@ class TestSessionViewModel(
             FileLogger.d(TAG, "startTest: lastPoint elapsedTime=${it.elapsedTime}, speed=${it.speed}")
         }
     }
+
+    private fun bridgeGpsToLapTiming(gpsData: GpsData) {
+        val config = _lapRunConfig.value ?: return
+        if (_currentMode.value != TestMode.LapDebug || !isLapRecording) return
+
+        val currentSession = _lapSession.value ?: return
+        val track = trackCatalog.getTrack(config.trackId) ?: return
+        val currentSample = gpsData.toLapGpsSample()
+        val previousSample = lastLapGpsSample
+        lastLapGpsSample = currentSample
+
+        if (previousSample == null || currentSample.timestampMillis <= 0L) {
+            _lapSession.value = currentSession
+            return
+        }
+
+        val updatedSession = lapTimingEngine.processSample(
+            session = currentSession,
+            track = track,
+            previousSample = previousSample,
+            currentSample = currentSample
+        )
+        _lapSession.value = updatedSession
+        _latestLapRecords.value = updatedSession.completedLaps
+    }
+
+    private fun GpsData.toLapGpsSample(): GpsSample = GpsSample(
+        timestampMillis = timestamp,
+        latitude = latitude,
+        longitude = longitude,
+        speedKmh = speed,
+        bearingDegrees = bearing,
+        altitudeMeters = altitude,
+        accuracyMeters = hdop
+    )
 
     private fun updateLaunchStatus(gpsData: GpsData) {
         val connectionState = _connectionState.value

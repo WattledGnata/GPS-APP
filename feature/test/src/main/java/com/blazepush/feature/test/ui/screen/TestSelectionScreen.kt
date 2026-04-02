@@ -10,8 +10,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blazepush.core.domain.model.TestTemplate
-import com.blazepush.feature.test.viewmodel.GpsDataViewModel
-import org.koin.androidx.compose.koinViewModel
 
 /**
  * 测试类型选择页面
@@ -19,13 +17,11 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun TestSelectionScreen(
     onTestSelected: (TestTemplate, String) -> Unit,
-    onHistoryClick: () -> Unit = {},
-    gpsDataViewModel: GpsDataViewModel = koinViewModel()
+    onLapDebugClick: () -> Unit,
+    onHistoryClick: () -> Unit = {}
 ) {
-    val gpsData by gpsDataViewModel.gpsData.collectAsState()
     var selectedTemplate by remember { mutableStateOf<TestTemplate?>(null) }
     var carModelInput by remember { mutableStateOf("") }
-    var showCarInput by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -40,18 +36,30 @@ fun TestSelectionScreen(
 
         // 加速测试卡片
         TestTypeCard(
-            template = TestTemplate.Acceleration0To100,
+            title = TestTemplate.Acceleration0To100.name,
+            description = TestTemplate.Acceleration0To100.description,
             isSelected = selectedTemplate is TestTemplate.Acceleration0To100,
-            bestResult = null, // TODO: 从历史记录获取
+            bestResult = null,
             onClick = { selectedTemplate = TestTemplate.Acceleration0To100 }
         )
 
         // 刹车测试卡片
         TestTypeCard(
-            template = TestTemplate.Braking100To0,
+            title = TestTemplate.Braking100To0.name,
+            description = TestTemplate.Braking100To0.description,
             isSelected = selectedTemplate is TestTemplate.Braking100To0,
             bestResult = null,
             onClick = { selectedTemplate = TestTemplate.Braking100To0 }
+        )
+
+        Divider()
+
+        TestTypeCard(
+            title = "圈速调试",
+            description = "选择赛道并设置轨迹/计时门显示选项",
+            isSelected = false,
+            bestResult = null,
+            onClick = onLapDebugClick
         )
 
         Divider()
@@ -93,7 +101,8 @@ fun TestSelectionScreen(
 
 @Composable
 private fun TestTypeCard(
-    template: TestTemplate,
+    title: String,
+    description: String,
     isSelected: Boolean,
     bestResult: String?,
     onClick: () -> Unit
@@ -108,12 +117,12 @@ private fun TestTypeCard(
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(template.name, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 if (isSelected) {
                     Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 }
             }
-            Text(template.description, fontSize = 14.sp, color = Color.Gray)
+            Text(description, fontSize = 14.sp, color = Color.Gray)
             bestResult?.let {
                 Text("最佳: $it", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
             }

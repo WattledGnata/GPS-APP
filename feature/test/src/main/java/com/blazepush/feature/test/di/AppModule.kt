@@ -15,7 +15,12 @@ import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.DataInterpolator
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import com.blazepush.core.domain.usecase.DataSmoothing
+import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
+import com.blazepush.feature.test.repository.PresetTrackCatalog
+import com.blazepush.feature.test.repository.TrackCatalog
+import com.blazepush.feature.test.usecase.GateCrossingDetector
+import com.blazepush.feature.test.usecase.LapTimingEngine
 import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestHistoryViewModel
@@ -70,10 +75,14 @@ val repositoryModule = module {
 val domainModule = module {
     factory { CalculateResultUseCase() }
     factory { SmartTestLauncher() }
+    factory { GpsDataFilter() }
     factory { DataQualityEvaluator() }
     factory { AnomalyDetector() }
     factory { DataSmoothing() }
     factory { DataInterpolator() }
+    factory { GateCrossingDetector() }
+    factory { LapTimingEngine(get()) }
+    single<TrackCatalog> { PresetTrackCatalog() }
 }
 
 /**
@@ -82,7 +91,7 @@ val domainModule = module {
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
     single { GpsDataViewModel(get(), get(), get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
 

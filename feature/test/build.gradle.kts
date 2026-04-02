@@ -41,18 +41,15 @@ android {
 }
 
 dependencies {
-    // 依赖 core 模块
     implementation(project(":core:domain"))
     implementation(project(":core:data"))
     implementation(project(":core:bluetooth"))
 
-    // AndroidX Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.livedata.ktx)
 
-    // Compose
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
@@ -62,23 +59,21 @@ dependencies {
     implementation("androidx.compose.foundation:foundation:1.5.0")
     implementation(libs.androidx.runtime.livedata)
 
-    // Navigation
     implementation("androidx.navigation:navigation-compose:2.7.7")
 
-    // Koin
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
 
-    // Vico Charts
     implementation("com.patrykandpatrick.vico:compose:2.0.0-alpha.28")
     implementation("com.patrykandpatrick.vico:compose-m3:2.0.0-alpha.28")
 
-    // Room (for observing data)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
 
-    // Testing
     testImplementation(libs.junit)
+    testImplementation(libs.gson)
+    testImplementation(project(":simulator"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("org.mockito:mockito-core:5.2.0")
     testImplementation("org.mockito:mockito-inline:5.2.0")
     androidTestImplementation(libs.androidx.junit)
