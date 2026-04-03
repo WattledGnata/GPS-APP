@@ -37,6 +37,8 @@ data class SimulatorUiState(
     val isServerReady: Boolean = false,
     val connectedDevices: Set<String> = emptySet(),
     val currentScenario: TestScenario = TestScenario.STATIC,
+    val isReplayMode: Boolean = false,
+    val dataSourceLabel: String = "手动模拟",
     val frequency: Int = 10,
     val satellites: Int = 12,
     val initialSpeed: Float = 0f,
@@ -213,7 +215,7 @@ class SimulatorViewModel : ViewModel() {
         dataUpdateJob?.cancel()
         dataUpdateJob = null
 
-        if (_uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) {
+        if (_uiState.value.isReplayMode || _uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) {
             startReplayDataUpdate()
             return
         }
@@ -238,6 +240,24 @@ class SimulatorViewModel : ViewModel() {
                     currentLongitude = currentLon
                 )
             }
+        }
+    }
+
+    fun enableReplayMode() {
+        _uiState.value = _uiState.value.copy(
+            isReplayMode = true,
+            currentScenario = TestScenario.REAL_TRACK_REPLAY,
+            dataSourceLabel = "圈速模拟回放",
+            frequency = 5
+        )
+        dataGenerator = GpsDataGenerator(
+            scenario = TestScenario.REAL_TRACK_REPLAY,
+            frequency = 5,
+            initialSpeed = _uiState.value.initialSpeed,
+            satellites = _uiState.value.satellites
+        )
+        if (_uiState.value.isAdvertising) {
+            startDataUpdate()
         }
     }
 
@@ -270,12 +290,33 @@ class SimulatorViewModel : ViewModel() {
         }
     }
 
+    fun disableReplayMode() {
+        _uiState.value = _uiState.value.copy(
+            isReplayMode = false,
+            currentScenario = TestScenario.STATIC,
+            dataSourceLabel = "手动模拟"
+        )
+        dataGenerator = GpsDataGenerator(
+            scenario = _uiState.value.currentScenario,
+            frequency = _uiState.value.frequency,
+            initialSpeed = _uiState.value.initialSpeed,
+            satellites = _uiState.value.satellites
+        )
+        if (_uiState.value.isAdvertising) {
+            startDataUpdate()
+        }
+    }
     /**
      * 设置测试场景
      */
     fun setScenario(scenario: TestScenario) {
         val frequency = if (scenario == TestScenario.REAL_TRACK_REPLAY) 5 else _uiState.value.frequency
-        _uiState.value = _uiState.value.copy(currentScenario = scenario, frequency = frequency)
+        _uiState.value = _uiState.value.copy(
+            currentScenario = scenario,
+            isReplayMode = scenario == TestScenario.REAL_TRACK_REPLAY,
+            dataSourceLabel = if (scenario == TestScenario.REAL_TRACK_REPLAY) "圈速模拟回放" else "手动模拟",
+            frequency = frequency
+        )
         dataGenerator?.let {
             dataGenerator = GpsDataGenerator(
                 scenario = scenario,
@@ -293,7 +334,7 @@ class SimulatorViewModel : ViewModel() {
      * 设置频率
      */
     fun setFrequency(hz: Int) {
-        if (_uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) return
+        if (_uiState.value.isReplayMode || _uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) return
         _uiState.value = _uiState.value.copy(frequency = hz)
         dataGenerator?.setFrequency(hz)
     }

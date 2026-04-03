@@ -41,6 +41,7 @@ class GattServerManager(private val context: Context) {
     private var gattServer: BluetoothGattServer? = null
     private var mainDataCharacteristic: BluetoothGattCharacteristic? = null
     private var timeDataCharacteristic: BluetoothGattCharacteristic? = null
+    private val notificationSubscriptions = BleNotificationSubscriptions()
 
     // 设备活跃状态追踪
     private val deviceActivityMap = mutableMapOf<String, Long>()
@@ -74,14 +75,17 @@ class GattServerManager(private val context: Context) {
 
             when (newState) {
                 android.bluetooth.BluetoothProfile.STATE_CONNECTED -> {
-                    Log.d(TAG, "Device connected: ${device.address}")
+                    Log.d(TAG, "Central connected: address=${device.address}, name=${device.name ?: "<unknown>"}, bondState=${device.bondState}")
                     _connectedDevices.value = _connectedDevices.value + device.address
                     deviceActivityMap[device.address] = System.currentTimeMillis()
+                    Log.d(TAG, "Connected centrals now: ${_connectedDevices.value}")
                 }
                 android.bluetooth.BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.d(TAG, "Device disconnected: ${device.address}")
+                    Log.d(TAG, "Central disconnected: address=${device.address}, name=${device.name ?: "<unknown>"}, bondState=${device.bondState}")
                     _connectedDevices.value = _connectedDevices.value - device.address
                     deviceActivityMap.remove(device.address)
+                    notificationSubscriptions.clearDevice(device.address)
+                    Log.d(TAG, "Connected centrals now: ${_connectedDevices.value}")
                 }
                 else -> {
                     Log.d(TAG, "Connection state changed: $newState")
@@ -102,7 +106,10 @@ class GattServerManager(private val context: Context) {
             offset: Int,
             characteristic: BluetoothGattCharacteristic
         ) {
-            Log.d(TAG, "onCharacteristicReadRequest: ${characteristic.uuid}")
+            Log.d(
+                TAG,
+                "Characteristic read: address=${device.address}, name=${device.name ?: "<unknown>"}, characteristic=${characteristic.uuid}, offset=$offset"
+            )
             gattServer?.sendResponse(
                 device,
                 requestId,
@@ -118,13 +125,21 @@ class GattServerManager(private val context: Context) {
             offset: Int,
             descriptor: BluetoothGattDescriptor
         ) {
-            Log.d(TAG, "onDescriptorReadRequest: ${descriptor.uuid}")
+            val value = if (descriptor.uuid == CLIENT_CHARACTERISTIC_CONFIG_UUID) {
+                notificationSubscriptions.cccdValue(device.address, descriptor.characteristic.uuid)
+            } else {
+                descriptor.value
+            }
+            Log.d(
+                TAG,
+                "Descriptor read: address=${device.address}, name=${device.name ?: "<unknown>"}, descriptor=${descriptor.uuid}, characteristic=${descriptor.characteristic.uuid}, offset=$offset, value=${value.contentToString()}"
+            )
             gattServer?.sendResponse(
                 device,
                 requestId,
                 android.bluetooth.BluetoothGatt.GATT_SUCCESS,
                 offset,
-                descriptor.value
+                value
             )
         }
 
@@ -137,8 +152,18 @@ class GattServerManager(private val context: Context) {
             offset: Int,
             value: ByteArray
         ) {
-            Log.d(TAG, "onDescriptorWriteRequest: ${descriptor.uuid}, value=${value.contentToString()}")
+            Log.d(
+                TAG,
+                "Descriptor write: address=${device.address}, name=${device.name ?: "<unknown>"}, descriptor=${descriptor.uuid}, characteristic=${descriptor.characteristic.uuid}, value=${value.contentToString()}, preparedWrite=$preparedWrite, responseNeeded=$responseNeeded, offset=$offset"
+            )
             descriptor.value = value
+            if (descriptor.uuid == CLIENT_CHARACTERISTIC_CONFIG_UUID) {
+                notificationSubscriptions.update(device.address, descriptor.characteristic.uuid, value)
+                Log.d(
+                    TAG,
+                    "CCCD state after write: address=${device.address}, mainEnabled=${notificationSubscriptions.isEnabled(device.address, GPS_MAIN_DATA_UUID)}, timeEnabled=${notificationSubscriptions.isEnabled(device.address, GPS_TIME_DATA_UUID)}"
+                )
+            }
             if (responseNeeded) {
                 gattServer?.sendResponse(
                     device,
@@ -236,12 +261,6 @@ class GattServerManager(private val context: Context) {
                     val device = android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
                     gattServer?.cancelConnection(device)
                 }
-
-                // 记录心跳包数据（空数据）
-                if (deviceActivityMap.isNotEmpty()) {
-                    Log.d(TAG, "发送心跳包，活跃设备: ${deviceActivityMap.keys}")
-                    notifyMainData(ByteArray(0)) // 发送空数据作为心跳包
-                }
             }
         }
     }
@@ -255,6 +274,7 @@ class GattServerManager(private val context: Context) {
         heartbeatJob = null
 
         deviceActivityMap.clear()
+        notificationSubscriptions.clearAll()
 
         // 断开所有连接
         gattServer?.let { server ->
@@ -278,18 +298,15 @@ class GattServerManager(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun notifyMainData(data: ByteArray) {
-        if (!isServerReady.value) return
+        if (!isServerReady.value || !GpsMainPayloadPolicy.canNotify(data)) return
 
         mainDataCharacteristic?.value = data
 
-        // 通知所有已连接设备（不再限制为活跃设备，新连接的设备也需要接收数据）
         _connectedDevices.value.forEach { address ->
             try {
                 val device = android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
-                val enabled = mainDataCharacteristic?.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)?.value?.get(0) ?: 0
-                if ((enabled.toInt() and 0x01) == 0x01) {
-                    gattServer?.notifyCharacteristicChanged(device, mainDataCharacteristic, false)
-                    // 更新设备活跃时间
+                val notified = gattServer?.notifyCharacteristicChanged(device, mainDataCharacteristic, false) == true
+                if (notified) {
                     deviceActivityMap[address] = System.currentTimeMillis()
                 }
             } catch (e: Exception) {
@@ -307,14 +324,11 @@ class GattServerManager(private val context: Context) {
 
         timeDataCharacteristic?.value = data
 
-        // 通知所有已连接设备（不再限制为活跃设备，新连接的设备也需要接收数据）
         _connectedDevices.value.forEach { address ->
             try {
                 val device = android.bluetooth.BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
-                val enabled = timeDataCharacteristic?.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)?.value?.get(0) ?: 0
-                if ((enabled.toInt() and 0x01) == 0x01) {
-                    gattServer?.notifyCharacteristicChanged(device, timeDataCharacteristic, false)
-                    // 更新设备活跃时间
+                val notified = gattServer?.notifyCharacteristicChanged(device, timeDataCharacteristic, false) == true
+                if (notified) {
                     deviceActivityMap[address] = System.currentTimeMillis()
                 }
             } catch (e: Exception) {

@@ -83,7 +83,15 @@ fun SimulatorScreen(
             // 场景选择
             ScenarioCard(
                 currentScenario = uiState.currentScenario,
-                onScenarioChange = { viewModel.setScenario(it) }
+                onScenarioChange = {
+                    viewModel.disableReplayMode()
+                    viewModel.setScenario(it)
+                }
+            )
+
+            ReplayEntryCard(
+                isReplayMode = uiState.isReplayMode,
+                onEnableReplay = { viewModel.enableReplayMode() }
             )
 
             // 速度控制
@@ -110,6 +118,7 @@ fun SimulatorScreen(
 
             // 数据预览
             DataPreviewCard(
+                dataSourceLabel = uiState.dataSourceLabel,
                 currentSpeed = uiState.currentSpeed,
                 currentLatitude = uiState.currentLatitude,
                 currentLongitude = uiState.currentLongitude
@@ -292,6 +301,35 @@ fun ScenarioCard(
 }
 
 @Composable
+fun ReplayEntryCard(
+    isReplayMode: Boolean,
+    onEnableReplay: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "圈速模拟",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (isReplayMode) "当前已切换到天府 5Hz 回放数据源" else "使用现有 replay 链路输出圈速模拟数据",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onEnableReplay,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isReplayMode
+            ) {
+                Text(if (isReplayMode) "已启用圈速模拟回放" else "启用圈速模拟回放")
+            }
+        }
+    }
+}
+
+@Composable
 fun ParametersCard(
     frequency: Int,
     satellites: Int,
@@ -343,6 +381,7 @@ fun ParametersCard(
 
 @Composable
 fun DataPreviewCard(
+    dataSourceLabel: String,
     currentSpeed: Float,
     currentLatitude: Double,
     currentLongitude: Double
@@ -356,6 +395,7 @@ fun DataPreviewCard(
             )
             Spacer(modifier = Modifier.height(12.dp))
 
+            Text("数据源: $dataSourceLabel")
             Text("速度: ${"%.1f".format(currentSpeed)} km/h")
             Text("纬度: ${"%.7f".format(currentLatitude)}")
             Text("经度: ${"%.7f".format(currentLongitude)}")
