@@ -26,11 +26,6 @@ import com.blazepush.feature.test.ui.components.LapDebugMapPlaceholder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.asin
-import kotlin.math.cos
-import kotlin.math.pow
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 @Composable
 fun LapDebugExecutionScreen(
@@ -147,7 +142,7 @@ private fun StartFinishTimingCard(state: StartFinishTimingCardState) {
             )
             Text(text = "上一圈: ${state.lastLapElapsedLabel}")
             Text(text = "当前圈距离: ${state.currentLapDistanceLabel}")
-            Text(text = "最近起终线: ${state.lastStartFinishTimeLabel}")
+            Text(text = "最近起终点: ${state.lastStartFinishTimeLabel}")
         }
     }
 }
@@ -169,62 +164,73 @@ internal fun rememberStartFinishTimingCardState(lapSession: LapSession?): StartF
     val latestAcceptedCrossing = acceptedStartFinishCrossings.lastOrNull()
         ?: return StartFinishTimingCardState(
             lastLapElapsedLabel = "--",
-            currentLapElapsedLabel = "0.000 s",
-            currentLapDistanceLabel = "0.0 m",
+            currentLapElapsedLabel = formatElapsedMillis(0L),
+            currentLapDistanceLabel = formatDistanceMeters(0.0),
             lastStartFinishTimeLabel = "--",
             statusLabel = "等待起点"
         )
 
     val previousAcceptedCrossing = acceptedStartFinishCrossings.dropLast(1).lastOrNull()
-    val latestSampleTimestamp = lapSession?.samples?.lastOrNull()?.timestampMillis ?: latestAcceptedCrossing.timestampMillis
+    val latestSampleTimestampMillis = lapSession?.samples?.lastOrNull()?.timestampMillis ?: latestAcceptedCrossing.timestampMillis
+    val currentLapElapsedMillis = latestSampleTimestampMillis - latestAcceptedCrossing.timestampMillis
 
     return StartFinishTimingCardState(
         lastLapElapsedLabel = previousAcceptedCrossing
             ?.let { formatElapsedMillis(latestAcceptedCrossing.timestampMillis - it.timestampMillis) }
             ?: "--",
-        currentLapElapsedLabel = formatElapsedMillis(latestSampleTimestamp - latestAcceptedCrossing.timestampMillis),
+        currentLapElapsedLabel = formatElapsedMillis(currentLapElapsedMillis),
         currentLapDistanceLabel = formatDistanceMeters(
-            calculateDistanceSince(
-                samples = lapSession?.samples.orEmpty(),
-                sinceTimestampMillis = latestAcceptedCrossing.timestampMillis
-            )
+            calculateDistanceSince(lapSession?.samples.orEmpty(), latestAcceptedCrossing.timestampMillis)
         ),
         lastStartFinishTimeLabel = formatTimeOfDay(latestAcceptedCrossing.timestampMillis),
         statusLabel = "当前圈进行中"
     )
 }
 
-internal fun formatTelemetryValue(value: Double, unit: String): String =
-    String.format("%.2f %s", value, unit)
-
-internal fun formatElapsedMillis(value: Long): String = String.format("%.3f s", value / 1000.0)
-
-internal fun calculateDistanceSince(samples: List<GpsSample>, sinceTimestampMillis: Long): Double {
-    val relevantSamples = samples.filter { it.timestampMillis >= sinceTimestampMillis }
-    if (relevantSamples.size < 2) return 0.0
+private fun calculateDistanceSince(samples: List<GpsSample>, crossingTimestampMillis: Long): Double {
+    val samplesSinceCrossing = samples.filter { it.timestampMillis >= crossingTimestampMillis }
+    if (samplesSinceCrossing.size < 2) return 0.0
 
     var totalMeters = 0.0
-    for (index in 1 until relevantSamples.size) {
-        totalMeters += haversineDistanceMeters(relevantSamples[index - 1], relevantSamples[index])
+    for (index in 1 until samplesSinceCrossing.size) {
+        val previous = samplesSinceCrossing[index - 1]
+        val current = samplesSinceCrossing[index]
+        totalMeters += haversineDistanceMeters(
+            previous.latitude,
+            previous.longitude,
+            current.latitude,
+            current.longitude
+        )
     }
     return totalMeters
 }
 
-private fun haversineDistanceMeters(start: GpsSample, end: GpsSample): Double {
+private fun haversineDistanceMeters(
+    startLatitude: Double,
+    startLongitude: Double,
+    endLatitude: Double,
+    endLongitude: Double
+): Double {
     val earthRadiusMeters = 6_371_000.0
-    val lat1 = Math.toRadians(start.latitude)
-    val lat2 = Math.toRadians(end.latitude)
-    val deltaLat = Math.toRadians(end.latitude - start.latitude)
-    val deltaLon = Math.toRadians(end.longitude - start.longitude)
+    val latitudeDelta = Math.toRadians(endLatitude - startLatitude)
+    val longitudeDelta = Math.toRadians(endLongitude - startLongitude)
+    val startLatitudeRadians = Math.toRadians(startLatitude)
+    val endLatitudeRadians = Math.toRadians(endLatitude)
 
-    val a = kotlin.math.sin(deltaLat / 2) * kotlin.math.sin(deltaLat / 2) +
-        kotlin.math.cos(lat1) * kotlin.math.cos(lat2) *
-        kotlin.math.sin(deltaLon / 2) * kotlin.math.sin(deltaLon / 2)
+    val a = kotlin.math.sin(latitudeDelta / 2).let { it * it } +
+        kotlin.math.cos(startLatitudeRadians) * kotlin.math.cos(endLatitudeRadians) *
+        kotlin.math.sin(longitudeDelta / 2).let { it * it }
     val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
     return earthRadiusMeters * c
 }
 
-internal fun formatDistanceMeters(value: Double): String = String.format("%.1f m", value)
+private fun formatDistanceMeters(distanceMeters: Double): String =
+    String.format(Locale.US, "%.1f m", distanceMeters)
 
-internal fun formatTimeOfDay(timestampMillis: Long): String =
+private fun formatTimeOfDay(timestampMillis: Long): String =
     SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis))
+
+internal fun formatTelemetryValue(value: Double, unit: String): String =
+    String.format("%.2f %s", value, unit)
+
+internal fun formatElapsedMillis(value: Long): String = String.format("%.3f s", value / 1000.0)
