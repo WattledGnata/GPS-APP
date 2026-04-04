@@ -269,4 +269,5 @@ private fun formatTimeOfDay(timestampMillis: Long): String =
 internal fun formatTelemetryValue(value: Double, unit: String): String =
     String.format("%.2f %s", value, unit)
 
-internal fun formatElapsedMillis(value: Long): String = String.format("%.3f s", value / 1000.0)
+internal fun formatElapsedMillis(value: Long): String =
+    String.format(Locale.US, "%.3f s", value / 1000.0)
