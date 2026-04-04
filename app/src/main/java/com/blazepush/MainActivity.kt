@@ -1,6 +1,5 @@
 package com.blazepush
 
-import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -21,11 +20,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.blazepush.core.domain.permission.PermissionRequestOutcome
+import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
 import com.blazepush.feature.test.ui.TestFlowNavigation
 import com.blazepush.feature.test.ui.theme.NeonTheme
 
@@ -34,11 +39,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val requiredPermissions = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT
-        )
+        val requiredPermissions = RequiredBluetoothPermissions.forSdk(Build.VERSION.SDK_INT)
 
         // 检查权限
         val missingPermissions = requiredPermissions.filter {
@@ -86,21 +87,24 @@ private fun PermissionRequestScreen(
 ) {
     val context = LocalContext.current
 
+    var pendingPermissions by remember(permissions) { mutableStateOf(permissions) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
-        val allGranted = result.values.all { it }
-        if (allGranted) {
-            onAllGranted()
-        } else {
-            Toast.makeText(context, "需要所有权限才能使用应用", Toast.LENGTH_LONG).show()
-            // 退出应用
-            (context as? ComponentActivity)?.finish()
+        when (val outcome = PermissionRequestOutcome.from(pendingPermissions, result)) {
+            PermissionRequestOutcome.AllGranted -> onAllGranted()
+            is PermissionRequestOutcome.MissingPermissions -> {
+                pendingPermissions = outcome.permissions
+                Toast.makeText(context, "仍缺少权限，请继续授权", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
-    LaunchedEffect(Unit) {
-        permissionLauncher.launch(permissions.toTypedArray())
+    LaunchedEffect(pendingPermissions) {
+        if (pendingPermissions.isNotEmpty()) {
+            permissionLauncher.launch(pendingPermissions.toTypedArray())
+        }
     }
 
     Column(
@@ -118,14 +122,14 @@ private fun PermissionRequestScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "• 位置权限 - 用于 GPS 测试\n• 蓝牙权限 - 用于连接 GPS 设备",
+            text = "• 位置权限 - 用于 GPS 测试\n• 蓝牙权限 - 用于连接 GPS 设备\n• 若只授权部分权限，页面会保留并继续补申请",
             style = MaterialTheme.typography.bodyLarge
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Button(onClick = { permissionLauncher.launch(permissions.toTypedArray()) }) {
-            Text("授予权限")
+        Button(onClick = { permissionLauncher.launch(pendingPermissions.toTypedArray()) }) {
+            Text("继续授权")
         }
     }
 }
