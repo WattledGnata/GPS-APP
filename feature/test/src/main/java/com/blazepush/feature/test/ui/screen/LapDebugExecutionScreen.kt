@@ -138,13 +138,13 @@ private fun StartFinishTimingCard(state: StartFinishTimingCardState) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 TimingSummaryField(
-                    modifier = Modifier,
-                    label ="上一圈",
+                    modifier = Modifier.weight(1f),
+                    label = "上一圈",
                     value = state.lastLapElapsedLabel
                 )
                 TimingSummaryField(
-                    modifier = Modifier,
-                    label ="当前圈",
+                    modifier = Modifier.weight(1f),
+                    label = "当前圈",
                     value = state.currentLapElapsedLabel
                 )
             }
@@ -153,13 +153,13 @@ private fun StartFinishTimingCard(state: StartFinishTimingCardState) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 TimingSummaryField(
-                    modifier = Modifier,
-                    label ="当前圈路程",
+                    modifier = Modifier.weight(1f),
+                    label = "当前圈路程",
                     value = state.currentLapDistanceLabel
                 )
                 TimingSummaryField(
-                    modifier = Modifier,
-                    label ="最近起点穿线",
+                    modifier = Modifier.weight(1f),
+                    label = "最近起点穿线",
                     value = state.lastStartFinishTimeLabel
                 )
             }
