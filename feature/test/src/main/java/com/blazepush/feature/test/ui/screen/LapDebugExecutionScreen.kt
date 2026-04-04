@@ -142,7 +142,7 @@ private fun StartFinishTimingCard(state: StartFinishTimingCardState) {
             )
             Text(text = "上一圈: ${state.lastLapElapsedLabel}")
             Text(text = "当前圈距离: ${state.currentLapDistanceLabel}")
-            Text(text = "最近起终点: ${state.lastStartFinishTimeLabel}")
+            Text(text = "最近起终线: ${state.lastStartFinishTimeLabel}")
         }
     }
 }
