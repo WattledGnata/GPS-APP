@@ -1,5 +1,6 @@
 package com.blazepush.feature.test.viewmodel
 
+import android.util.Log
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
@@ -26,6 +27,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.blazepush.core.domain.usecase.GpsDataFilter
+import org.mockito.Mockito
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -172,27 +174,49 @@ class TestSessionViewModelTrackLapTest {
 
     @Test
     fun lapDebugMode_reentryCreatesFreshReadySessionWithoutPreviousSamplesOrCrossings() = runTest {
-        Dispatchers.setMain(dispatcher)
+        runWithMockedLog {
+            Dispatchers.setMain(dispatcher)
+            try {
+                val viewModel = createViewModel(runtimeTrackCatalog())
+                val config = LapRunConfig(trackId = "preset-tfic-lpcc")
+
+                viewModel.selectLapDebugMode(config)
+                dispatcher.scheduler.advanceUntilIdle()
+
+                emitGps(1773477876490L, 30.4941093, 104.4334198)
+                dispatcher.scheduler.advanceUntilIdle()
+                emitGps(1773477876690L, 30.4941096, 104.4334258)
+                dispatcher.scheduler.advanceUntilIdle()
+
+                val firstSession = requireNotNull(viewModel.lapSession.value)
+                val firstSessionId = firstSession.sessionId
+                assertTrue(firstSession.samples.isNotEmpty())
+                assertTrue(firstSession.crossingEvents.isNotEmpty())
+
+                viewModel.stopLapDebugSession()
+                dispatcher.scheduler.advanceUntilIdle()
+                viewModel.exitLapDebugMode()
+                dispatcher.scheduler.advanceUntilIdle()
+                viewModel.selectLapDebugMode(config)
+                dispatcher.scheduler.advanceUntilIdle()
+
+                val secondSession = requireNotNull(viewModel.lapSession.value)
+                assertNotEquals(firstSessionId, secondSession.sessionId)
+                assertEquals(LapSessionStatus.Ready, secondSession.status)
+                assertTrue(secondSession.samples.isEmpty())
+                assertTrue(secondSession.crossingEvents.isEmpty())
+            } finally {
+                Dispatchers.resetMain()
+            }
+        }
+    }
+
+    private fun runWithMockedLog(test: () -> Unit) {
+        val logMock = Mockito.mockStatic(Log::class.java)
         try {
-            val viewModel = createViewModel()
-            val config = LapRunConfig(trackId = "preset-tfic-lpcc")
-
-            viewModel.selectLapDebugMode(config)
-
-            val firstSession = requireNotNull(viewModel.lapSession.value)
-            val firstSessionId = firstSession.sessionId
-
-            viewModel.stopLapDebugSession()
-            viewModel.exitLapDebugMode()
-            viewModel.selectLapDebugMode(config)
-
-            val secondSession = requireNotNull(viewModel.lapSession.value)
-            assertNotEquals(firstSessionId, secondSession.sessionId)
-            assertEquals(LapSessionStatus.Ready, secondSession.status)
-            assertTrue(secondSession.samples.isEmpty())
-            assertTrue(secondSession.crossingEvents.isEmpty())
+            test()
         } finally {
-            Dispatchers.resetMain()
+            logMock.close()
         }
     }
 
