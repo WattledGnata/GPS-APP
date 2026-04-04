@@ -130,20 +130,56 @@ private fun StartFinishTimingCard(state: StartFinishTimingCardState) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(text = "起终线计时", fontWeight = FontWeight.Bold)
-            Text(text = state.statusLabel)
-            Text(
-                text = state.currentLapElapsedLabel,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+            Text(text = "起终点计时", fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TimingSummaryField(
+                    modifier = Modifier,
+                    label ="上一圈",
+                    value = state.lastLapElapsedLabel
+                )
+                TimingSummaryField(
+                    modifier = Modifier,
+                    label ="当前圈",
+                    value = state.currentLapElapsedLabel
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TimingSummaryField(
+                    modifier = Modifier,
+                    label ="当前圈路程",
+                    value = state.currentLapDistanceLabel
+                )
+                TimingSummaryField(
+                    modifier = Modifier,
+                    label ="最近起点穿线",
+                    value = state.lastStartFinishTimeLabel
+                )
+            }
+            TimingSummaryField(
+                modifier = Modifier.fillMaxWidth(),
+                label = "状态",
+                value = state.statusLabel
             )
-            Text(text = "上一圈: ${state.lastLapElapsedLabel}")
-            Text(text = "当前圈距离: ${state.currentLapDistanceLabel}")
-            Text(text = "最近起终线: ${state.lastStartFinishTimeLabel}")
         }
+    }
+}
+
+@Composable
+private fun TimingSummaryField(modifier: Modifier, label: String, value: String) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelMedium)
+        Text(text = value, fontWeight = FontWeight.SemiBold)
     }
 }
 

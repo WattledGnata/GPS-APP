@@ -90,30 +90,30 @@ class LapDebugExecutionScreenStateTest {
     }
 
     @Test
-    fun rememberStartFinishTimingCardState_withSecondAcceptedStartFinishCrossing_reportsLastAndCurrentLapSummary() {
+    fun rememberStartFinishTimingCardState_withSecondAcceptedStartFinishCrossing_reportsFixedSummaryFields() {
         val session = LapSession(
             sessionId = "session-1",
             trackId = "track-1",
             status = LapSessionStatus.Recording,
             samples = listOf(
-                gpsSample(timestampMillis = 3_000L, latitude = 39.000000, longitude = 116.000000),
-                gpsSample(timestampMillis = 5_000L, latitude = 39.000000, longitude = 116.000100),
-                gpsSample(timestampMillis = 7_000L, latitude = 39.000000, longitude = 116.000200),
-                gpsSample(timestampMillis = 8_000L, latitude = 39.000000, longitude = 116.000370)
+                gpsSample(timestampMillis = 32_529_000L, latitude = 39.000000, longitude = 116.000000),
+                gpsSample(timestampMillis = 32_533_000L, latitude = 39.000000, longitude = 116.000000),
+                gpsSample(timestampMillis = 32_533_625L, latitude = 39.000000, longitude = 116.000188),
+                gpsSample(timestampMillis = 32_534_250L, latitude = 39.000000, longitude = 116.000375)
             ),
             crossingEvents = listOf(
-                acceptedStartFinishCrossing(timestampMillis = 3_000L),
-                crossingEvent(timestampMillis = 5_500L, accepted = false, gateType = TimingGateType.StartFinish),
-                acceptedStartFinishCrossing(timestampMillis = 7_000L)
+                acceptedStartFinishCrossing(timestampMillis = 32_529_000L),
+                crossingEvent(timestampMillis = 32_531_500L, accepted = false, gateType = TimingGateType.StartFinish),
+                acceptedStartFinishCrossing(timestampMillis = 32_533_000L)
             )
         )
 
         val state = rememberStartFinishTimingCardState(session)
 
         assertEquals("4.000 s", state.lastLapElapsedLabel)
-        assertEquals("1.000 s", state.currentLapElapsedLabel)
-        assertEquals("14.7 m", state.currentLapDistanceLabel)
-        assertEquals("08:00:07", state.lastStartFinishTimeLabel)
+        assertEquals("1.250 s", state.currentLapElapsedLabel)
+        assertEquals("32.4 m", state.currentLapDistanceLabel)
+        assertEquals("17:02:13", state.lastStartFinishTimeLabel)
         assertEquals("当前圈进行中", state.statusLabel)
     }
 
