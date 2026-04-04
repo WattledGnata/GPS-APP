@@ -7,6 +7,9 @@ import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.TimingGateType
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -85,7 +88,7 @@ class LapDebugExecutionScreenStateTest {
         assertEquals("--", state.lastLapElapsedLabel)
         assertEquals("1.500 s", state.currentLapElapsedLabel)
         assertEquals("14.7 m", state.currentLapDistanceLabel)
-        assertEquals("08:00:03", state.lastStartFinishTimeLabel)
+        assertEquals(formatExpectedTimeOfDay(3_000L), state.lastStartFinishTimeLabel)
         assertEquals("当前圈进行中", state.statusLabel)
     }
 
@@ -113,9 +116,12 @@ class LapDebugExecutionScreenStateTest {
         assertEquals("4.000 s", state.lastLapElapsedLabel)
         assertEquals("1.250 s", state.currentLapElapsedLabel)
         assertEquals("32.4 m", state.currentLapDistanceLabel)
-        assertEquals("17:02:13", state.lastStartFinishTimeLabel)
+        assertEquals(formatExpectedTimeOfDay(32_533_000L), state.lastStartFinishTimeLabel)
         assertEquals("当前圈进行中", state.statusLabel)
     }
+
+    private fun formatExpectedTimeOfDay(timestampMillis: Long): String =
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis))
 
     private fun gpsData(speed: Double, bearing: Double) = GpsData(
         timestamp = 2_000L,
