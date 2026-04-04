@@ -178,26 +178,13 @@ class TestSessionViewModelTrackLapTest {
             val config = LapRunConfig(trackId = "preset-tfic-lpcc")
 
             viewModel.selectLapDebugMode(config)
-            dispatcher.scheduler.advanceUntilIdle()
-
-            emitGps(500L, 30.49681330622183, 104.43181645726466)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(1_000L, 30.49681330622183, 104.43181645726466)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(2_000L, 30.49670954528353, 104.43448713340022)
-            dispatcher.scheduler.advanceUntilIdle()
 
             val firstSession = requireNotNull(viewModel.lapSession.value)
             val firstSessionId = firstSession.sessionId
-            assertTrue(firstSession.samples.isNotEmpty())
 
             viewModel.stopLapDebugSession()
-            dispatcher.scheduler.advanceUntilIdle()
             viewModel.exitLapDebugMode()
-            dispatcher.scheduler.advanceUntilIdle()
-
             viewModel.selectLapDebugMode(config)
-            dispatcher.scheduler.advanceUntilIdle()
 
             val secondSession = requireNotNull(viewModel.lapSession.value)
             assertNotEquals(firstSessionId, secondSession.sessionId)

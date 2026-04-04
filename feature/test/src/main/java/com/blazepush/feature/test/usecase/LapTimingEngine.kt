@@ -1,6 +1,6 @@
 package com.blazepush.feature.test.usecase
 
-import com.blazepush.feature.test.FileLogger
+import android.util.Log
 import com.blazepush.feature.test.model.laptiming.ActiveLap
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
@@ -53,7 +53,7 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
         }
 
         val detection = detector.detect(previous = previousSample, current = currentSample, gate = targetGate)
-        FileLogger.d(
+        Log.d(
             TAG,
             "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${detection.accepted}, reason=${detection.reason}, directionScore=${detection.directionScore}, directionalSpeed=${detection.directionalSpeedMps}"
         )
