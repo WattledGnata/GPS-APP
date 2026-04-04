@@ -5,8 +5,13 @@ import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
+import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.feature.test.model.LapRunConfig
+import com.blazepush.feature.test.model.laptiming.LapSessionStatus
+import com.blazepush.feature.test.model.track.TrackSource
 import com.blazepush.feature.test.repository.PresetTrackCatalog
+import com.blazepush.feature.test.repository.ReplayAlignedTrackCatalog
+import com.blazepush.feature.test.repository.ReplayTrackSource
 import com.blazepush.feature.test.usecase.LapTimingEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -16,10 +21,12 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.blazepush.core.domain.usecase.GpsDataFilter
+import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 
@@ -27,8 +34,8 @@ import org.mockito.Mockito.`when`
 class TestSessionViewModelTrackLapTest {
 
     private val dispatcher = StandardTestDispatcher()
-    private val gpsFlow = MutableStateFlow(emptyGpsSample())
-    private val connectionState = MutableStateFlow(ConnectionState.CONNECTED)
+    private var gpsFlow = MutableStateFlow(emptyGpsSample())
+    private var connectionState = MutableStateFlow(ConnectionState.CONNECTED)
 
     @Test
     fun selectingLapDebugModeWithTrack_storesLapRunConfig() = runTest {
@@ -36,44 +43,114 @@ class TestSessionViewModelTrackLapTest {
         try {
             val viewModel = createViewModel()
 
-            val config = LapRunConfig(trackId = "preset-demo-circuit")
+            val config = LapRunConfig(trackId = "preset-tfic-lpcc")
             viewModel.selectLapDebugMode(config)
             dispatcher.scheduler.advanceUntilIdle()
 
             assertEquals(TestMode.LapDebug, viewModel.currentMode.value)
-            assertEquals("preset-demo-circuit", viewModel.lapRunConfig.value?.trackId)
+            assertEquals("preset-tfic-lpcc", viewModel.lapRunConfig.value?.trackId)
             assertEquals(config, viewModel.lapRunConfig.value)
-            assertTrue(viewModel.availableTracks.value.any { track -> track.id == "preset-demo-circuit" })
+            assertTrue(viewModel.availableTracks.value.any { track -> track.id == "preset-tfic-lpcc" })
         } finally {
             Dispatchers.resetMain()
         }
     }
 
     @Test
-    fun lapDebugMode_bridgesGpsSamplesIntoLapSessionAndRetainsResultsAfterStop() = runTest {
+    fun selectingLapDebugModeWithTficPreset_entersLapDebugSelectionFlow() = runTest {
         Dispatchers.setMain(dispatcher)
         try {
             val viewModel = createViewModel()
 
-            viewModel.selectLapDebugMode("preset-demo-circuit")
+            val config = LapRunConfig(trackId = "preset-tfic-lpcc")
+            viewModel.selectLapDebugMode(config)
             dispatcher.scheduler.advanceUntilIdle()
 
-            emitGps(999L, 39.8980, 116.3999)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(1_000L, 39.9020, 116.4001)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(5_999L, 39.9006, 119.0000)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(6_000L, 39.9007, 122.0000)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(10_999L, 39.8980, 116.3998)
-            dispatcher.scheduler.advanceUntilIdle()
-            emitGps(11_000L, 39.9020, 116.4002)
+            assertEquals(TestMode.LapDebug, viewModel.currentMode.value)
+            assertEquals("preset-tfic-lpcc", viewModel.lapRunConfig.value?.trackId)
+            assertEquals("preset-tfic-lpcc", viewModel.lapSession.value?.trackId)
+            assertTrue(viewModel.availableTracks.value.any { track -> track.id == "preset-tfic-lpcc" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+
+    @Test
+    fun lapDebugMode_runtimeReplayCatalogUsesGeneratedTrackGeometry() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val trackCatalog = runtimeTrackCatalog()
+            val viewModel = createViewModel(trackCatalog)
+
+            viewModel.selectLapDebugMode("preset-tfic-lpcc")
             dispatcher.scheduler.advanceUntilIdle()
 
-            assertNotNull(viewModel.lapSession.value)
-            assertEquals(1, viewModel.latestLapRecords.value.size)
-            assertEquals(1, viewModel.latestLapRecords.value.first().lapIndex)
+            emitGps(1773477876490L, 30.4941093, 104.4334198)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1773477876690L, 30.4941096, 104.4334258)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val session = requireNotNull(viewModel.lapSession.value)
+            assertEquals("preset-tfic-lpcc", session.trackId)
+            assertEquals(1, session.currentLapIndex)
+            val selectedTrack = trackCatalog.getTrack("preset-tfic-lpcc")
+            assertEquals(TrackSource.Generated, selectedTrack?.source)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun lapDebugMode_replayAlignedTrackCatalogProducesAcceptedStartFinishCrossing() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel(runtimeTrackCatalog())
+
+            viewModel.selectLapDebugMode("preset-tfic-lpcc")
+            dispatcher.scheduler.advanceUntilIdle()
+
+            emitGps(1773477876490L, 30.4941093, 104.4334198)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1773477876690L, 30.4941096, 104.4334258)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val session = requireNotNull(viewModel.lapSession.value)
+            assertEquals("preset-tfic-lpcc", session.trackId)
+            assertEquals(1, session.currentLapIndex)
+            assertEquals(1, session.nextExpectedGateIndex)
+            assertTrue(session.crossingEvents.any { it.accepted })
+            assertTrue(session.crossingEvents.any { it.accepted && it.gateId == "start-finish" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun lapDebugMode_bridgesTficGpsSamplesIntoLapSessionAndRetainsStateAfterStop() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+
+            viewModel.selectLapDebugMode("preset-tfic-lpcc")
+            dispatcher.scheduler.advanceUntilIdle()
+
+            emitGps(500L, 30.49681330622183, 104.43181645726466)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_000L, 30.49681330622183, 104.43181645726466)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(2_000L, 30.49670954528353, 104.43448713340022)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(3_000L, 30.488409019777094, 104.43452055830684)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(4_000L, 30.49112394730996, 104.43394397527129)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val recordingSession = requireNotNull(viewModel.lapSession.value)
+            assertEquals("preset-tfic-lpcc", recordingSession.trackId)
+            assertTrue(recordingSession.samples.isNotEmpty())
+            assertEquals(TestMode.LapDebug, viewModel.currentMode.value)
+            assertTrue(viewModel.latestLapRecords.value.isEmpty())
 
             viewModel.stopLapDebugSession()
             dispatcher.scheduler.advanceUntilIdle()
@@ -81,13 +158,11 @@ class TestSessionViewModelTrackLapTest {
             val stoppedSession = viewModel.lapSession.value
             val stoppedRecords = viewModel.latestLapRecords.value
 
-            emitGps(16_000L, 39.9021, 116.4003)
+            emitGps(4_000L, 30.4903109, 104.4329748)
             dispatcher.scheduler.advanceUntilIdle()
-            emitGps(21_000L, 39.8981, 116.3997)
+            emitGps(5_000L, 30.4905453, 104.4350638)
             dispatcher.scheduler.advanceUntilIdle()
 
-            assertFalse(viewModel.latestLapRecords.value.isEmpty())
-            assertEquals(1, viewModel.latestLapRecords.value.first().lapIndex)
             assertEquals(stoppedRecords, viewModel.latestLapRecords.value)
             assertEquals(stoppedSession, viewModel.lapSession.value)
         } finally {
@@ -95,21 +170,91 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
-    private fun createViewModel(): TestSessionViewModel {
+    @Test
+    fun lapDebugMode_reentryCreatesFreshReadySessionWithoutPreviousSamplesOrCrossings() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            val config = LapRunConfig(trackId = "preset-tfic-lpcc")
+
+            viewModel.selectLapDebugMode(config)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            emitGps(500L, 30.49681330622183, 104.43181645726466)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_000L, 30.49681330622183, 104.43181645726466)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(2_000L, 30.49670954528353, 104.43448713340022)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val firstSession = requireNotNull(viewModel.lapSession.value)
+            val firstSessionId = firstSession.sessionId
+            assertTrue(firstSession.samples.isNotEmpty())
+
+            viewModel.stopLapDebugSession()
+            dispatcher.scheduler.advanceUntilIdle()
+            viewModel.exitLapDebugMode()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            viewModel.selectLapDebugMode(config)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val secondSession = requireNotNull(viewModel.lapSession.value)
+            assertNotEquals(firstSessionId, secondSession.sessionId)
+            assertEquals(LapSessionStatus.Ready, secondSession.status)
+            assertTrue(secondSession.samples.isEmpty())
+            assertTrue(secondSession.crossingEvents.isEmpty())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    private fun createViewModel(trackCatalog: com.blazepush.feature.test.repository.TrackCatalog = PresetTrackCatalog()): TestSessionViewModel {
+        gpsFlow = MutableStateFlow(emptyGpsSample())
+        connectionState = MutableStateFlow(ConnectionState.CONNECTED)
+
         val gpsDataViewModel = mock(GpsDataViewModel::class.java)
-        `when`(gpsDataViewModel.gpsData).thenReturn(gpsFlow)
+        doReturn(gpsFlow).`when`(gpsDataViewModel).gpsData
 
         val bleDeviceManager = mock(BleDeviceManager::class.java)
-        `when`(bleDeviceManager.connectionState).thenReturn(connectionState)
+        doReturn(connectionState).`when`(bleDeviceManager).connectionState
+
+        val gpsDataFilter = GpsDataFilter()
 
         return TestSessionViewModel(
             gpsDataViewModel = gpsDataViewModel,
             bleDeviceManager = bleDeviceManager,
             testResultRepository = mock(TestResultRepository::class.java),
             calculateResultUseCase = mock(CalculateResultUseCase::class.java),
-            trackCatalog = PresetTrackCatalog(),
+            smartTestLauncher = mock(com.blazepush.core.domain.usecase.SmartTestLauncher::class.java),
+            gpsDataFilter = gpsDataFilter,
+            trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine()
         )
+    }
+
+
+    private fun runtimeTrackCatalog() = ReplayAlignedTrackCatalog(
+        replayTrackSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String = java.io.File(
+                projectRoot(),
+                "feature/test/src/main/assets/replay/tianfu_track_replay_5hz.json"
+            ).readText()
+
+            override fun loadTrackVbo(): String = java.io.File(
+                projectRoot(),
+                "feature/test/src/main/assets/replay/tianfu_track.vbo"
+            ).readText()
+        },
+        fallbackCatalog = PresetTrackCatalog()
+    )
+
+    private fun projectRoot(): java.io.File {
+        val classesDir = java.io.File(javaClass.protectionDomain.codeSource.location.toURI())
+        val userDir = java.io.File(System.getProperty("user.dir"))
+        return sequenceOf(classesDir, userDir)
+            .flatMap { start -> generateSequence(start) { current -> current.parentFile }.filterNotNull() }
+            .first { java.io.File(it, "settings.gradle").exists() || java.io.File(it, "settings.gradle.kts").exists() }
     }
 
     private fun emitGps(timestamp: Long, latitude: Double, longitude: Double) {

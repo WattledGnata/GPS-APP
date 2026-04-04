@@ -302,6 +302,10 @@ class TestSessionViewModel(
         val track = trackCatalog.getTrack(config.trackId) ?: return
         val currentSample = gpsData.toLapGpsSample()
         val previousSample = lastLapGpsSample
+        FileLogger.d(
+            TAG,
+            "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${gpsData.latitude}, lon=${gpsData.longitude}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude}, prevLon=${previousSample?.longitude}"
+        )
         lastLapGpsSample = currentSample
 
         if (previousSample == null || currentSample.timestampMillis <= 0L) {
@@ -314,6 +318,10 @@ class TestSessionViewModel(
             track = track,
             previousSample = previousSample,
             currentSample = currentSample
+        )
+        FileLogger.d(
+            TAG,
+            "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
         )
         _lapSession.value = updatedSession
         _latestLapRecords.value = updatedSession.completedLaps
