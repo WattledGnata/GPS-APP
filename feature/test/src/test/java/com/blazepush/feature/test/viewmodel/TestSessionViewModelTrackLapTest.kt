@@ -1,6 +1,5 @@
 package com.blazepush.feature.test.viewmodel
 
-import android.util.Log
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
@@ -8,7 +7,11 @@ import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.feature.test.model.LapRunConfig
+import com.blazepush.feature.test.model.laptiming.CrossingEvent
+import com.blazepush.feature.test.model.laptiming.CrossingReason
+import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
+import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.TrackSource
 import com.blazepush.feature.test.repository.PresetTrackCatalog
 import com.blazepush.feature.test.repository.ReplayAlignedTrackCatalog
@@ -27,7 +30,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.blazepush.core.domain.usecase.GpsDataFilter
-import org.mockito.Mockito
+import kotlinx.coroutines.flow.MutableStateFlow as MutableStateFlowType
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -174,50 +177,69 @@ class TestSessionViewModelTrackLapTest {
 
     @Test
     fun lapDebugMode_reentryCreatesFreshReadySessionWithoutPreviousSamplesOrCrossings() = runTest {
-        runWithMockedLog {
-            Dispatchers.setMain(dispatcher)
-            try {
-                val viewModel = createViewModel(runtimeTrackCatalog())
-                val config = LapRunConfig(trackId = "preset-tfic-lpcc")
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            val config = LapRunConfig(trackId = "preset-tfic-lpcc")
 
-                viewModel.selectLapDebugMode(config)
-                dispatcher.scheduler.advanceUntilIdle()
+            viewModel.selectLapDebugMode(config)
+            dispatcher.scheduler.advanceUntilIdle()
 
-                emitGps(1773477876490L, 30.4941093, 104.4334198)
-                dispatcher.scheduler.advanceUntilIdle()
-                emitGps(1773477876690L, 30.4941096, 104.4334258)
-                dispatcher.scheduler.advanceUntilIdle()
+            val firstSession = requireNotNull(viewModel.lapSession.value)
+            val firstSessionId = firstSession.sessionId
+            val dirtyFirstSession = firstSession.copy(
+                status = LapSessionStatus.Recording,
+                samples = listOf(
+                    GpsSample(
+                        timestampMillis = 1_000L,
+                        latitude = 30.4941093,
+                        longitude = 104.4334198,
+                        speedKmh = 36.0
+                    )
+                ),
+                crossingEvents = listOf(
+                    CrossingEvent(
+                        gateId = "start-finish",
+                        gateType = TimingGateType.StartFinish,
+                        timestampMillis = 1_000L,
+                        sampleIndex = 0,
+                        accepted = true,
+                        reason = CrossingReason.Accepted
+                    )
+                )
+            )
+            setLapSession(viewModel, dirtyFirstSession)
 
-                val firstSession = requireNotNull(viewModel.lapSession.value)
-                val firstSessionId = firstSession.sessionId
-                assertTrue(firstSession.samples.isNotEmpty())
-                assertTrue(firstSession.crossingEvents.isNotEmpty())
+            val updatedFirstSession = requireNotNull(viewModel.lapSession.value)
+            assertTrue(updatedFirstSession.samples.isNotEmpty())
+            assertTrue(updatedFirstSession.crossingEvents.isNotEmpty())
 
-                viewModel.stopLapDebugSession()
-                dispatcher.scheduler.advanceUntilIdle()
-                viewModel.exitLapDebugMode()
-                dispatcher.scheduler.advanceUntilIdle()
-                viewModel.selectLapDebugMode(config)
-                dispatcher.scheduler.advanceUntilIdle()
+            viewModel.stopLapDebugSession()
+            dispatcher.scheduler.advanceUntilIdle()
+            viewModel.exitLapDebugMode()
+            dispatcher.scheduler.advanceUntilIdle()
+            viewModel.selectLapDebugMode(config)
+            dispatcher.scheduler.advanceUntilIdle()
 
-                val secondSession = requireNotNull(viewModel.lapSession.value)
-                assertNotEquals(firstSessionId, secondSession.sessionId)
-                assertEquals(LapSessionStatus.Ready, secondSession.status)
-                assertTrue(secondSession.samples.isEmpty())
-                assertTrue(secondSession.crossingEvents.isEmpty())
-            } finally {
-                Dispatchers.resetMain()
-            }
+            val secondSession = requireNotNull(viewModel.lapSession.value)
+            assertNotEquals(firstSessionId, secondSession.sessionId)
+            assertEquals(LapSessionStatus.Ready, secondSession.status)
+            assertTrue(secondSession.samples.isEmpty())
+            assertTrue(secondSession.crossingEvents.isEmpty())
+        } finally {
+            Dispatchers.resetMain()
         }
     }
 
-    private fun runWithMockedLog(test: () -> Unit) {
-        val logMock = Mockito.mockStatic(Log::class.java)
-        try {
-            test()
-        } finally {
-            logMock.close()
-        }
+    private fun setLapSession(
+        viewModel: TestSessionViewModel,
+        session: com.blazepush.feature.test.model.laptiming.LapSession
+    ) {
+        val field = TestSessionViewModel::class.java.getDeclaredField("_lapSession")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = field.get(viewModel) as MutableStateFlowType<com.blazepush.feature.test.model.laptiming.LapSession?>
+        stateFlow.value = session
     }
 
     private fun createViewModel(trackCatalog: com.blazepush.feature.test.repository.TrackCatalog = PresetTrackCatalog()): TestSessionViewModel {
