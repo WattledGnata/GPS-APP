@@ -1,5 +1,6 @@
 package com.blazepush.feature.test.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.core.bluetooth.BleDeviceManager
@@ -66,6 +67,10 @@ class GpsDataViewModel(
         // 监控GPS数据并计算质量
         viewModelScope.launch {
             gpsData.collect { data ->
+                Log.d(
+                    "GpsDataViewModel",
+                    "gpsData: ts=${data.timestamp}, lat=${data.latitude}, lon=${data.longitude}, speed=${data.speed}, bearing=${data.bearing}, sats=${data.satelliteCount}, hdop=${data.hdop}, fix=${data.fixQuality}, ready=${data.isTestReady}"
+                )
                 updateDataStats(data)
             }
         }

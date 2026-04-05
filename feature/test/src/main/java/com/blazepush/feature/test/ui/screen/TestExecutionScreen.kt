@@ -10,8 +10,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.utils.VoiceAnnouncer
 import org.koin.compose.koinInject
@@ -44,6 +46,7 @@ fun TestExecutionScreen(
         lapRunConfig?.trackId?.let(trackCatalog::getTrack)
     }
     val latestCrossing = lapSession?.crossingEvents?.lastOrNull()
+    val telemetry = remember(gpsData, lapSession) { gpsData.toLapDebugTelemetry(lapSession) }
 
     // 语音播报
     val voiceAnnouncer: VoiceAnnouncer = koinInject()
@@ -78,6 +81,7 @@ fun TestExecutionScreen(
                 lapRunConfig = lapRunConfig,
                 lapSession = lapSession,
                 latestCrossing = latestCrossing,
+                telemetry = telemetry,
                 onStop = {
                     testSessionViewModel.stopLapDebugSession()
                     onLapDebugStopped()
@@ -277,4 +281,53 @@ private fun ProgressBar(speed: Double, testState: TestState) {
             modifier = Modifier.fillMaxWidth().height(8.dp)
         )
     }
+}
+
+data class LapDebugTelemetry(
+    val speedKmh: Double,
+    val bearingDegrees: Double,
+    val forwardG: Double,
+    val lateralG: Double
+)
+
+internal fun GpsData.toLapDebugTelemetry(previousSample: LapSession?): LapDebugTelemetry {
+    val currentSample = previousSample?.samples?.lastOrNull()
+    val previousGpsSample = previousSample?.samples?.dropLast(1)?.lastOrNull()
+
+    val forwardG = if (currentSample != null && previousGpsSample != null) {
+        val deltaSpeedMetersPerSecond = ((currentSample.speedKmh ?: speed) - (previousGpsSample.speedKmh ?: speed)) / 3.6
+        val deltaTimeSeconds = (currentSample.timestampMillis - previousGpsSample.timestampMillis) / 1000.0
+        if (deltaTimeSeconds > 0.0) deltaSpeedMetersPerSecond / deltaTimeSeconds / 9.80665 else 0.0
+    } else {
+        0.0
+    }
+
+    val lateralG = if (currentSample != null && previousGpsSample != null) {
+        val currentBearing = currentSample.bearingDegrees ?: bearing
+        val previousBearing = previousGpsSample.bearingDegrees ?: bearing
+        val bearingDelta = normalizeBearingDelta(currentBearing - previousBearing)
+        val speedMetersPerSecond = (currentSample.speedKmh ?: speed) / 3.6
+        val deltaTimeSeconds = (currentSample.timestampMillis - previousGpsSample.timestampMillis) / 1000.0
+        if (deltaTimeSeconds > 0.0) {
+            val yawRateRadians = Math.toRadians(bearingDelta) / deltaTimeSeconds
+            (speedMetersPerSecond * yawRateRadians) / 9.80665
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    }
+
+    return LapDebugTelemetry(
+        speedKmh = speed,
+        bearingDegrees = bearing,
+        forwardG = forwardG,
+        lateralG = lateralG
+    )
+}
+
+private fun normalizeBearingDelta(delta: Double): Double = when {
+    delta > 180.0 -> delta - 360.0
+    delta < -180.0 -> delta + 360.0
+    else -> delta
 }

@@ -1,6 +1,5 @@
 package com.blazepush.feature.test.viewmodel
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.feature.test.FileLogger
@@ -142,16 +141,15 @@ class TestSessionViewModel(
 
     fun selectLapDebugMode(config: LapRunConfig) {
         val track = trackCatalog.getTrack(config.trackId) ?: return
+
         _currentMode.value = TestMode.LapDebug
         _lapRunConfig.value = config
-        _lapSession.value = LapSession(
-            sessionId = UUID.randomUUID().toString(),
-            trackId = track.id,
-            status = LapSessionStatus.Ready
-        )
-        isLapRecording = true
+        _lapSession.value = createLapSession(track.id)
         _latestLapRecords.value = emptyList()
         lastLapGpsSample = null
+        isLapRecording = true
+
+        FileLogger.d(TAG, "lapDebugTrackSummary: ${buildTrackDebugSummary(track)}")
     }
 
     fun stopLapDebugSession() {
@@ -163,10 +161,10 @@ class TestSessionViewModel(
     fun exitLapDebugMode() {
         isLapRecording = false
         lastLapGpsSample = null
-        _currentMode.value = TestMode.Acceleration
+        _latestLapRecords.value = emptyList()
         _lapRunConfig.value = null
         _lapSession.value = null
-        _latestLapRecords.value = emptyList()
+        _currentMode.value = TestMode.Acceleration
     }
 
     fun skipCountdown() {
@@ -294,6 +292,12 @@ class TestSessionViewModel(
         }
     }
 
+    fun currentLapTrackDebugSummary(): String? {
+        val trackId = _lapRunConfig.value?.trackId ?: return null
+        val track = trackCatalog.getTrack(trackId) ?: return null
+        return buildTrackDebugSummary(track)
+    }
+
     private fun bridgeGpsToLapTiming(gpsData: GpsData) {
         val config = _lapRunConfig.value ?: return
         if (_currentMode.value != TestMode.LapDebug || !isLapRecording) return
@@ -302,12 +306,13 @@ class TestSessionViewModel(
         val track = trackCatalog.getTrack(config.trackId) ?: return
         val currentSample = gpsData.toLapGpsSample()
         val previousSample = lastLapGpsSample
+
         FileLogger.d(
             TAG,
             "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${gpsData.latitude}, lon=${gpsData.longitude}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude}, prevLon=${previousSample?.longitude}"
         )
-        lastLapGpsSample = currentSample
 
+        lastLapGpsSample = currentSample
         if (previousSample == null || currentSample.timestampMillis <= 0L) {
             _lapSession.value = currentSession
             return
@@ -319,12 +324,31 @@ class TestSessionViewModel(
             previousSample = previousSample,
             currentSample = currentSample
         )
+
         FileLogger.d(
             TAG,
             "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
         )
+
         _lapSession.value = updatedSession
         _latestLapRecords.value = updatedSession.completedLaps
+    }
+
+    private fun createLapSession(trackId: String): LapSession {
+        return LapSession(
+            sessionId = UUID.randomUUID().toString(),
+            trackId = trackId,
+            status = LapSessionStatus.Ready
+        )
+    }
+
+    private fun buildTrackDebugSummary(track: Track): String {
+        val startFinish = track.startFinishGate
+        val sectors = track.sectorGates.joinToString(separator = ";") { gate ->
+            "${gate.id}=${gate.line.start.latitude},${gate.line.start.longitude}->${gate.line.end.latitude},${gate.line.end.longitude}|dir=${gate.passDirection.x},${gate.passDirection.y}"
+        }
+
+        return "trackId=${track.id},source=${track.source},layoutName=${track.layoutName},startFinish=${startFinish.line.start.latitude},${startFinish.line.start.longitude}->${startFinish.line.end.latitude},${startFinish.line.end.longitude}|dir=${startFinish.passDirection.x},${startFinish.passDirection.y},sectors=[$sectors]"
     }
 
     private fun GpsData.toLapGpsSample(): GpsSample = GpsSample(

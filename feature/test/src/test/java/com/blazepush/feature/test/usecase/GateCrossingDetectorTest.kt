@@ -60,6 +60,30 @@ class GateCrossingDetectorTest {
         assertEquals(null, detection.directionScore)
     }
 
+    @Test
+    fun crossingInfiniteGateExtensionOutsideSegment_isRejected() {
+        val detection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.1, longitude = 1.5),
+            current = sample(timestampMillis = 1_100L, latitude = 0.1, longitude = 1.5),
+            gate = gate()
+        )
+
+        assertEquals(false, detection.accepted)
+        assertEquals(CrossingReason.NoIntersection, detection.reason)
+    }
+
+    @Test
+    fun crossingWithinGateSegment_isAccepted() {
+        val detection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.1, longitude = 0.5),
+            current = sample(timestampMillis = 1_100L, latitude = 0.1, longitude = 0.5),
+            gate = gate()
+        )
+
+        assertEquals(true, detection.accepted)
+        assertEquals(CrossingReason.Accepted, detection.reason)
+    }
+
     private fun gate(): TimingGate = TimingGate(
         id = "start-finish",
         name = "Start/Finish",

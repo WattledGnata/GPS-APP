@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.di
 
 import com.blazepush.core.domain.usecase.GpsDataFilter
+import com.blazepush.feature.test.repository.TrackCatalog
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.koin.core.context.startKoin
@@ -19,6 +20,21 @@ class DomainModuleKoinTest {
         try {
             val filter = get<GpsDataFilter>(GpsDataFilter::class.java)
             assertNotNull(filter)
+        } finally {
+            stopKoin()
+        }
+    }
+
+    @Test
+    fun domainModule_providesTrackCatalog() {
+        stopKoin()
+        startKoin {
+            modules(domainModule)
+        }
+
+        try {
+            val trackCatalog = get<TrackCatalog>(TrackCatalog::class.java)
+            assertNotNull(trackCatalog)
         } finally {
             stopKoin()
         }

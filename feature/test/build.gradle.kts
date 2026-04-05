@@ -69,9 +69,9 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
-    testImplementation(libs.gson)
     testImplementation(project(":simulator"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("org.mockito:mockito-core:5.2.0")

@@ -18,15 +18,18 @@ class GateCrossingDetector {
         current: GpsSample,
         gate: TimingGate
     ): GateCrossingDetection {
-        val previousSide = signedSide(previous.latitude, previous.longitude, gate)
-        val currentSide = signedSide(current.latitude, current.longitude, gate)
-        val crossedGateLine =
-            previousSide == 0.0 ||
-                currentSide == 0.0 ||
-                (previousSide < 0.0 && currentSide > 0.0) ||
-                (previousSide > 0.0 && currentSide < 0.0)
+        val crossedGateSegment = segmentsIntersect(
+            ax = previous.latitude,
+            ay = previous.longitude,
+            bx = current.latitude,
+            by = current.longitude,
+            cx = gate.line.start.latitude,
+            cy = gate.line.start.longitude,
+            dx = gate.line.end.latitude,
+            dy = gate.line.end.longitude
+        )
 
-        if (!crossedGateLine) {
+        if (!crossedGateSegment) {
             return GateCrossingDetection(
                 accepted = false,
                 reason = CrossingReason.NoIntersection,
@@ -69,13 +72,29 @@ class GateCrossingDetector {
         )
     }
 
-    private fun signedSide(latitude: Double, longitude: Double, gate: TimingGate): Double {
-        val start = gate.line.start
-        val end = gate.line.end
-        val gateVectorX = end.latitude - start.latitude
-        val gateVectorY = end.longitude - start.longitude
-        val pointVectorX = latitude - start.latitude
-        val pointVectorY = longitude - start.longitude
-        return (gateVectorX * pointVectorY) - (gateVectorY * pointVectorX)
+    private fun segmentsIntersect(
+        ax: Double,
+        ay: Double,
+        bx: Double,
+        by: Double,
+        cx: Double,
+        cy: Double,
+        dx: Double,
+        dy: Double
+    ): Boolean {
+        val abx = bx - ax
+        val aby = by - ay
+        val cdx = dx - cx
+        val cdy = dy - cy
+        val denominator = (abx * cdy) - (aby * cdx)
+        if (denominator == 0.0) {
+            return false
+        }
+
+        val acx = cx - ax
+        val acy = cy - ay
+        val t = ((acx * cdy) - (acy * cdx)) / denominator
+        val u = ((acx * aby) - (acy * abx)) / denominator
+        return t in 0.0..1.0 && u in 0.0..1.0
     }
 }

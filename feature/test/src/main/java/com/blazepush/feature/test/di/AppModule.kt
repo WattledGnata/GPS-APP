@@ -17,7 +17,10 @@ import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import com.blazepush.core.domain.usecase.DataSmoothing
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
+import com.blazepush.feature.test.repository.AssetReplayTrackSource
 import com.blazepush.feature.test.repository.PresetTrackCatalog
+import com.blazepush.feature.test.repository.ReplayAlignedTrackCatalog
+import com.blazepush.feature.test.repository.ReplayTrackSource
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.GateCrossingDetector
 import com.blazepush.feature.test.usecase.LapTimingEngine
@@ -82,7 +85,8 @@ val domainModule = module {
     factory { DataInterpolator() }
     factory { GateCrossingDetector() }
     factory { LapTimingEngine(get()) }
-    single<TrackCatalog> { PresetTrackCatalog() }
+    single<ReplayTrackSource> { AssetReplayTrackSource(androidContext()) }
+    single<TrackCatalog> { ReplayAlignedTrackCatalog(get(), PresetTrackCatalog()) }
 }
 
 /**

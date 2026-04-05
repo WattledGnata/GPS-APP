@@ -1,10 +1,11 @@
 package com.blazepush.feature.test.usecase
 
-import android.util.Log
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.model.laptiming.ActiveLap
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
+import com.blazepush.feature.test.model.laptiming.LapQualityFlag
 import com.blazepush.feature.test.model.laptiming.LapRecord
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
@@ -25,10 +26,117 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
         currentSample: GpsSample
     ): LapSession {
         val updatedSamples = session.samples + currentSample
-        val orderedGates = orderedGates(track)
+        val startFinishDetection = detector.detect(previous = previousSample, current = currentSample, gate = track.startFinishGate)
+        FileLogger.d(
+            TAG,
+            "targetGate=${track.startFinishGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${startFinishDetection.accepted}, reason=${startFinishDetection.reason}, directionScore=${startFinishDetection.directionScore}, directionalSpeed=${startFinishDetection.directionalSpeedMps}"
+        )
+        if (startFinishDetection.accepted) {
+            return handleStartFinishCrossing(
+                session = session,
+                track = track,
+                updatedSamples = updatedSamples,
+                currentSample = currentSample,
+                detection = startFinishDetection
+            )
+        }
+
         val targetGate = expectedGate(track, session.nextExpectedGateIndex) ?: return session.copy(samples = updatedSamples)
 
-        val unexpectedGate = orderedGates
+        return handleSectorCrossing(
+            session = session,
+            track = track,
+            previousSample = previousSample,
+            currentSample = currentSample,
+            updatedSamples = updatedSamples,
+            targetGate = targetGate
+        )
+    }
+
+    private fun handleStartFinishCrossing(
+        session: LapSession,
+        track: Track,
+        updatedSamples: List<GpsSample>,
+        currentSample: GpsSample,
+        detection: GateCrossingDetection
+    ): LapSession {
+        val crossingEvent = CrossingEvent(
+            gateId = track.startFinishGate.id,
+            gateType = track.startFinishGate.type,
+            timestampMillis = currentSample.timestampMillis,
+            sampleIndex = updatedSamples.lastIndex,
+            accepted = detection.accepted,
+            reason = detection.reason,
+            directionalSpeedMps = detection.directionalSpeedMps,
+            directionScore = detection.directionScore
+        )
+        val updatedEvents = session.crossingEvents + crossingEvent
+
+        if (session.activeLap == null) {
+            return session.copy(
+                status = LapSessionStatus.Recording,
+                startedAtMillis = session.startedAtMillis ?: currentSample.timestampMillis,
+                samples = updatedSamples,
+                currentLapIndex = 1,
+                nextExpectedGateIndex = 1,
+                crossingEvents = updatedEvents,
+                activeLap = ActiveLap(
+                    lapIndex = 1,
+                    startedAtMillis = currentSample.timestampMillis,
+                    passedGateIds = listOf(track.startFinishGate.id),
+                    sampleStartIndex = updatedSamples.lastIndex
+                )
+            )
+        }
+
+        val activeLap = session.activeLap
+        val qualityFlags = if (activeLap.sectorEntries.size == track.sectorGates.size) {
+            emptyList()
+        } else {
+            listOf(LapQualityFlag.IncompleteSectors)
+        }
+        val lapRecord = LapRecord(
+            recordId = "${session.sessionId}-lap-${activeLap.lapIndex}",
+            sessionId = session.sessionId,
+            trackId = session.trackId,
+            lapIndex = activeLap.lapIndex,
+            startedAtMillis = activeLap.startedAtMillis,
+            finishedAtMillis = currentSample.timestampMillis,
+            durationMillis = currentSample.timestampMillis - activeLap.startedAtMillis,
+            sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
+            trajectory = updatedSamples.drop(activeLap.sampleStartIndex),
+            crossingEvents = updatedEvents.dropWhile { it.timestampMillis < activeLap.startedAtMillis },
+            qualityFlags = qualityFlags
+        )
+        val nextLapIndex = activeLap.lapIndex + 1
+        return session.copy(
+            status = LapSessionStatus.Recording,
+            samples = updatedSamples,
+            currentLapIndex = nextLapIndex,
+            nextExpectedGateIndex = 1,
+            crossingEvents = updatedEvents,
+            completedLaps = session.completedLaps + lapRecord,
+            activeLap = ActiveLap(
+                lapIndex = nextLapIndex,
+                startedAtMillis = currentSample.timestampMillis,
+                passedGateIds = listOf(track.startFinishGate.id),
+                sampleStartIndex = updatedSamples.lastIndex
+            )
+        )
+    }
+
+    private fun handleSectorCrossing(
+        session: LapSession,
+        track: Track,
+        previousSample: GpsSample,
+        currentSample: GpsSample,
+        updatedSamples: List<GpsSample>,
+        targetGate: TimingGate
+    ): LapSession {
+        val activeLap = session.activeLap ?: return session.copy(samples = updatedSamples)
+        val orderedSectorGates = track.sectorGates.sortedBy { it.sequenceIndex }
+
+        val unexpectedGate = orderedSectorGates
             .asSequence()
             .filter { it.id != targetGate.id }
             .map { gate -> gate to detector.detect(previous = previousSample, current = currentSample, gate = gate) }
@@ -53,7 +161,7 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
         }
 
         val detection = detector.detect(previous = previousSample, current = currentSample, gate = targetGate)
-        Log.d(
+        FileLogger.d(
             TAG,
             "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${detection.accepted}, reason=${detection.reason}, directionScore=${detection.directionScore}, directionalSpeed=${detection.directionalSpeedMps}"
         )
@@ -75,87 +183,22 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
             return session.copy(samples = updatedSamples, crossingEvents = updatedEvents)
         }
 
-        return when {
-            targetGate == track.startFinishGate && session.activeLap == null -> {
-                session.copy(
-                    status = LapSessionStatus.Recording,
-                    startedAtMillis = session.startedAtMillis ?: currentSample.timestampMillis,
-                    samples = updatedSamples,
-                    currentLapIndex = 1,
-                    nextExpectedGateIndex = 1,
-                    crossingEvents = updatedEvents,
-                    activeLap = ActiveLap(
-                        lapIndex = 1,
-                        startedAtMillis = currentSample.timestampMillis,
-                        passedGateIds = listOf(targetGate.id),
-                        sampleStartIndex = updatedSamples.lastIndex
-                    )
+        return session.copy(
+            samples = updatedSamples,
+            nextExpectedGateIndex = session.nextExpectedGateIndex + 1,
+            crossingEvents = updatedEvents,
+            activeLap = activeLap.copy(
+                passedGateIds = activeLap.passedGateIds + targetGate.id,
+                sectorEntries = activeLap.sectorEntries + SectorEntry(
+                    gateId = targetGate.id,
+                    crossedAtMillis = currentSample.timestampMillis
                 )
-            }
-
-            targetGate != track.startFinishGate && session.activeLap != null -> {
-                val activeLap = session.activeLap
-                session.copy(
-                    samples = updatedSamples,
-                    nextExpectedGateIndex = session.nextExpectedGateIndex + 1,
-                    crossingEvents = updatedEvents,
-                    activeLap = activeLap.copy(
-                        passedGateIds = activeLap.passedGateIds + targetGate.id,
-                        sectorEntries = activeLap.sectorEntries + SectorEntry(
-                            gateId = targetGate.id,
-                            crossedAtMillis = currentSample.timestampMillis
-                        )
-                    )
-                )
-            }
-
-            targetGate == track.startFinishGate && session.activeLap != null -> {
-                val activeLap = session.activeLap
-                val lapRecord = LapRecord(
-                    recordId = "${session.sessionId}-lap-${activeLap.lapIndex}",
-                    sessionId = session.sessionId,
-                    trackId = session.trackId,
-                    lapIndex = activeLap.lapIndex,
-                    startedAtMillis = activeLap.startedAtMillis,
-                    finishedAtMillis = currentSample.timestampMillis,
-                    durationMillis = currentSample.timestampMillis - activeLap.startedAtMillis,
-                    sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
-                    trajectory = updatedSamples.drop(activeLap.sampleStartIndex),
-                    crossingEvents = updatedEvents.dropWhile { it.timestampMillis < activeLap.startedAtMillis },
-                    qualityFlags = emptyList()
-                )
-                val nextLapIndex = activeLap.lapIndex + 1
-                session.copy(
-                    status = LapSessionStatus.Recording,
-                    samples = updatedSamples,
-                    currentLapIndex = nextLapIndex,
-                    nextExpectedGateIndex = 1,
-                    crossingEvents = updatedEvents,
-                    completedLaps = session.completedLaps + lapRecord,
-                    activeLap = ActiveLap(
-                        lapIndex = nextLapIndex,
-                        startedAtMillis = currentSample.timestampMillis,
-                        passedGateIds = listOf(targetGate.id),
-                        sampleStartIndex = updatedSamples.lastIndex
-                    )
-                )
-            }
-
-            else -> session.copy(samples = updatedSamples, crossingEvents = updatedEvents)
-        }
+            )
+        )
     }
 
-    private fun expectedGate(track: Track, nextExpectedGateIndex: Int): TimingGate? {
-        val orderedGates = orderedGates(track)
-        return if (nextExpectedGateIndex <= track.sectorGates.size) {
-            orderedGates.getOrNull(nextExpectedGateIndex)
-        } else {
-            track.startFinishGate
-        }
-    }
-
-    private fun orderedGates(track: Track): List<TimingGate> =
-        listOf(track.startFinishGate) + track.sectorGates.sortedBy { it.sequenceIndex }
+    private fun expectedGate(track: Track, nextExpectedGateIndex: Int): TimingGate? =
+        track.sectorGates.sortedBy { it.sequenceIndex }.getOrNull(nextExpectedGateIndex - 1)
 
     private fun List<SectorEntry>.toSectorTimes(startedAtMillis: Long): List<Long> {
         var previousTimestamp = startedAtMillis
