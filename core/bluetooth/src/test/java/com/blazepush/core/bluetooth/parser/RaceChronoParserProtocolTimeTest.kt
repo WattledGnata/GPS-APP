@@ -2,6 +2,7 @@ package com.blazepush.core.bluetooth.parser
 
 import com.blazepush.core.domain.model.GpsData
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Calendar
 
@@ -12,13 +13,28 @@ class RaceChronoParserProtocolTimeTest {
     @Test
     fun `gps timestamp comes from protocol date and hour plus millis within hour`() {
         val sampleTimestamp = 1773478969360L
-        val timeData = createGpsTimeData(sampleTimestamp)
-        val mainData = createGpsMainData((sampleTimestamp % 3_600_000L).toInt())
+        val syncBits = 3
+        val timeData = createGpsTimeData(sampleTimestamp, syncBits)
+        val mainData = createGpsMainData((sampleTimestamp % 3_600_000L).toInt(), syncBits)
 
         val afterTimePacket = parser.parseGpsTimeData(timeData, emptyGpsData())
         val result = parser.parseGpsData(mainData, afterTimePacket)
 
         assertEquals(sampleTimestamp, result.timestamp)
+    }
+
+    @Test
+    fun `gps timestamp falls back when protocol time sync bits do not match main packet`() {
+        val sampleTimestamp = 1773478969360L
+        val timeData = createGpsTimeData(sampleTimestamp, syncBits = 1)
+        val mainData = createGpsMainData((sampleTimestamp % 3_600_000L).toInt(), syncBits = 5)
+
+        val afterTimePacket = parser.parseGpsTimeData(timeData, emptyGpsData())
+        val beforeParse = System.currentTimeMillis()
+        val result = parser.parseGpsData(mainData, afterTimePacket)
+        val afterParse = System.currentTimeMillis()
+
+        assertTrue(result.timestamp in beforeParse..afterParse)
     }
 
     private fun emptyGpsData(): GpsData = GpsData(
@@ -38,7 +54,7 @@ class RaceChronoParserProtocolTimeTest {
         fixQuality = 0
     )
 
-    private fun createGpsTimeData(timestampMillis: Long): ByteArray {
+    private fun createGpsTimeData(timestampMillis: Long, syncBits: Int = 0): ByteArray {
         val calendar = Calendar.getInstance().apply {
             timeInMillis = timestampMillis
         }
@@ -49,16 +65,16 @@ class RaceChronoParserProtocolTimeTest {
         val dateAndHour = yearOffset * 8928 + month * 744 + day * 24 + hour
 
         return byteArrayOf(
-            (dateAndHour shr 16 and 0x1F).toByte(),
+            (((syncBits and 0x07) shl 5) or (dateAndHour shr 16 and 0x1F)).toByte(),
             ((dateAndHour shr 8) and 0xFF).toByte(),
             (dateAndHour and 0xFF).toByte()
         )
     }
 
-    private fun createGpsMainData(timeSinceHourStartMillis: Int): ByteArray {
+    private fun createGpsMainData(timeSinceHourStartMillis: Int, syncBits: Int = 0): ByteArray {
         val data = ByteArray(20)
         val encodedTime = timeSinceHourStartMillis / 2
-        data[0] = (encodedTime shr 16 and 0x1F).toByte()
+        data[0] = (((syncBits and 0x07) shl 5) or (encodedTime shr 16 and 0x1F)).toByte()
         data[1] = ((encodedTime shr 8) and 0xFF).toByte()
         data[2] = (encodedTime and 0xFF).toByte()
         data[3] = ((1 shl 6) or 12).toByte()
