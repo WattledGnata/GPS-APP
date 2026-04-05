@@ -33,6 +33,7 @@ class RaceChronoParser {
     private var lastLatitude: Double? = null
     private var lastLongitude: Double? = null
     private var hasStartedTracking = false
+    private var protocolHourStartMillis: Long? = null
 
     /**
      * Resets all tracking state (distance, time, frequency)
@@ -45,6 +46,7 @@ class RaceChronoParser {
         lastLongitude = null
         gpsDataTimestamps.clear()
         gpsFrequency = 0.0
+        protocolHourStartMillis = null
     }
 
     /**
@@ -64,7 +66,6 @@ class RaceChronoParser {
         }
 
         return try {
-            val syncBits = (data[0].toInt() shr 5) and 0x07
             val dateAndHour = ((data[0].toInt() and 0x1F) shl 16) or
                     ((data[1].toInt() and 0xFF) shl 8) or
                     (data[2].toInt() and 0xFF)
@@ -77,9 +78,14 @@ class RaceChronoParser {
             val hour = remainder2 % 24
             val year = 2000 + yearOffset
 
+            val calendar = java.util.Calendar.getInstance().apply {
+                clear()
+                set(year, month, day + 1, hour, 0, 0)
+            }
+            protocolHourStartMillis = calendar.timeInMillis
+
 //            Log.d(TAG, "GPS Time: $year-${month + 1}-${day + 1} $hour:xx (sync=$syncBits)")
 
-            // GpsData does not yet have time fields; mark test as ready
             if (!currentData.isTestReady) {
                 currentData.copy(isTestReady = true)
             } else {
@@ -239,9 +245,12 @@ class RaceChronoParser {
                 Log.e(TAG, "Error in tracking calculation", e)
             }
 
+            val protocolTimestamp = protocolHourStartMillis?.plus(timeSinceHourStart)
+                ?: System.currentTimeMillis()
+
             // Update Current Data
             currentData = currentData.copy(
-                timestamp = System.currentTimeMillis(),
+                timestamp = protocolTimestamp,
                 speed = speedKmh,
                 latitude = currentLatitude,
                 longitude = currentLongitude,
