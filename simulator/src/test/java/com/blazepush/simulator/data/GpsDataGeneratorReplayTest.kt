@@ -56,4 +56,5 @@ class GpsDataGeneratorReplayTest {
         assertEquals(189.3, bearing, 0.01)
         assertEquals(0.8, hdop, 0.1)
     }
+
 }

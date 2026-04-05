@@ -16,12 +16,15 @@ import com.blazepush.simulator.data.SpeedController
 import com.blazepush.simulator.data.SpeedMode
 import com.blazepush.simulator.data.TestScenario
 import com.blazepush.simulator.data.replay.ReplayAssetLoader
+import com.blazepush.simulator.data.replay.ReplayFrame
 import com.blazepush.simulator.data.replay.ReplayPlaybackPlanner
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -57,7 +60,7 @@ class SimulatorViewModel : ViewModel() {
 
     private var peripheralManager: GpsPeripheralManager? = null
     private var dataGenerator: GpsDataGenerator? = null
-    private var replayJob: Job? = null
+    private var dataUpdateJob: Job? = null
     private var appContext: Context? = null
     private val speedController = SpeedController()
     private val replayAssetLoader = ReplayAssetLoader()
@@ -73,6 +76,22 @@ class SimulatorViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "SimulatorViewModel"
+
+        suspend fun playReplayFramesForever(
+            frames: List<ReplayFrame>,
+            emitFrame: suspend (ReplayFrame) -> Unit
+        ) {
+            if (frames.isEmpty()) return
+            while (kotlin.coroutines.coroutineContext.isActive) {
+                kotlin.coroutines.coroutineContext.ensureActive()
+                for (frame in frames) {
+                    kotlin.coroutines.coroutineContext.ensureActive()
+                    if (frame.delayMillis > 0) delay(frame.delayMillis)
+                    kotlin.coroutines.coroutineContext.ensureActive()
+                    emitFrame(frame)
+                }
+            }
+        }
 
         // 必需的权限
         val REQUIRED_PERMISSIONS = buildList {
@@ -170,8 +189,8 @@ class SimulatorViewModel : ViewModel() {
      * 停止广播
      */
     fun stopAdvertising() {
-        replayJob?.cancel()
-        replayJob = null
+        dataUpdateJob?.cancel()
+        dataUpdateJob = null
         peripheralManager?.stopAdvertising()
         _uiState.value = _uiState.value.copy(
             isAdvertising = false,
@@ -191,15 +210,15 @@ class SimulatorViewModel : ViewModel() {
      * 开始数据更新
      */
     private fun startDataUpdate() {
-        replayJob?.cancel()
-        replayJob = null
+        dataUpdateJob?.cancel()
+        dataUpdateJob = null
 
         if (_uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) {
             startReplayDataUpdate()
             return
         }
 
-        viewModelScope.launch {
+        dataUpdateJob = viewModelScope.launch {
             val generator = dataGenerator ?: return@launch
             val manager = peripheralManager ?: return@launch
 
@@ -223,7 +242,7 @@ class SimulatorViewModel : ViewModel() {
     }
 
     private fun startReplayDataUpdate() {
-        replayJob = viewModelScope.launch {
+        dataUpdateJob = viewModelScope.launch {
             val context = appContext ?: return@launch
             val generator = dataGenerator ?: return@launch
             val manager = peripheralManager ?: return@launch
@@ -231,9 +250,12 @@ class SimulatorViewModel : ViewModel() {
             val replay = replayAssetLoader.loadReplayJson(replayJson)
             val frames = replayPlaybackPlanner.plan(replay.samples)
 
-            for (frame in frames) {
-                if (frame.delayMillis > 0) delay(frame.delayMillis)
+            playReplayFramesForever(frames) { frame ->
                 generator.applyReplaySample(frame.sample)
+                Log.d(
+                    TAG,
+                    "Replay frame: ts=${frame.sample.timestampMillis}, lat=${frame.sample.latitude}, lon=${frame.sample.longitude}, speed=${frame.sample.speedKmh}, bearing=${frame.sample.bearingDegrees}, sats=${frame.sample.satellites}"
+                )
                 val mainData = generator.generateGpsMainData()
                 val timeData = generator.generateGpsTimeData()
                 manager.updateGpsData(mainData, timeData)
@@ -261,6 +283,9 @@ class SimulatorViewModel : ViewModel() {
                 initialSpeed = _uiState.value.initialSpeed,
                 satellites = _uiState.value.satellites
             )
+            if (_uiState.value.isAdvertising) {
+                startDataUpdate()
+            }
         }
     }
 

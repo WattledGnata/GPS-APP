@@ -33,6 +33,7 @@ class GpsDataGenerator(
     private var altitude = 100.0f
     private var hdop = 1.0f
     private var vdop = 1.0f
+    private var replayTimestampMillis: Long? = null
 
     /**
      * 生成20字节GPS主数据（ESP32协议格式）
@@ -42,7 +43,7 @@ class GpsDataGenerator(
         val data = ByteArray(20)
 
         // Byte 0: syncBits(高3位) | time高5位
-        val timeMs = getTimeSinceHourStart() / 2
+        val timeMs = ((currentTimestampMillis() % 3_600_000L).toInt()) / 2
         val timeHigh = (timeMs shr 16)
         data[0] = (((syncCounter and 0x07) shl 5) or (timeHigh and 0x1F)).toByte()
 
@@ -111,13 +112,12 @@ class GpsDataGenerator(
         return data
     }
 
-    /**
-     * 获取从小时开始的毫秒数
-     */
-    private fun getTimeSinceHourStart(): Int {
-        val now = System.currentTimeMillis()
-        val hourStart = (now / 3600000L) * 3600000L
-        return (now - hourStart).toInt()
+    private fun currentTimestampMillis(): Long {
+        return if (scenario == TestScenario.REAL_TRACK_REPLAY) {
+            replayTimestampMillis ?: System.currentTimeMillis()
+        } else {
+            System.currentTimeMillis()
+        }
     }
 
     /**
@@ -135,9 +135,9 @@ class GpsDataGenerator(
     fun generateGpsTimeData(): ByteArray {
         val data = ByteArray(3)
 
-        val now = System.currentTimeMillis()
-        val calendar = java.util.Calendar.getInstance()
-        calendar.timeInMillis = now
+        val calendar = java.util.Calendar.getInstance().apply {
+            timeInMillis = currentTimestampMillis()
+        }
         val year = calendar.get(java.util.Calendar.YEAR)
         val month = calendar.get(java.util.Calendar.MONTH) + 1
         val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
@@ -208,6 +208,7 @@ class GpsDataGenerator(
         altitude = sample.altitudeMeters.toFloat()
         hdop = sample.hdop.toFloat()
         vdop = sample.altitudePrecisionMeters.toFloat().coerceAtLeast(0f)
+        replayTimestampMillis = sample.timestampMillis
     }
 
     /**
@@ -266,5 +267,6 @@ class GpsDataGenerator(
         currentSpeed = initialSpeed
         currentLatitude = 60.1725
         currentLongitude = 24.9375
+        replayTimestampMillis = null
     }
 }
