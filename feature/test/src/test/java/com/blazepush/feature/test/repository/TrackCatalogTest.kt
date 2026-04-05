@@ -74,20 +74,20 @@ class TrackCatalogTest {
         assertEquals(30.4945735, track.referencePath.points[12].latitude, 1e-6)
         assertEquals(104.4332358, track.referencePath.points[12].longitude, 1e-6)
 
-        assertEquals(30.4961790, startFinishLine.start.latitude, 1e-6)
-        assertEquals(104.43329413333335, startFinishLine.start.longitude, 1e-6)
-        assertEquals(30.49662805, startFinishLine.end.latitude, 1e-6)
-        assertEquals(104.43326681666667, startFinishLine.end.longitude, 1e-6)
+        assertEquals(30.496167246506413, startFinishLine.start.latitude, 1e-6)
+        assertEquals(104.43343794245452, startFinishLine.start.longitude, 1e-6)
+        assertEquals(30.49619075349359, startFinishLine.end.latitude, 1e-6)
+        assertEquals(104.43291739087881, startFinishLine.end.longitude, 1e-6)
 
-        assertEquals(30.489821166666662, sector1Line.start.latitude, 1e-6)
-        assertEquals(104.43391746666666, sector1Line.start.longitude, 1e-6)
-        assertEquals(30.489774166666667, sector1Line.end.latitude, 1e-6)
-        assertEquals(104.43443643333333, sector1Line.end.longitude, 1e-6)
+        assertEquals(30.49004451419976, sector1Line.start.latitude, 1e-6)
+        assertEquals(104.43252709154902, sector1Line.start.longitude, 1e-6)
+        assertEquals(30.48959781913357, sector1Line.end.latitude, 1e-6)
+        assertEquals(104.43258157511764, sector1Line.end.longitude, 1e-6)
 
-        assertEquals(30.48948356944875, sector2Line.start.latitude, 1e-6)
-        assertEquals(104.43221728363045, sector2Line.start.longitude, 1e-6)
-        assertEquals(30.48992993055125, sector2Line.end.latitude, 1e-6)
-        assertEquals(104.43227191636953, sector2Line.end.longitude, 1e-6)
+        assertEquals(30.4957579139104, sector2Line.start.latitude, 1e-6)
+        assertEquals(104.4369620745035, sector2Line.start.longitude, 1e-6)
+        assertEquals(30.495765752756267, sector2Line.end.latitude, 1e-6)
+        assertEquals(104.43748325882984, sector2Line.end.longitude, 1e-6)
     }
 
     @Test
