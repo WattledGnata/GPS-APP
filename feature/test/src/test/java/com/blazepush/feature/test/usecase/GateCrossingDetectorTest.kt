@@ -130,17 +130,20 @@ class GateCrossingDetectorTest {
         val track = com.blazepush.feature.test.repository.PresetTrackCatalog()
             .getTrack("preset-tfic-lpcc")!!
         val tficGate = track.startFinishGate
-        // 位移方向与 gate 线夹角约 5°（接近平行但未平行）
+        // 位移方向与 gate 线近平行（与 gate 线夹角 ~5°），攻击 review 1.7 数值稳定性
         val crossing = crossingAcrossGateWithAngle(
             tficGate,
             previousTs = 0L,
             currentTs = 40L,
             distanceMeters = 2.0,
-            angleOffsetDegrees = 85.0 // 与 passDirection 夹角 5°，与 gate 线夹角约 85°
+            // A9 修正：crossingAcrossGateWithAngle 内部把 passUnit 旋转 angleOffsetDegrees，
+            // 85° 意味着位移**与 passDirection 夹角 85°**（即与 gate 线夹角 ~5°，接近平行
+            // 于 gate 线）。原注释写成"与 passDirection 夹角 5°"是反的。
+            angleOffsetDegrees = 85.0
         )
         val detection = detector.detect(crossing.first, crossing.second, tficGate)
         assertEquals(
-            "接近平行（与 passDirection 夹角 5°）但仍跨线的位移必须 accepted",
+            "位移与 gate 线近平行（夹角 ~5°）但仍跨线，必须 accepted（米投影后 denominator 数量级稳定）",
             true, detection.accepted
         )
         assertEquals(CrossingReason.Accepted, detection.reason)

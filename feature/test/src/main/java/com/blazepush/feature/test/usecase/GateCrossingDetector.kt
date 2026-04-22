@@ -34,6 +34,17 @@ class GateCrossingDetector {
         gate: TimingGate
     ): GateCrossingDetection {
         // 1. 以 gate 线中点为投影原点
+        //
+        // 投影契约（A11 / backlog, opsx code review BC.3）：
+        // `lonScale = cos(originLat)` 用 gate 中点单点计算，下游把它应用到 previous /
+        // current 位置投影。这隐含假设：
+        //   - gate 线长度 < 1 km（典型赛道起终点 ~60 m，远小于该阈值）
+        //   - 调用方保证 previous / current 在 gate 附近 < 1 km 半径内（生产中由
+        //     `bridgeGpsToLapTiming` + engine 的 activeLap 边界保证，单帧位移 < 10 m）
+        //
+        // 超出该半径会因 originLat 与实际纬度的差异引入 >0.01% 的经度投影形变。
+        // 当前所有使用场景（TFIC preset 30.49°N，gate 60 m，帧间位移 1-10 m）
+        // 形变 <1e-5，可忽略；未来长 gate / 远距 prev-curr 场景需重新评估。
         val originLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
         val originLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
         val lonScale = METERS_PER_DEGREE_LAT * cos(Math.toRadians(originLat))
@@ -143,7 +154,19 @@ class GateCrossingDetector {
     }
 
     companion object {
-        /** 赤道附近 1° 纬度 ≈ 111320 米（真实值 110.57–111.69 km 之间，工程近似）。 */
+        /**
+         * 赤道附近 1° 纬度 ≈ 111320 米。精确值随纬度变化（110.57–111.69 km）。
+         *
+         * 精度契约（A10 / backlog, opsx code review BC.2）：
+         * - **accept/reject 判定**：误差可忽略（detector 只看相对几何关系，跨纬度一致的
+         *   常量放大因子不影响线段相交、方向点积、单位向量归一化的定性结果）。
+         * - **directionalSpeedMps 读数**：在 ±45° 纬度内偏差 ±0.5%；赤道/极地各走一端
+         *   偏差接近 ±0.4%。TFIC 30.49°N 真实约 110,856 m/deg，本常量 111,320 m/deg
+         *   偏差 +0.42%，120 km/h 读数误差约 ±0.5 km/h —— 够用。
+         * - **不够用的场景**：若未来派生 <0.1% 精度的距离/速度指标（累计里程、分段
+         *   平均车速、起终点插值的圈时毫秒级对齐），必须换 WGS84 椭球大地测量公式
+         *   （geodesic / Vincenty），并把本常量降级为"粗粒度几何判定专用"。
+         */
         private const val METERS_PER_DEGREE_LAT = 111320.0
     }
 }
