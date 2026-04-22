@@ -4,18 +4,25 @@ import com.blazepush.simulator.data.replay.ReplaySample
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * GPS数据生成器
  * 负责生成符合RaceChrono协议的GPS数据
+ *
+ * 时间源规范（fix-laptime-clock-source-integrity）：
+ * - 非 replay 场景：使用构造时注入的 [clock] 会话相对单调时钟
+ *   （生产默认 `SystemClock.elapsedRealtime()`，测试可注入 FakeClock）
+ * - Replay 场景：严格使用 [replayTimestampMillis]，未调用
+ *   [applyReplaySample] 时立即抛 [IllegalStateException]，**不允许** fallback
+ *   到任何本地时钟
+ * - 整个类 **不得** 调用 `System.currentTimeMillis()`
  */
 class GpsDataGenerator(
     private val scenario: TestScenario = TestScenario.STATIC,
     private var frequency: Int = 10,
     private var initialSpeed: Float = 0f,
-    private var satellites: Int = 12
+    private var satellites: Int = 12,
+    private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() }
 ) {
 
     companion object {
@@ -34,6 +41,12 @@ class GpsDataGenerator(
     private var hdop = 1.0f
     private var vdop = 1.0f
     private var replayTimestampMillis: Long? = null
+
+    /**
+     * 会话启动时刻（来自注入 [clock]）——非 replay 场景下，[currentTimestampMillis]
+     * 以此为原点计算"会话相对时钟"。
+     */
+    private var sessionStartRealtimeMillis: Long = clock()
 
     /**
      * 生成20字节GPS主数据（ESP32协议格式）
@@ -112,11 +125,22 @@ class GpsDataGenerator(
         return data
     }
 
+    /**
+     * 协议编码用的时间源。
+     *
+     * - [TestScenario.REAL_TRACK_REPLAY]：`replayTimestampMillis`，缺失立即抛异常（不得 fallback）
+     * - 其他场景：`clock() - sessionStartRealtimeMillis`（会话相对单调毫秒）
+     *
+     * 永远 **不得** 返回 `System.currentTimeMillis()`。
+     */
     private fun currentTimestampMillis(): Long {
         return if (scenario == TestScenario.REAL_TRACK_REPLAY) {
-            replayTimestampMillis ?: System.currentTimeMillis()
+            replayTimestampMillis
+                ?: throw IllegalStateException(
+                    "Replay sample missing timestamp - did you forget to call applyReplaySample()?"
+                )
         } else {
-            System.currentTimeMillis()
+            clock() - sessionStartRealtimeMillis
         }
     }
 
@@ -131,6 +155,9 @@ class GpsDataGenerator(
      * 生成3字节GPS时间数据（ESP32协议格式）
      * 格式: [ sync(3bit)|dateHigh(5bit) | dateMid(8bit) | dateLow(8bit) ]
      * dateAndHour = yearOffset*8928 + (month-1)*744 + (day-1)*24 + hour
+     *
+     * 注：simulator 以 `yearOffset = 0` 编码（虚拟 2000-01-01 起点），**不反映真实日历**，
+     * 接收端 parser 不得据此做真实日历业务判断。
      */
     fun generateGpsTimeData(): ByteArray {
         val data = ByteArray(3)
@@ -138,12 +165,12 @@ class GpsDataGenerator(
         val calendar = java.util.Calendar.getInstance().apply {
             timeInMillis = currentTimestampMillis()
         }
-        val year = calendar.get(java.util.Calendar.YEAR)
         val month = calendar.get(java.util.Calendar.MONTH) + 1
         val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
         val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
 
-        val yearOffset = if (year > 2000) year - 2000 else 0
+        // 固定 yearOffset = 0（相对 2000-01-01 起点，不反映真实日历）
+        val yearOffset = 0
         val dateAndHour = yearOffset * 8928 + (month - 1) * 744 + (day - 1) * 24 + hour
 
         data[0] = (((syncCounter and 0x07) shl 5) or (dateAndHour shr 16) and 0x1F).toByte()
@@ -261,12 +288,17 @@ class GpsDataGenerator(
     }
 
     /**
-     * 重置模拟状态
+     * 重置模拟状态。
+     *
+     * 同时重置会话相对时钟起点（非 replay 场景下新一轮 `timeSinceHourStart` 从 0 开始）
+     * 并清零 `replayTimestampMillis`（replay 场景下下次 generate 前必须重新 [applyReplaySample]，
+     * 否则抛 [IllegalStateException]）。
      */
     fun reset() {
         currentSpeed = initialSpeed
         currentLatitude = 60.1725
         currentLongitude = 24.9375
         replayTimestampMillis = null
+        sessionStartRealtimeMillis = clock()
     }
 }

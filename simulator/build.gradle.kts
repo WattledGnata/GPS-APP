@@ -47,6 +47,11 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    testOptions {
+        // 让未 mock 的 Android API（如 SystemClock.elapsedRealtime()）在 JVM 单测中返回默认值而不是抛异常，
+        // 避免 GpsDataGenerator 的默认 clock（android.os.SystemClock.elapsedRealtime）在构造期炸测试。
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -63,6 +68,8 @@ dependencies {
     implementation(libs.gson)
 
     testImplementation(libs.junit)
+    testImplementation("org.mockito:mockito-core:5.2.0")
+    testImplementation("org.mockito:mockito-inline:5.2.0")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

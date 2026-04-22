@@ -2,7 +2,7 @@ package com.blazepush.simulator.data
 
 import com.blazepush.simulator.data.replay.ReplaySample
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Calendar
 
@@ -58,18 +58,24 @@ class GpsDataGeneratorReplayClockTest {
                 ((data[1].toInt() and 0xFF) shl 8) or
                 (data[2].toInt() and 0xFF)
 
+        // Spec 要求：`yearOffset` 固定为 0（虚拟 2000-01-01 起点，不反映真实日历）。
+        // 期望值只含 (month-1) * 744 + (day-1) * 24 + hour。
         val calendar = Calendar.getInstance().apply {
             timeInMillis = sample.timestampMillis
         }
         val expected =
-            (calendar.get(Calendar.YEAR) - 2000) * 8928 +
-                calendar.get(Calendar.MONTH) * 744 +
+            calendar.get(Calendar.MONTH) * 744 +
                 (calendar.get(Calendar.DAY_OF_MONTH) - 1) * 24 +
                 calendar.get(Calendar.HOUR_OF_DAY)
 
         assertEquals(expected, encodedDateAndHour)
     }
 
+    /**
+     * Spec 锁定：`reset()` 后 `replayTimestampMillis` 被清零，replay 模式下
+     * 再次 generate 前必须重新 [GpsDataGenerator.applyReplaySample]，否则立即抛
+     * [IllegalStateException]（不得 fallback 到任何本地时钟）。
+     */
     @Test
     fun `reset clears replay timestamp clock source`() {
         val generator = GpsDataGenerator(scenario = TestScenario.REAL_TRACK_REPLAY)
@@ -88,21 +94,15 @@ class GpsDataGeneratorReplayClockTest {
 
         generator.applyReplaySample(sample)
         generator.reset()
-        val data = generator.generateGpsTimeData()
-        val encodedDateAndHour =
-            ((data[0].toInt() and 0x1F) shl 16) or
-                ((data[1].toInt() and 0xFF) shl 8) or
-                (data[2].toInt() and 0xFF)
 
-        val replayCalendar = Calendar.getInstance().apply {
-            timeInMillis = sample.timestampMillis
+        try {
+            generator.generateGpsTimeData()
+            org.junit.Assert.fail("Expected IllegalStateException after reset clears replayTimestampMillis")
+        } catch (e: IllegalStateException) {
+            assertTrue(
+                "exception message should contain 'Replay sample missing timestamp'",
+                e.message?.contains("Replay sample missing timestamp") == true
+            )
         }
-        val replayDateAndHour =
-            (replayCalendar.get(Calendar.YEAR) - 2000) * 8928 +
-                replayCalendar.get(Calendar.MONTH) * 744 +
-                (replayCalendar.get(Calendar.DAY_OF_MONTH) - 1) * 24 +
-                replayCalendar.get(Calendar.HOUR_OF_DAY)
-
-        assertNotEquals(replayDateAndHour, encodedDateAndHour)
     }
 }
