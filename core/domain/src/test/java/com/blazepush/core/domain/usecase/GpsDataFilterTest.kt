@@ -1,6 +1,6 @@
-package com.blazepush.domain.usecase
+package com.blazepush.core.domain.usecase
 
-import com.blazepush.domain.model.GpsData
+import com.blazepush.core.domain.model.GpsData
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -10,6 +10,11 @@ import org.junit.Test
  * 测试GPS数据异常点过滤逻辑
  *
  * 测试用例命名规范：GF[序号]_[场景]_[预期行为]
+ *
+ * 迁移说明（战役 D）：本文件原位于 `app/src/test/java/com/blazepush/domain/usecase/`，
+ * 因源码已迁至 `core:domain` 而停留在旧 package，`:app:compileDebugUnitTestKotlin` 直接 fail。
+ * 战役 D 将其迁回 `core/domain/src/test/...`，并合并战役 A（`fix-laptime-clock-source-integrity`）
+ * 临时寄存在 `feature:test` 下的两条 filter 守卫用例（`process_notTimeSynced_*`）。
  */
 class GpsDataFilterTest {
 
@@ -23,7 +28,11 @@ class GpsDataFilterTest {
     // ==================== 辅助函数 ====================
 
     /**
-     * 创建测试用的GpsData
+     * 创建测试用的 GpsData
+     *
+     * 注意：迁移后新增的分层守卫要求 `isTimeSynced` 为 true 才会进入正常滤波路径，
+     * 因此本辅助函数默认置为 true；专门测试未同步场景的用例位于文件末尾，使用独立的工厂。
+     *
      * @param timestamp 时间戳（毫秒），默认基于索引递增40ms（25Hz）
      * @param speed 速度（km/h）
      */
@@ -49,7 +58,9 @@ class GpsDataFilterTest {
         frequency = 25.0,
         isConnected = true,
         isTestReady = true,
-        errorMessage = null
+        errorMessage = null,
+        fixQuality = 1,
+        isTimeSynced = true
     )
 
     /**
@@ -342,7 +353,7 @@ class GpsDataFilterTest {
      *
      * 场景：调用reset后应能重新开始
      * 输入：处理一些数据后调用reset
-     * 预期：重���后能正常重新处理
+     * 预期：重置后能正常重新处理
      */
     @Test
     fun GF08_reset_clearsState() {
@@ -357,7 +368,7 @@ class GpsDataFilterTest {
         val data2 = createAccelerationSequence(100.0, 110.0, 9)
         val results = data2.map { filter.process(it) }
 
-        assertEquals("应有9个结��", 9, results.size)
+        assertEquals("应有9个结果", 9, results.size)
         // 速度应在100-110范围内
         assertTrue(
             "速度应在正确范围内",
@@ -1030,5 +1041,138 @@ class GpsDataFilterTest {
                 filteredRange <= originalRange
             )
         }
+    }
+
+    // ==================== 分层守卫：时间未同步时不做 delta 计算（战役 A 合并） ====================
+
+    /**
+     * 构造测试用的未同步帧。`timestamp = Long.MIN_VALUE` 与 parser sentinel 对齐，
+     * 用于验证守卫生效时不会因为对 sentinel 做减法产生溢出。
+     */
+    private fun unsyncedSample(
+        speed: Double = 50.0,
+        latitude: Double = 30.5,
+        longitude: Double = 104.4,
+        altitude: Double = 500.0,
+        bearing: Double = 90.0,
+        hdop: Double = 1.0
+    ): GpsData = GpsData(
+        timestamp = Long.MIN_VALUE,
+        speed = speed,
+        latitude = latitude,
+        longitude = longitude,
+        altitude = altitude,
+        bearing = bearing,
+        satelliteCount = 8,
+        hdop = hdop,
+        vdop = 1.0,
+        frequency = 25.0,
+        isConnected = true,
+        isTestReady = false,
+        errorMessage = null,
+        fixQuality = 1,
+        isTimeSynced = false
+    )
+
+    /**
+     * 构造测试用的已同步帧。用于恢复场景验证。
+     */
+    private fun syncedSample(
+        timestamp: Long,
+        speed: Double = 50.0,
+        latitude: Double = 30.5,
+        longitude: Double = 104.4,
+        altitude: Double = 500.0,
+        bearing: Double = 90.0,
+        hdop: Double = 1.0
+    ): GpsData = GpsData(
+        timestamp = timestamp,
+        speed = speed,
+        latitude = latitude,
+        longitude = longitude,
+        altitude = altitude,
+        bearing = bearing,
+        satelliteCount = 8,
+        hdop = hdop,
+        vdop = 1.0,
+        frequency = 25.0,
+        isConnected = true,
+        isTestReady = false,
+        errorMessage = null,
+        fixQuality = 1,
+        isTimeSynced = true
+    )
+
+    /**
+     * 守卫生效时直接返回"零时间 delta 快照"：
+     * - speed / latitude 等空间量从 raw 透传；
+     * - acceleration / confidence 归零；
+     * - isAnomaly / isPositionAnomaly 为 false；
+     * - timestamp 保持 raw 值（sentinel）。
+     *
+     * 对应 spec：
+     * `openspec/changes/fix-laptime-clock-source-integrity/specs/laptime-clock-source/spec.md`
+     *   Requirement: 分层守卫 — Scenario "GpsDataFilter 在未同步时不做时间 delta 计算"。
+     */
+    @Test
+    fun process_notTimeSynced_returnsZeroDeltaSnapshot() {
+        val localFilter = GpsDataFilter()
+        val raw = unsyncedSample(speed = 50.0, latitude = 30.5, longitude = 104.4)
+
+        val result = localFilter.process(raw)
+
+        assertEquals(50.0, result.speed, 1e-9)
+        assertEquals(30.5, result.latitude, 1e-9)
+        assertEquals(104.4, result.longitude, 1e-9)
+        assertEquals(0.0, result.acceleration, 1e-9)
+        assertEquals(0.0, result.confidence, 1e-9)
+        assertFalse(result.isAnomaly)
+        assertFalse(result.isPositionAnomaly)
+        assertEquals(Long.MIN_VALUE, result.timestamp)
+        assertEquals(1.0, result.consistencyFactor, 1e-9)
+    }
+
+    /**
+     * 守卫生效时不得更新 `previousRaw / previousPosition / 四个窗口`。
+     *
+     * **间接验证**：喂 10 帧未同步帧后，再喂 1 帧已同步帧；此时该同步帧对 filter 而言
+     * 应是"首帧"——`calculateAcceleration` 在 `previousRaw == null` 分支会返回 0.0。
+     * 如果任何一个未同步帧意外更新了内部 `previousRaw`，则第 11 帧的 dt 将对应着
+     * `Long.MIN_VALUE` 到当前时间戳的溢出差值，`acceleration` 结果必然异常（非 0）。
+     */
+    @Test
+    fun process_notTimeSynced_doesNotUpdateInternalState() {
+        val localFilter = GpsDataFilter()
+
+        // 10 帧未同步帧，速度从 10 递增到 100，位置偏移，制造足够"诱人"的状态变化以放大漏改风险
+        repeat(10) { idx ->
+            val raw = unsyncedSample(
+                speed = 10.0 + idx * 10.0,
+                latitude = 30.5 + idx * 0.0001,
+                longitude = 104.4 + idx * 0.0001,
+                bearing = (idx * 10).toDouble()
+            )
+            val result = localFilter.process(raw)
+            // 每一帧都必须是零 delta 快照，侧面验证守卫没被绕过
+            assertEquals(0.0, result.acceleration, 1e-9)
+            assertEquals(0.0, result.confidence, 1e-9)
+            assertFalse(result.isAnomaly)
+            assertFalse(result.isPositionAnomaly)
+        }
+
+        // 第 11 帧切回同步。如果 filter 真的被未同步帧污染了内部状态，
+        // 那它会把上一帧（`Long.MIN_VALUE`）拿来和当前 timestamp 做减法，
+        // 导致 acceleration 出现溢出值或非零速度差结果。
+        val resumed = syncedSample(
+            timestamp = 1_000_000L,
+            speed = 80.0,
+            latitude = 30.6,
+            longitude = 104.5
+        )
+        val resumedResult = localFilter.process(resumed)
+
+        // 同步恢复的首帧视作首样本：acceleration = 0，isAnomaly = false
+        assertEquals(0.0, resumedResult.acceleration, 1e-9)
+        assertFalse(resumedResult.isAnomaly)
     }
 }

@@ -1,18 +1,28 @@
-package com.blazepush.viewmodel
+package com.blazepush.feature.test.viewmodel
 
-import com.blazepush.domain.model.GpsData
-import com.blazepush.domain.model.TestTemplate
-import com.blazepush.domain.usecase.FilteredGpsData
-import com.blazepush.domain.usecase.GpsDataFilter
-import org.junit.Assert.*
+import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.usecase.GpsDataFilter
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * TestSessionViewModel 集成测试
+ * TestSessionViewModel 集成测试（迁移自旧 `com.blazepush.viewmodel` package）
+ *
  * 测试GPS数据过滤器集成和触发条件检测
  *
  * 测试用例命名规范：TS[序号]_[场景]_[预期行为]
+ *
+ * 迁移说明（战役 D）：原文件位于 `app/src/test/java/com/blazepush/viewmodel/TestSessionViewModelTest.kt`，
+ * 旧 `TestSessionViewModel` 源码已迁至 `feature.test.viewmodel`，package 与 import 路径均已失效。
+ * 战役 D 把它迁到 `feature/test/src/test/java/com/blazepush/feature/test/viewmodel/TestSessionViewModelTest.kt`，
+ * 并与现有的 `TestSessionViewModelTrackLapTest.kt` 共存（后者测的是 Track/Lap 场景，本文件保留原来的
+ * GpsDataFilter 集成语义）。
+ *
+ * 注意：本文件的用例只依赖 `GpsDataFilter` 的行为，没有真正实例化 `TestSessionViewModel`。
+ * 因此本次迁移的目标只是把"编译 fail"修成"编译通过并跑绿"，不扩展到 ViewModel 构造参数的 mock 化。
  */
 class TestSessionViewModelTest {
 
@@ -27,6 +37,9 @@ class TestSessionViewModelTest {
 
     /**
      * 创建测试用的GpsData
+     *
+     * 迁移后新增分层守卫，`isTimeSynced = true` 才会走正常滤波路径；
+     * 本文件所有用例都在测试已同步后的行为，默认置 true。
      */
     private fun createGpsData(
         timestamp: Long = System.currentTimeMillis(),
@@ -47,7 +60,9 @@ class TestSessionViewModelTest {
         frequency = 25.0,
         isConnected = true,
         isTestReady = true,
-        errorMessage = null
+        errorMessage = null,
+        fixQuality = 1,
+        isTimeSynced = true
     )
 
     /**

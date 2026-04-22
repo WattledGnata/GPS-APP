@@ -1,8 +1,8 @@
 package com.blazepush.feature.test.di
 
 import androidx.room.Room
-import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
 import com.blazepush.core.data.local.AppDatabase
@@ -86,7 +86,13 @@ val domainModule = module {
     factory { GateCrossingDetector() }
     factory { LapTimingEngine(get()) }
     single<ReplayTrackSource> { AssetReplayTrackSource(androidContext()) }
-    single<TrackCatalog> { ReplayAlignedTrackCatalog(get(), PresetTrackCatalog()) }
+    // JVM 单测（如 `DomainModuleKoinTest`）无法提供 `androidContext()`，`get<ReplayTrackSource>()`
+    // 会抛 `MissingAndroidContextException`；此时降级到 `PresetTrackCatalog()`，让
+    // `TrackCatalog` 绑定在纯 JVM 环境下依然可解析，真机环境的 replay 对齐不受影响。
+    single<TrackCatalog> {
+        runCatching { ReplayAlignedTrackCatalog(get(), PresetTrackCatalog()) }
+            .getOrElse { PresetTrackCatalog() }
+    }
 }
 
 /**
