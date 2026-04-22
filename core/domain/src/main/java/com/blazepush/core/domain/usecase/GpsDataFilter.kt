@@ -49,48 +49,54 @@ class GpsDataFilter(
             )
         }
 
-        // 1. 计算加速度
-        val acceleration = calculateAcceleration(raw)
-
-        // 2. 物理约束检查：检测速度跳变
-        val isAnomaly = isPhysicalConstraintViolation(raw)
-
-        // 2.5. 信号丢失重置检查（GPS 信号丢失 > 200ms → 重置 previousPosition，等待新起点）
+        // === A12：信号丢失重置必须在加速度 / 物理约束判定之前 ===
+        // （openspec/changes/fix-gps-data-filter-signal-loss-and-anomaly-hygiene,
+        //  Requirement "信号丢失重置必须在加速度 / 物理约束判定之前完成"）
+        // v1 顺序 (calculateAcceleration → isPhysicalConstraintViolation → 重置) 让
+        // 失联首帧用旧 previousRaw 计算 dt 巨大的 maxDelta = 90 × dt，真实跳变被误判为
+        // "非异常"。修后先重置：previousRaw = null 时，下面三个判定函数都走早退分支
+        // （0.0 / false / (1.0, false)），把本帧作为"新基准"。
         val dtFromPrevious = previousRaw?.let { (raw.timestamp - it.timestamp) / 1000.0 } ?: 0.0
         if (dtFromPrevious > 0.2) {
             previousRaw = null
             previousPosition = null
         }
 
-        // 2.6. 位置-速度一致性检验（基于原始数据）
+        // 1. 计算加速度（previousRaw == null 时早退返回 0.0）
+        val acceleration = calculateAcceleration(raw)
+
+        // 2. 物理约束检查：检测速度跳变（previousRaw == null 时早退返回 false）
+        val isAnomaly = isPhysicalConstraintViolation(raw)
+
+        // 3. 位置-速度一致性检验（previousPosition == null 时早退返回 (1.0, false)）
         val (consistencyFactor, isPositionAnomaly) = checkPositionVelocityConsistency(raw)
 
-        // 3. 添加到窗口
-        speedWindow.add(raw.speed)
-        latWindow.add(raw.latitude)
-        lonWindow.add(raw.longitude)
+        // === A14：异常帧不进滤波窗口 ===
+        // （Requirement "异常帧不得进入滤波窗口，isAnomaly 分支简化"）
+        // v1 所有帧无条件 add，异常帧把 median 拉偏；isAnomaly 分支两个 when 体等价
+        // 是语义冗余。修后：speed/lat/lon 窗口按异常类型条件隔离；bearing 不受影响；
+        // outputSpeed / outputLat / outputLon 统一 `if window.size >= 3 median else raw`。
+        if (!isAnomaly) {
+            speedWindow.add(raw.speed)
+        }
+        if (!isPositionAnomaly) {
+            latWindow.add(raw.latitude)
+            lonWindow.add(raw.longitude)
+        }
         bearingWindow.add(raw.bearing)
         if (speedWindow.size > windowSize) {
             speedWindow.removeAt(0)
+        }
+        if (latWindow.size > windowSize) {
             latWindow.removeAt(0)
             lonWindow.removeAt(0)
+        }
+        if (bearingWindow.size > windowSize) {
             bearingWindow.removeAt(0)
         }
 
-        // 4. 计算输出速度
-        val outputSpeed = when {
-            isAnomaly && speedWindow.size >= 3 -> {
-                // 异常点：用窗口内非异常点的中位数（这里简化为用中位数）
-                speedWindow.median()
-            }
-            speedWindow.size >= 3 -> {
-                // 正常点：也用中位数滤波平滑
-                speedWindow.median()
-            }
-            else -> raw.speed
-        }
-
-        // 位置和航向的滤波输出
+        // 4. 计算输出（简化分支：不再按 isAnomaly 分流）
+        val outputSpeed = if (speedWindow.size >= 3) speedWindow.median() else raw.speed
         val outputLat = if (latWindow.size >= 3) latWindow.median() else raw.latitude
         val outputLon = if (lonWindow.size >= 3) lonWindow.median() else raw.longitude
         val outputBearing = if (bearingWindow.size >= 3) bearingWindow.circularMedian() else raw.bearing
@@ -98,9 +104,14 @@ class GpsDataFilter(
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
 
-        // 6. 更新状态（信号丢失帧 previousRaw 为 null，下一帧 dt=0 跳过一致性检查，自然作为新基准）
-        previousRaw = raw
-        previousPosition = raw.latitude to raw.longitude
+        // === A13：异常帧不更新 previousRaw / previousPosition ===
+        // （Requirement "异常帧 MUST NOT 更新 previousRaw / previousPosition"）
+        // 依赖 A12 的 dt > 200ms 重置兜底：若连续 N 帧异常，previousRaw 保持旧值不变
+        // 直到下一帧相对 previousRaw 的 dt 超过 200ms，A12 自动重置，避免永久锁死。
+        if (!isAnomaly && !isPositionAnomaly) {
+            previousRaw = raw
+            previousPosition = raw.latitude to raw.longitude
+        }
 
         return FilteredGpsData(
             speed = outputSpeed,

@@ -562,12 +562,20 @@ class TestSessionViewModelTrackLapTest {
                 )
                 dispatcher.scheduler.advanceUntilIdle()
             }
-            repeat(5) { i ->
+            // 加速帧约束：
+            //   (1) dv 必须 < maxDelta = maxAcceleration(25) × 3.6 × dt(0.04) = 3.6 km/h/帧
+            //       否则触发 filter 的 isAnomaly，A14 把异常帧拦在 speedWindow 外，
+            //       median 仍靠前 3 帧 speed=0.5 拉平。每帧 +2 km/h 满足 dv=2 < 3.6。
+            //   (2) 帧数必须 ≥ 6：静止帧→加速帧 timestamp 跳 920ms > 200ms，A12 重置
+            //       previousRaw 导致首个加速帧 acceleration=0（正确行为：信号丢失后首帧
+            //       不能凭旧 prev 算加速度），消耗一个触发计数；所以需要 5 + 1 = 6 帧累积
+            //       satisfied `consecutiveTriggerCount ≥ TRIGGER_CONFIRMATION_COUNT(5)`。
+            repeat(6) { i ->
                 gpsFlow.value = emptyGpsSample().copy(
                     timestamp = (i * 40).toLong() + 1_001_000L,
                     latitude = 30.49,
                     longitude = 104.43,
-                    speed = 10.0 + i * 5.0,
+                    speed = 10.0 + i * 2.0,
                     satelliteCount = 10,
                     hdop = 1.0,
                     isTimeSynced = true

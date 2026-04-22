@@ -1175,4 +1175,181 @@ class GpsDataFilterTest {
         assertEquals(0.0, resumedResult.acceleration, 1e-9)
         assertFalse(resumedResult.isAnomaly)
     }
+
+    // ==================== 战役 C: A12 / A13 / A14 回归 ====================
+    //
+    // Change: fix-gps-data-filter-signal-loss-and-anomaly-hygiene
+    // 依赖：A13 必须在 A12 之后实施（A12 的 dt > 200ms 重置兜底防止 A13 锁死 previousRaw）。
+
+    /**
+     * A12-1：信号丢失 > 200ms 后首帧应走"新基准"路径，acceleration = 0、isAnomaly = false。
+     */
+    @Test
+    fun A12_process_signalLossLongerThanThreshold_acceleratesFromNewBaseline() {
+        val localFilter = GpsDataFilter()
+        // 建立 baseline
+        localFilter.process(createGpsData(timestamp = 0L, speed = 60.0))
+        // 500ms 后的下一帧（dt = 500ms > 200ms 阈值）
+        val recovered = localFilter.process(createGpsData(timestamp = 500L, speed = 60.0))
+
+        assertEquals(
+            "A12：信号丢失首帧 acceleration 必须归零（previousRaw 已被重置，早退返回 0）",
+            0.0,
+            recovered.acceleration,
+            1e-9
+        )
+        assertFalse(
+            "A12：信号丢失首帧 isAnomaly 必须为 false（previousRaw 已被重置，早退返回 false）",
+            recovered.isAnomaly
+        )
+    }
+
+    /**
+     * A12-2：信号丢失后首帧速度大跳变不被旧 previousRaw 误压制。
+     * 旧顺序下 `maxDelta = 90 × 0.5 = 45` 会把 300 km/h 跳变判非异常（错！实际
+     * 应视为"没有基准，无法比较"）。新顺序下 previousRaw=null 早退返回 false。
+     */
+    @Test
+    fun A12_process_signalLossThenLargeSpeedJump_isNotSuppressedByStalePreviousRaw() {
+        val localFilter = GpsDataFilter()
+        localFilter.process(createGpsData(timestamp = 0L, speed = 10.0))
+        // 500ms 后跳到 310 km/h（dv = 300）
+        val jumpResult = localFilter.process(createGpsData(timestamp = 500L, speed = 310.0))
+        assertFalse(
+            "A12：信号丢失后首帧没有对比基准，不能凭空判异常（v1 会用 500ms 前旧基准算 maxDelta 压制跳变）",
+            jumpResult.isAnomaly
+        )
+        assertEquals(
+            "A12：信号丢失后首帧 acceleration 走首样本语义 = 0",
+            0.0,
+            jumpResult.acceleration,
+            1e-9
+        )
+
+        // 接着用新基准正常推进
+        val continued = localFilter.process(createGpsData(timestamp = 540L, speed = 310.0))
+        assertEquals(
+            "A12：新基准建立后下一帧 dv=0, acceleration=0",
+            0.0,
+            continued.acceleration,
+            1e-9
+        )
+    }
+
+    /**
+     * A13：单次 spike（isAnomaly）不应污染 previousRaw，下一帧恢复到合理值必须
+     * 以 spike 之前的基准判定，而不是 spike 的离群值。
+     */
+    @Test
+    fun A13_process_singleSpikeThenRecovery_doesNotLeakAnomalyToNextFrame() {
+        val localFilter = GpsDataFilter()
+        // baseline
+        localFilter.process(createGpsData(timestamp = 0L, speed = 30.0))
+        // spike：dv = 170 km/h > maxDelta = 90 × 0.04 = 3.6，触发 isAnomaly
+        val spike = localFilter.process(createGpsData(timestamp = 40L, speed = 200.0))
+        assertTrue("A13 前置：spike 帧应当被判 isAnomaly=true", spike.isAnomaly)
+
+        // 恢复帧：speed=32，若 A13 未生效（spike 污染 previousRaw=200），maxDelta=3.6，
+        // dv=|32-200|=168 >> 3.6 → 会误判 isAnomaly；A13 修后 previousRaw 仍是 speed=30，
+        // dv=|32-30|=2 < 3.6 → 正常。
+        val recovered = localFilter.process(createGpsData(timestamp = 80L, speed = 32.0))
+        assertFalse(
+            "A13：恢复帧应以 spike 之前的 baseline 判定，isAnomaly=false；若 spike 污染了 previousRaw 则会误判",
+            recovered.isAnomaly
+        )
+    }
+
+    /**
+     * A13 × A12 联动：连续异常帧时 previousRaw 被 A13 保留在旧值；A12 的 dt > 200ms
+     * 兜底会在长期无更新时自动重置，避免 previousRaw 永久锁死。
+     */
+    @Test
+    fun A13_process_continuousAnomaly_previousRawEventuallyResetsByA12Guard() {
+        val localFilter = GpsDataFilter()
+        localFilter.process(createGpsData(timestamp = 0L, speed = 30.0))
+        // 连续 3 帧 spike，previousRaw 保持 ts=0
+        repeat(3) { idx ->
+            val ts = 40L + idx * 40L
+            val r = localFilter.process(createGpsData(timestamp = ts, speed = 200.0))
+            assertTrue("连续 spike 应持续 isAnomaly=true", r.isAnomaly)
+        }
+        // 第 4 帧 ts=500ms，相对 previousRaw=ts0 差 500ms > 200ms 阈值 → A12 重置
+        val resetFrame = localFilter.process(createGpsData(timestamp = 500L, speed = 31.0))
+        assertEquals(
+            "A12 兜底：previousRaw 应被 dt > 200ms 重置，本帧走首样本路径 acceleration=0",
+            0.0,
+            resetFrame.acceleration,
+            1e-9
+        )
+        assertFalse(
+            "A12 兜底：本帧 isAnomaly = false（previousRaw 已 null，早退）",
+            resetFrame.isAnomaly
+        )
+    }
+
+    /**
+     * A14：异常帧（isAnomaly=true）不得进入 speedWindow，median 输出保持窗口内非异常
+     * 帧的统计不被污染。
+     */
+    @Test
+    fun A14_process_anomalyFrame_doesNotPollutePosteriorMedianOutput() {
+        val localFilter = GpsDataFilter()
+        // 填充窗口至满 3 个正常帧（median ≥ 3 帧阈值触发）
+        localFilter.process(createGpsData(timestamp = 0L, speed = 60.0))
+        localFilter.process(createGpsData(timestamp = 40L, speed = 60.0))
+        val stable = localFilter.process(createGpsData(timestamp = 80L, speed = 60.0))
+        assertEquals("前置：3 正常帧后 median=60", 60.0, stable.speed, 1e-9)
+
+        // spike：dv=240 >> maxDelta=3.6，isAnomaly=true
+        val spike = localFilter.process(createGpsData(timestamp = 120L, speed = 300.0))
+        assertTrue("A14 前置：spike 应被判异常", spike.isAnomaly)
+        // 若 A14 未生效，speedWindow=[60,60,60,300]，median=60（偶数个取中间两个平均）；
+        // 若 A14 生效，speedWindow=[60,60,60]（spike 未入），median=60。
+        // 两种情况本帧 output 都是 60，不足以区分。关键是下一帧！
+
+        // 继续喂正常帧：300 如果进入窗口，后续 median 会被拉偏
+        val continuedA = localFilter.process(createGpsData(timestamp = 160L, speed = 60.0))
+        val continuedB = localFilter.process(createGpsData(timestamp = 200L, speed = 60.0))
+        assertEquals(
+            "A14：spike 未进窗口，后续 median 持续稳定在 60（若 spike 进窗口，median 会被 300 拉偏）",
+            60.0,
+            continuedA.speed,
+            1e-9
+        )
+        assertEquals(60.0, continuedB.speed, 1e-9)
+    }
+
+    /**
+     * A14：位置异常帧不进 latWindow / lonWindow，median 位置输出不被拉偏。
+     */
+    @Test
+    fun A14_process_positionAnomalyFrame_doesNotPollutePosteriorLatLonMedian() {
+        val localFilter = GpsDataFilter()
+        // 填充 3 帧正常位置（速度一致避免 speed 异常，位置贴近）
+        val baseLat = 30.4961
+        val baseLon = 104.4331
+        localFilter.process(createGpsData(timestamp = 0L, speed = 60.0, latitude = baseLat, longitude = baseLon))
+        localFilter.process(createGpsData(timestamp = 40L, speed = 60.0, latitude = baseLat + 1e-6, longitude = baseLon + 1e-6))
+        val stable = localFilter.process(createGpsData(timestamp = 80L, speed = 60.0, latitude = baseLat + 2e-6, longitude = baseLon + 2e-6))
+        assertTrue("前置：正常帧位置应接近 baseLat", kotlin.math.abs(stable.latitude - baseLat) < 1e-3)
+
+        // 位置跳飞（10 米级偏移 → v_implied 爆炸 → isPositionAnomaly=true）
+        val spikeLat = baseLat + 1e-4  // 约 11 米
+        val spikeLon = baseLon + 1e-4
+        val spike = localFilter.process(createGpsData(timestamp = 120L, speed = 60.0, latitude = spikeLat, longitude = spikeLon))
+        // spike 的位置异常（一致性检验 ratio > 3）或 filter 自身判定 isPositionAnomaly=true
+        // A14 生效时 spike 不进 lat/lonWindow
+
+        // 继续正常帧
+        val continued = localFilter.process(createGpsData(timestamp = 160L, speed = 60.0, latitude = baseLat + 3e-6, longitude = baseLon + 3e-6))
+        assertTrue(
+            "A14：位置 spike 未进 latWindow，后续 median 不被拉偏（仍接近 baseLat 而非 spikeLat）",
+            kotlin.math.abs(continued.latitude - baseLat) < 1e-4
+        )
+        // spike 确实是异常帧（verify A14 前置条件）
+        assertTrue(
+            "A14 前置：位置 spike 应被判 isPositionAnomaly=true（或 isAnomaly=true）",
+            spike.isPositionAnomaly || spike.isAnomaly
+        )
+    }
 }
