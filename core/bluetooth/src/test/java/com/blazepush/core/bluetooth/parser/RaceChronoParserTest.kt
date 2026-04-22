@@ -573,7 +573,7 @@ class RaceChronoParserTest {
             parser.reset()
 
             // Then: 再次解析时应能继续工作（通过字段断言代替 timestamp）
-            // 战役 A 后：parser.reset() 会清零 protocolTimeReference 和 isCurrentlyTimeSynced，
+            // 战役 A 后：parser.reset() 会清零 protocolTimeReference（单源派生 isTimeSynced），
             // 新一轮解析首帧 main 包仍为未同步状态，timestamp = Long.MIN_VALUE（sentinel），
             // 原断言 `timestamp > 0` 不再成立。改用字段级断言确保 parse 逻辑正常运转。
             val result = parser.parseGpsData(data, createTestData())
