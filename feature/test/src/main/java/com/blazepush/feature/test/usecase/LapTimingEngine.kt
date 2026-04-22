@@ -13,10 +13,31 @@ import com.blazepush.feature.test.model.laptiming.SectorEntry
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.Track
 
-class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingDetector()) {
+/**
+ * @param detector gate crossing detector
+ * @param expectedIntervalMillis 预期 GPS 采样间隔（毫秒）。默认 40 = 25Hz（ESP32 标配）。
+ *        低频模式（例如 5Hz replay = 200ms）需要显式传入 200，否则
+ *        `ProtocolDesyncGap` 阈值会在正常采样间隔附近抖动造成假阳性。
+ *        阈值 = `expectedIntervalMillis × DESYNC_GAP_FACTOR`（5 倍采样间隔）。
+ *        对抗 review C.2 / backlog A7。
+ */
+class LapTimingEngine(
+    private val detector: GateCrossingDetector = GateCrossingDetector(),
+    private val expectedIntervalMillis: Long = DEFAULT_EXPECTED_INTERVAL_MILLIS
+) {
+
+    /**
+     * `ProtocolDesyncGap` 标记阈值：相邻 trajectory 样本 ts 差超过此值视为一次失联。
+     * 取 5 倍采样间隔 = 允许丢最多 4 帧的抖动容忍；第 5 帧仍缺失才 flag 本圈。
+     */
+    private val desyncGapThresholdMillis: Long = expectedIntervalMillis * DESYNC_GAP_FACTOR
 
     companion object {
         private const val TAG = "LapTimingEngine"
+        /** 25Hz 采样 = 40ms 间隔。ESP32 / RaceChrono 标准。 */
+        const val DEFAULT_EXPECTED_INTERVAL_MILLIS: Long = 40L
+        /** 连续丢 N 帧视为失联。5 = 允许 4 帧抖动 + 第 5 帧起 flag ProtocolDesyncGap。 */
+        const val DESYNC_GAP_FACTOR: Long = 5L
     }
 
     fun processSample(
@@ -92,7 +113,7 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
         val activeLap = session.activeLap
         val trajectory = updatedSamples.drop(activeLap.sampleStartIndex)
         val hasDesyncGap = trajectory.zipWithNext().any { (a, b) ->
-            (b.timestampMillis - a.timestampMillis) > 200L
+            (b.timestampMillis - a.timestampMillis) > desyncGapThresholdMillis
         }
         val qualityFlags = buildList {
             if (activeLap.sectorEntries.size != track.sectorGates.size) {

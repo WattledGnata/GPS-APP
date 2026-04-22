@@ -35,10 +35,6 @@ class RaceChronoParser {
     private var hasStartedTracking = false
     private var protocolTimeReference: ProtocolTimeReference? = null
 
-    // 协议时间当前是否已对齐；由 parseGpsData 基于 syncBits 匹配结果刷新。
-    // 冷启动、syncBits 失配、reset() 后都必须为 false，下游看到 sentinel 才能守卫。
-    private var isCurrentlyTimeSynced: Boolean = false
-
     private data class ProtocolTimeReference(
         val syncBits: Int,
         val hourStartMillis: Long
@@ -56,7 +52,9 @@ class RaceChronoParser {
         gpsDataTimestamps.clear()
         gpsFrequency = 0.0
         protocolTimeReference = null
-        isCurrentlyTimeSynced = false
+        // A8 / opsx code review C.4：`isTimeSynced` 不再作 parser 私有字段，
+        // 而是从 `protocolTimeReference` 单源派生（reset 后 reference = null →
+        // 下一次 parseGpsData 必判未同步 → 写 sentinel + isTimeSynced=false）。
     }
 
     /**
@@ -259,18 +257,16 @@ class RaceChronoParser {
                 Log.e(TAG, "Error in tracking calculation", e)
             }
 
-            // 协议时间对齐判定：
+            // 协议时间对齐判定（A8 / opsx code review C.4：从单源 `protocolTimeReference` 派生）：
             //   - protocolTimeReference == null：从未收到过时间包 → 未同步
             //   - syncBits 失配：当前帧与最近一次时间包不对齐 → 未同步
             // 未同步时写入 sentinel (Long.MIN_VALUE)，严禁 fallback 到本地系统时钟。
             val reference = protocolTimeReference
-            val protocolTimestamp: Long
-            if (reference != null && reference.syncBits == syncBits) {
-                protocolTimestamp = reference.hourStartMillis + timeSinceHourStart
-                isCurrentlyTimeSynced = true
+            val syncedNow = reference != null && reference.syncBits == syncBits
+            val protocolTimestamp = if (syncedNow) {
+                reference!!.hourStartMillis + timeSinceHourStart
             } else {
-                protocolTimestamp = Long.MIN_VALUE
-                isCurrentlyTimeSynced = false
+                Long.MIN_VALUE
             }
 
             // Update Current Data
@@ -287,7 +283,7 @@ class RaceChronoParser {
                 frequency = gpsFrequency,
                 isTestReady = satellites >= 6 && hdop < 2.0,
                 fixQuality = fixQuality,
-                isTimeSynced = isCurrentlyTimeSynced
+                isTimeSynced = syncedNow
             )
 
             if (shouldLog) {

@@ -223,6 +223,11 @@ class TestSessionViewModel(
                 }
             }
             is TestState.Running -> {
+                // Requirement 3.5 (a) v2（A6 / opsx code review C.1）：
+                // Running 期间失联 filter 返回 sentinel timestamp = Long.MIN_VALUE + zero acceleration
+                // 的"零 delta 快照"。若吃进 session.dataPoints，elapsedTime = Long.MIN_VALUE - startTime
+                // 会溢出污染 0-100 用时等结果计算。Preparing / Running 两分支必须对称守卫。
+                if (!filteredData.raw.isTimeSynced) return
                 state.session.addFilteredDataPoint(filteredData)
                 if (state.session.template.shouldEnd(filteredData.raw)) {
                     finishTest(state.session)

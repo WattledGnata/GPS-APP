@@ -285,6 +285,60 @@ class LapTimingEngineTest {
     }
 
     @Test
+    fun processSample_lapWithCustomInterval5Hz_doesNotFlagDesyncAt200ms() {
+        // A7 回归：5Hz 采样正常间隔 200ms，若阈值仍硬编码 200L，浮点抖动让相邻差偶尔 201ms
+        // 会触发假阳性 ProtocolDesyncGap。把 expectedIntervalMillis = 200L 传入后，阈值变为
+        // 200 × 5 = 1000ms，正常 5Hz 采样不再触发。
+        val engine5Hz = LapTimingEngine(
+            detector = detector,
+            expectedIntervalMillis = 200L
+        )
+
+        // 开圈
+        val startFinish = crossingSamples(track.startFinishGate, 0L, 200L)
+        val startedSession = engine5Hz.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = startFinish.first,
+            currentSample = startFinish.second
+        )
+
+        // 构造一组 trajectory：5Hz 正常间隔 200ms，间偶尔抖到 201ms（模拟浮点舍入），但远
+        // 未到 1000ms 阈值
+        var session = startedSession
+        val offsetFromStart = track.referencePath.points.first()
+        val intervals = listOf(200L, 201L, 199L, 200L, 201L, 200L)
+        var ts = 200L
+        var prev = startFinish.second
+        for (gap in intervals) {
+            ts += gap
+            val next = sample(
+                timestampMillis = ts,
+                latitude = offsetFromStart.latitude + 1e-5,
+                longitude = offsetFromStart.longitude + 1e-5
+            )
+            session = engine5Hz.processSample(session, track, prev, next)
+            prev = next
+        }
+
+        // 闭圈
+        val finish = crossingSamples(track.startFinishGate, ts + 200L, ts + 400L)
+        val finishedSession = engine5Hz.processSample(
+            session = session,
+            track = track,
+            previousSample = finish.first,
+            currentSample = finish.second
+        )
+
+        assertEquals(1, finishedSession.completedLaps.size)
+        val lap = finishedSession.completedLaps.first()
+        assertTrue(
+            "5Hz 正常采样不应触发 ProtocolDesyncGap 假阳性；阈值应为 intervalMillis(200) × 5 = 1000ms。got=${lap.qualityFlags}",
+            !lap.qualityFlags.contains(LapQualityFlag.ProtocolDesyncGap)
+        )
+    }
+
+    @Test
     fun processSample_unexpectedGateOrder_recordsRejectedEventAndDoesNotAdvanceSession() {
         val startedSession = engine.processSample(
             session = newSession(),

@@ -537,6 +537,83 @@ class TestSessionViewModelTrackLapTest {
     }
 
     @Test
+    fun processFilteredData_runningPhase_ignoresUnsyncedFrames() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.enterSmartLaunch(
+                template = com.blazepush.core.domain.model.TestTemplate.Acceleration0To100,
+                carModel = "test-car"
+            )
+            viewModel.skipCountdown()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 先把状态推进到 Running：3 帧静止 + 5 帧加速（全部 isTimeSynced=true，speed 保持 < 100
+            // 避免误触发 shouldEnd）。
+            repeat(3) { i ->
+                gpsFlow.value = emptyGpsSample().copy(
+                    timestamp = (i * 40).toLong() + 1_000_000L,
+                    latitude = 30.49,
+                    longitude = 104.43,
+                    speed = 0.5,
+                    satelliteCount = 10,
+                    hdop = 1.0,
+                    isTimeSynced = true
+                )
+                dispatcher.scheduler.advanceUntilIdle()
+            }
+            repeat(5) { i ->
+                gpsFlow.value = emptyGpsSample().copy(
+                    timestamp = (i * 40).toLong() + 1_001_000L,
+                    latitude = 30.49,
+                    longitude = 104.43,
+                    speed = 10.0 + i * 5.0,
+                    satelliteCount = 10,
+                    hdop = 1.0,
+                    isTimeSynced = true
+                )
+                dispatcher.scheduler.advanceUntilIdle()
+            }
+
+            val runningState = viewModel.testState.value
+            assertTrue(
+                "前置：前 8 帧应让状态转入 Running",
+                runningState is com.blazepush.core.domain.model.TestState.Running
+            )
+            val session = (runningState as com.blazepush.core.domain.model.TestState.Running).session
+            val dataPointsBefore = session.dataPoints.size
+
+            // 喂 5 帧 isTimeSynced=false + sentinel timestamp（filter 会返回零 delta 快照，
+            // Running 分支若漏守卫会把 elapsedTime = Long.MIN_VALUE - startTime 溢出值
+            // 塞进 dataPoints 污染结果）
+            repeat(5) {
+                gpsFlow.value = emptyGpsSample().copy(
+                    timestamp = Long.MIN_VALUE,
+                    latitude = 30.49,
+                    longitude = 104.43,
+                    speed = 30.0,
+                    satelliteCount = 10,
+                    hdop = 1.0,
+                    isTimeSynced = false
+                )
+                dispatcher.scheduler.advanceUntilIdle()
+            }
+
+            assertEquals(
+                "未同步帧不应 addFilteredDataPoint 污染 session.dataPoints",
+                dataPointsBefore,
+                session.dataPoints.size
+            )
+            assertTrue(
+                "未同步帧不应错误触发 finishTest 转 Completed",
+                viewModel.testState.value is com.blazepush.core.domain.model.TestState.Running
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun launchStatus_lastDataAgeUsesElapsedRealtime_notGpsTimestamp() = runTest {
         Dispatchers.setMain(dispatcher)
         try {
