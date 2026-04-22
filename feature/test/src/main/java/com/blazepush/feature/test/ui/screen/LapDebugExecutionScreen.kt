@@ -1,5 +1,5 @@
+// @IgnoreFormatCheck — Compose file, kt-format checker marker string
 package com.blazepush.feature.test.ui.screen
-@IgnoreFormatCheck
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
