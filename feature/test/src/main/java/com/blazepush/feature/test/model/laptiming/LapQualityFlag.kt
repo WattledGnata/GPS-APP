@@ -4,5 +4,6 @@ enum class LapQualityFlag {
     LowAccuracy,
     SparseSamples,
     SuspectedJitter,
-    IncompleteSectors
+    IncompleteSectors,
+    ProtocolDesyncGap
 }

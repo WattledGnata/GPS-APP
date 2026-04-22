@@ -20,7 +20,8 @@ data class GpsData(
     val isConnected: Boolean,    // 连接状态
     val isTestReady: Boolean,    // 测试就绪状态
     val errorMessage: String?,   // 错误信息
-    val fixQuality: Int = 0      // 0=无效定位, 1=GPS, 2=DGPS
+    val fixQuality: Int = 0,     // 0=无效定位, 1=GPS, 2=DGPS
+    val isTimeSynced: Boolean = false  // 协议时间是否对齐；未对齐时 timestamp 为 sentinel，时间 delta 计算必须跳过
 ) {
     /**
      * 将 GPS 坐标 (WGS84) 转换为高德地图坐标 (GCJ-02)
@@ -46,7 +47,8 @@ data class GpsData(
             isConnected = false,
             isTestReady = false,
             errorMessage = null,
-            fixQuality = 0
+            fixQuality = 0,
+            isTimeSynced = false
         )
     }
 }

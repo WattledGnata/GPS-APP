@@ -35,6 +35,10 @@ class RaceChronoParser {
     private var hasStartedTracking = false
     private var protocolTimeReference: ProtocolTimeReference? = null
 
+    // 协议时间当前是否已对齐；由 parseGpsData 基于 syncBits 匹配结果刷新。
+    // 冷启动、syncBits 失配、reset() 后都必须为 false，下游看到 sentinel 才能守卫。
+    private var isCurrentlyTimeSynced: Boolean = false
+
     private data class ProtocolTimeReference(
         val syncBits: Int,
         val hourStartMillis: Long
@@ -52,6 +56,7 @@ class RaceChronoParser {
         gpsDataTimestamps.clear()
         gpsFrequency = 0.0
         protocolTimeReference = null
+        isCurrentlyTimeSynced = false
     }
 
     /**
@@ -254,11 +259,19 @@ class RaceChronoParser {
                 Log.e(TAG, "Error in tracking calculation", e)
             }
 
-            val protocolTimestamp = protocolTimeReference
-                ?.takeIf { it.syncBits == syncBits }
-                ?.hourStartMillis
-                ?.plus(timeSinceHourStart)
-                ?: System.currentTimeMillis()
+            // 协议时间对齐判定：
+            //   - protocolTimeReference == null：从未收到过时间包 → 未同步
+            //   - syncBits 失配：当前帧与最近一次时间包不对齐 → 未同步
+            // 未同步时写入 sentinel (Long.MIN_VALUE)，严禁 fallback 到本地系统时钟。
+            val reference = protocolTimeReference
+            val protocolTimestamp: Long
+            if (reference != null && reference.syncBits == syncBits) {
+                protocolTimestamp = reference.hourStartMillis + timeSinceHourStart
+                isCurrentlyTimeSynced = true
+            } else {
+                protocolTimestamp = Long.MIN_VALUE
+                isCurrentlyTimeSynced = false
+            }
 
             // Update Current Data
             currentData = currentData.copy(
@@ -273,7 +286,8 @@ class RaceChronoParser {
                 vdop = vdop,
                 frequency = gpsFrequency,
                 isTestReady = satellites >= 6 && hdop < 2.0,
-                fixQuality = fixQuality
+                fixQuality = fixQuality,
+                isTimeSynced = isCurrentlyTimeSynced
             )
 
             if (shouldLog) {

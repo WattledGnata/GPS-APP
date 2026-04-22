@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.ui.screen
 
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.feature.test.model.laptiming.ActiveLap
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
@@ -59,7 +60,7 @@ class LapDebugExecutionScreenStateTest {
             )
         )
 
-        val state = rememberStartFinishTimingCardState(session)
+        val state = rememberStartFinishTimingCardState(session, isTimeSynced = true)
 
         assertEquals("--", state.lastLapElapsedLabel)
         assertEquals("0.000 s", state.currentLapElapsedLabel)
@@ -80,10 +81,11 @@ class LapDebugExecutionScreenStateTest {
             ),
             crossingEvents = listOf(
                 acceptedStartFinishCrossing(timestampMillis = 3_000L)
-            )
+            ),
+            activeLap = activeLap(startedAtMillis = 3_000L, sampleStartIndex = 0)
         )
 
-        val state = rememberStartFinishTimingCardState(session)
+        val state = rememberStartFinishTimingCardState(session, isTimeSynced = true)
 
         assertEquals("--", state.lastLapElapsedLabel)
         assertEquals("1.500 s", state.currentLapElapsedLabel)
@@ -108,16 +110,67 @@ class LapDebugExecutionScreenStateTest {
                 acceptedStartFinishCrossing(timestampMillis = 32_529_000L),
                 crossingEvent(timestampMillis = 32_531_500L, accepted = false, gateType = TimingGateType.StartFinish),
                 acceptedStartFinishCrossing(timestampMillis = 32_533_000L)
-            )
+            ),
+            activeLap = activeLap(startedAtMillis = 32_533_000L, sampleStartIndex = 1)
         )
 
-        val state = rememberStartFinishTimingCardState(session)
+        val state = rememberStartFinishTimingCardState(session, isTimeSynced = true)
 
         assertEquals("4.000 s", state.lastLapElapsedLabel)
         assertEquals("1.250 s", state.currentLapElapsedLabel)
         assertEquals("32.4 m", state.currentLapDistanceLabel)
         assertEquals(formatExpectedTimeOfDay(32_533_000L), state.lastStartFinishTimeLabel)
         assertEquals("当前圈进行中", state.statusLabel)
+    }
+
+    @Test
+    fun statusLabel_showsWaitingForTimeSync_whenUpstreamUnsynced() {
+        val session = LapSession(
+            sessionId = "session-1",
+            trackId = "track-1",
+            status = LapSessionStatus.Ready,
+            activeLap = null
+        )
+
+        val state = rememberStartFinishTimingCardState(session, isTimeSynced = false)
+
+        assertEquals("等待协议时间同步", state.statusLabel)
+    }
+
+    @Test
+    fun statusLabel_showsWaitingForStart_whenSyncedButNoActiveLap() {
+        val session = LapSession(
+            sessionId = "session-1",
+            trackId = "track-1",
+            status = LapSessionStatus.Ready,
+            activeLap = null
+        )
+
+        val state = rememberStartFinishTimingCardState(session, isTimeSynced = true)
+
+        assertEquals("等待起点", state.statusLabel)
+    }
+
+    @Test
+    fun statusLabel_showsInLap_regardlessOfTimeSync() {
+        val session = LapSession(
+            sessionId = "session-1",
+            trackId = "track-1",
+            status = LapSessionStatus.Recording,
+            samples = listOf(
+                gpsSample(timestampMillis = 3_000L, latitude = 39.000000, longitude = 116.000000)
+            ),
+            crossingEvents = listOf(
+                acceptedStartFinishCrossing(timestampMillis = 3_000L)
+            ),
+            activeLap = activeLap(startedAtMillis = 3_000L, sampleStartIndex = 0)
+        )
+
+        val stateSynced = rememberStartFinishTimingCardState(session, isTimeSynced = true)
+        val stateUnsynced = rememberStartFinishTimingCardState(session, isTimeSynced = false)
+
+        assertEquals("当前圈进行中", stateSynced.statusLabel)
+        assertEquals("当前圈进行中", stateUnsynced.statusLabel)
     }
 
     private fun formatExpectedTimeOfDay(timestampMillis: Long): String =
@@ -159,5 +212,13 @@ class LapDebugExecutionScreenStateTest {
         sampleIndex = 0,
         accepted = accepted,
         reason = if (accepted) CrossingReason.Accepted else CrossingReason.NoIntersection
+    )
+
+    private fun activeLap(startedAtMillis: Long, sampleStartIndex: Int) = ActiveLap(
+        lapIndex = 0,
+        startedAtMillis = startedAtMillis,
+        passedGateIds = emptyList(),
+        sectorEntries = emptyList(),
+        sampleStartIndex = sampleStartIndex
     )
 }

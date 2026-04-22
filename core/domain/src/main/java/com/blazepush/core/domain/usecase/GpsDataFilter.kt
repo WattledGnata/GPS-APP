@@ -28,6 +28,27 @@ class GpsDataFilter(
      * 处理单个GPS数据点
      */
     fun process(raw: GpsData): FilteredGpsData {
+        // 0. 分层守卫（时间 delta 计算类）：协议时间未同步时跳过本次计算，
+        //    内部状态（previousRaw / previousPosition / 四个窗口）一律不更新。
+        //    参见 openspec/changes/fix-laptime-clock-source-integrity/specs/laptime-clock-source/spec.md
+        //    Requirement: 分层守卫 — Scenario "GpsDataFilter 在未同步时不做时间 delta 计算"。
+        if (!raw.isTimeSynced) {
+            return FilteredGpsData(
+                speed = raw.speed,
+                latitude = raw.latitude,
+                longitude = raw.longitude,
+                altitude = raw.altitude,
+                bearing = raw.bearing,
+                acceleration = 0.0,
+                confidence = 0.0,
+                isAnomaly = false,
+                timestamp = raw.timestamp,
+                raw = raw,
+                consistencyFactor = 1.0,
+                isPositionAnomaly = false
+            )
+        }
+
         // 1. 计算加速度
         val acceleration = calculateAcceleration(raw)
 

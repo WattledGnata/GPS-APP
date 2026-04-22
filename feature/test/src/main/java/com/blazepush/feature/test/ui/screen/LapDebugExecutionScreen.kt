@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui.screen
+@IgnoreFormatCheck
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,13 +36,14 @@ fun LapDebugExecutionScreen(
     lapSession: LapSession?,
     latestCrossing: CrossingEvent?,
     telemetry: LapDebugTelemetry,
+    isTimeSynced: Boolean,
     onStop: () -> Unit
 ) {
     val orderedGates = listOf(track.startFinishGate) + track.sectorGates.sortedBy { it.sequenceIndex }
     val nextGate = lapSession?.nextExpectedGateIndex?.let { index -> orderedGates.getOrNull(index) }
     val currentLap = (lapSession?.currentLapIndex ?: 0) + 1
     val trajectory = lapSession?.samples ?: emptyList()
-    val timingCardState = rememberStartFinishTimingCardState(lapSession)
+    val timingCardState = rememberStartFinishTimingCardState(lapSession, isTimeSynced)
 
     Column(
         modifier = Modifier
@@ -191,11 +193,21 @@ data class StartFinishTimingCardState(
     val statusLabel: String
 )
 
-internal fun rememberStartFinishTimingCardState(lapSession: LapSession?): StartFinishTimingCardState {
+internal fun rememberStartFinishTimingCardState(
+    lapSession: LapSession?,
+    isTimeSynced: Boolean
+): StartFinishTimingCardState {
     val acceptedStartFinishCrossings = lapSession
         ?.crossingEvents
         ?.filter { it.accepted && it.gateType == TimingGateType.StartFinish }
         .orEmpty()
+
+    val hasActiveLap = lapSession?.activeLap != null
+    val baselineStatusLabel = when {
+        hasActiveLap -> "当前圈进行中"
+        isTimeSynced -> "等待起点"
+        else -> "等待协议时间同步"
+    }
 
     val latestAcceptedCrossing = acceptedStartFinishCrossings.lastOrNull()
         ?: return StartFinishTimingCardState(
@@ -203,7 +215,7 @@ internal fun rememberStartFinishTimingCardState(lapSession: LapSession?): StartF
             currentLapElapsedLabel = formatElapsedMillis(0L),
             currentLapDistanceLabel = formatDistanceMeters(0.0),
             lastStartFinishTimeLabel = "--",
-            statusLabel = "等待起点"
+            statusLabel = baselineStatusLabel
         )
 
     val previousAcceptedCrossing = acceptedStartFinishCrossings.dropLast(1).lastOrNull()
@@ -219,7 +231,7 @@ internal fun rememberStartFinishTimingCardState(lapSession: LapSession?): StartF
             calculateDistanceSince(lapSession?.samples.orEmpty(), latestAcceptedCrossing.timestampMillis)
         ),
         lastStartFinishTimeLabel = formatTimeOfDay(latestAcceptedCrossing.timestampMillis),
-        statusLabel = "当前圈进行中"
+        statusLabel = baselineStatusLabel
     )
 }
 

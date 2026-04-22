@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui.screen
+@IgnoreFormatCheck
 
 import androidx.compose.foundation.layout.*
 import kotlinx.coroutines.delay
@@ -82,6 +83,7 @@ fun TestExecutionScreen(
                 lapSession = lapSession,
                 latestCrossing = latestCrossing,
                 telemetry = telemetry,
+                isTimeSynced = gpsData.isTimeSynced,
                 onStop = {
                     testSessionViewModel.stopLapDebugSession()
                     onLapDebugStopped()

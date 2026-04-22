@@ -38,6 +38,13 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.0"
     }
+
+    testOptions {
+        // JVM 单测里 android.os.SystemClock / android.util.Log 默认会抛 "not mocked"；
+        // 对应 fix-laptime-clock-source-integrity change，TestSessionViewModel 的 elapsedRealtime()
+        // 需要返回默认值 0L 而不是抛异常
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

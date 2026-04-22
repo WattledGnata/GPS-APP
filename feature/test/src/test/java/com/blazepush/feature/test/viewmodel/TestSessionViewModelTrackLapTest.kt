@@ -389,6 +389,185 @@ class TestSessionViewModelTrackLapTest {
         isConnected = true,
         isTestReady = true,
         errorMessage = null,
-        fixQuality = 1
+        fixQuality = 1,
+        // 默认已同步 —— 历史用例都期望 emit 的帧能走到 engine
+        // 新加的"未同步"用例会显式 .copy(isTimeSynced = false) 覆盖
+        isTimeSynced = true
     )
+
+    // ==================== v2 (fix-laptime-clock-source-integrity) ====================
+
+    @Test
+    fun bridgeGpsToLapTiming_skipsFrameWhenTimeNotSynced_andResetsPrev() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 先喂 2 帧 isTimeSynced=true 建立 previousSample（第 1 帧走首样本分支不入列，第 2 帧才进 engine）
+            emitGps(1_000L, 30.4970, 104.4330)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_040L, 30.4971, 104.4331)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesBeforeUnsynced = viewModel.lapSession.value?.samples?.size ?: 0
+            assertTrue(
+                "第 2 帧已同步样本应当进入 session.samples",
+                samplesBeforeUnsynced >= 1
+            )
+
+            // 喂 1 帧未同步 —— 应被整帧跳过，不改变 session
+            gpsFlow.value = emptyGpsSample().copy(
+                timestamp = Long.MIN_VALUE,
+                latitude = 30.4980,
+                longitude = 104.4340,
+                speed = 36.0,
+                isTimeSynced = false
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesAfterUnsynced = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "未同步帧不应进入 session.samples",
+                samplesBeforeUnsynced,
+                samplesAfterUnsynced
+            )
+
+            // 再喂 1 帧同步 —— 由于 lastLapGpsSample 在未同步帧里被重置为 null，
+            // 本帧走首样本分支（previousSample == null），不调 engine、不入列
+            emitGps(2_000L, 30.4990, 104.4350)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesAfterResumeFirstFrame = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "失联恢复后首帧应走首样本分支（previousSample == null），不应进入 session.samples",
+                samplesBeforeUnsynced,
+                samplesAfterResumeFirstFrame
+            )
+
+            // 再喂 1 帧同步 —— 这次 lastLapGpsSample 已是上一帧，engine 被调用，样本入列
+            emitGps(2_040L, 30.4991, 104.4351)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesAfterResumeSecondFrame = viewModel.lapSession.value?.samples?.size ?: 0
+            assertTrue(
+                "失联恢复后第 2 帧同步样本应进入 session.samples",
+                samplesAfterResumeSecondFrame > samplesBeforeUnsynced
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun preTriggerBuffer_rejectsUnsyncedFrames() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.enterSmartLaunch(
+                template = com.blazepush.core.domain.model.TestTemplate.Acceleration0To100,
+                carModel = "test-car"
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val field = TestSessionViewModel::class.java.getDeclaredField("preTriggerBuffer")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val buffer = field.get(viewModel) as MutableList<Any?>
+            // gpsFlow 初值 emptyGpsSample() 携带 isTimeSynced=true，ViewModel 订阅时会收到；
+            // 清一下保证本测试只观察"未同步帧的行为"
+            buffer.clear()
+
+            // 喂 5 帧未同步 —— 不应进 preTriggerBuffer
+            repeat(5) { i ->
+                gpsFlow.value = emptyGpsSample().copy(
+                    timestamp = Long.MIN_VALUE,
+                    latitude = 30.49 + i * 0.0001,
+                    longitude = 104.43,
+                    speed = 1.0,
+                    isTimeSynced = false
+                )
+                dispatcher.scheduler.advanceUntilIdle()
+            }
+
+            assertEquals(
+                "未同步帧不应进入 preTriggerBuffer",
+                0,
+                buffer.size
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun processFilteredData_preparingPhase_doesNotTriggerWhenUnsynced() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.enterSmartLaunch(
+                template = com.blazepush.core.domain.model.TestTemplate.Acceleration0To100,
+                carModel = "test-car"
+            )
+            // 跳过倒计时
+            viewModel.skipCountdown()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 此时状态是 Preparing 且倒计时=0；喂一个"满足触发条件但未同步"的样本
+            // （满足 Acceleration 触发：先静止 3 帧 + 后续加速 5 帧；但所有帧 isTimeSynced=false，应全部被守卫拦）
+            repeat(10) { i ->
+                gpsFlow.value = emptyGpsSample().copy(
+                    timestamp = Long.MIN_VALUE,
+                    latitude = 30.49,
+                    longitude = 104.43,
+                    speed = if (i < 5) 0.5 else 10.0,
+                    isTimeSynced = false
+                )
+                dispatcher.scheduler.advanceUntilIdle()
+            }
+
+            assertTrue(
+                "未同步时不应从 Preparing 转入 Running",
+                viewModel.testState.value is com.blazepush.core.domain.model.TestState.Preparing
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun launchStatus_lastDataAgeUsesElapsedRealtime_notGpsTimestamp() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+
+            // 喂一帧 isTimeSynced=true，timestamp = 1_000L
+            gpsFlow.value = emptyGpsSample().copy(
+                timestamp = 1_000L,
+                latitude = 30.49,
+                longitude = 104.43,
+                speed = 1.0,
+                satelliteCount = 10,
+                hdop = 1.0,
+                isTimeSynced = true
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // JVM 单测下 SystemClock.elapsedRealtime() 默认返回 0L（isReturnDefaultValues=true），
+            // 所以 lastReceivedAtElapsed 在测试环境里也是 0L；
+            // 关键断言是：它**不等于** gpsData.timestamp(1_000L)，说明生产代码确实切换到了独立时钟源
+            val field = TestSessionViewModel::class.java.getDeclaredField("lastReceivedAtElapsed")
+            field.isAccessible = true
+            val elapsed = field.getLong(viewModel)
+            assertTrue(
+                "lastReceivedAtElapsed 必须独立于 gpsData.timestamp；" +
+                    "JVM 单测里 SystemClock.elapsedRealtime() 默认返回 0L，gpsData.timestamp=1_000L；" +
+                    "两者不等证明生产路径使用了独立的 elapsedRealtime 时钟源（要求 3.5 (c)）",
+                elapsed != 1_000L
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 }

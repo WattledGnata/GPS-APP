@@ -1,5 +1,6 @@
 package com.blazepush.feature.test.viewmodel
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.feature.test.FileLogger
@@ -94,7 +95,10 @@ class TestSessionViewModel(
     val countdownSeconds: StateFlow<Int> = _countdownSeconds.asStateFlow()
 
     private var countdownJob: Job? = null
-    private var lastDataTime = 0L
+    // 数据帧接收时刻，使用 elapsedRealtime 单调时钟，**不依赖** `gpsData.timestamp`
+    // 供 updateLaunchStatus 的 lastDataAge 计算，与 GpsData 的协议时间字段解耦
+    // （对应 fix-laptime-clock-source-integrity spec Requirement 3.5 (c)）
+    private var lastReceivedAtElapsed: Long = 0L
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     private val preTriggerBuffer = mutableListOf<FilteredGpsData>()
 
@@ -111,8 +115,11 @@ class TestSessionViewModel(
 
         viewModelScope.launch {
             gpsDataViewModel.gpsData.collect { gpsData ->
+                // 无论 isTimeSynced 真假，首行更新 elapsedRealtime 以驱动 lastDataAge 计算
+                // （Requirement 3.5 (c)：lastDataAge 与协议 timestamp 解耦）
+                lastReceivedAtElapsed = SystemClock.elapsedRealtime()
+
                 val filteredData = gpsDataFilter.process(gpsData)
-                lastDataTime = gpsData.timestamp
                 updatePreTriggerBuffer(filteredData)
                 updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
@@ -195,6 +202,8 @@ class TestSessionViewModel(
     }
 
     private fun updatePreTriggerBuffer(filteredData: FilteredGpsData) {
+        // Requirement 3.5 (a)：未同步帧不 append 到 preTriggerBuffer
+        if (!filteredData.raw.isTimeSynced) return
         preTriggerBuffer.add(filteredData)
         val cutoffTime = filteredData.timestamp - PRE_TRIGGER_DURATION_MS
         while (preTriggerBuffer.isNotEmpty() && preTriggerBuffer.first().timestamp < cutoffTime) {
@@ -205,6 +214,8 @@ class TestSessionViewModel(
     private fun processFilteredData(filteredData: FilteredGpsData) {
         when (val state = _testState.value) {
             is TestState.Preparing -> {
+                // Requirement 3.5 (a)：未同步帧不触发测试转 Running
+                if (!filteredData.raw.isTimeSynced) return
                 if (_countdownSeconds.value == 0) {
                     if (checkTriggerCondition(filteredData, state.template)) {
                         startTest(state.template, state.carModel, filteredData)
@@ -302,6 +313,15 @@ class TestSessionViewModel(
         val config = _lapRunConfig.value ?: return
         if (_currentMode.value != TestMode.LapDebug || !isLapRecording) return
 
+        // Requirement 3：未同步帧整帧跳过，并重置 lastLapGpsSample
+        // 失联恢复后首个同步帧走首样本分支（previousSample == null），
+        // 避免 detector 对"跨几秒位移"做线段相交判定伪造过线。
+        if (!gpsData.isTimeSynced) {
+            lastLapGpsSample = null
+            FileLogger.d(TAG, "bridgeGpsToLapTiming: skip unsynced frame, reset prev")
+            return
+        }
+
         val currentSession = _lapSession.value ?: return
         val track = trackCatalog.getTrack(config.trackId) ?: return
         val currentSample = gpsData.toLapGpsSample()
@@ -363,7 +383,9 @@ class TestSessionViewModel(
 
     private fun updateLaunchStatus(gpsData: GpsData) {
         val connectionState = _connectionState.value
-        val lastDataAge = System.currentTimeMillis() - lastDataTime
+        // Requirement 3.5 (c)：lastDataAge 用 elapsedRealtime delta，不依赖 gpsData.timestamp
+        // 避免未同步 / sentinel 值污染 launchStatus 数据年龄判定
+        val lastDataAge = SystemClock.elapsedRealtime() - lastReceivedAtElapsed
 
         // 根据测试类型确定起点速度范围
         val template = when (val state = _testState.value) {

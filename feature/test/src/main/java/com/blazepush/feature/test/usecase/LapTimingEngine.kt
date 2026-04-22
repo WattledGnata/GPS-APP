@@ -90,10 +90,17 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
         }
 
         val activeLap = session.activeLap
-        val qualityFlags = if (activeLap.sectorEntries.size == track.sectorGates.size) {
-            emptyList()
-        } else {
-            listOf(LapQualityFlag.IncompleteSectors)
+        val trajectory = updatedSamples.drop(activeLap.sampleStartIndex)
+        val hasDesyncGap = trajectory.zipWithNext().any { (a, b) ->
+            (b.timestampMillis - a.timestampMillis) > 200L
+        }
+        val qualityFlags = buildList {
+            if (activeLap.sectorEntries.size != track.sectorGates.size) {
+                add(LapQualityFlag.IncompleteSectors)
+            }
+            if (hasDesyncGap) {
+                add(LapQualityFlag.ProtocolDesyncGap)
+            }
         }
         val lapRecord = LapRecord(
             recordId = "${session.sessionId}-lap-${activeLap.lapIndex}",
@@ -104,7 +111,7 @@ class LapTimingEngine(private val detector: GateCrossingDetector = GateCrossingD
             finishedAtMillis = currentSample.timestampMillis,
             durationMillis = currentSample.timestampMillis - activeLap.startedAtMillis,
             sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
-            trajectory = updatedSamples.drop(activeLap.sampleStartIndex),
+            trajectory = trajectory,
             crossingEvents = updatedEvents.dropWhile { it.timestampMillis < activeLap.startedAtMillis },
             qualityFlags = qualityFlags
         )

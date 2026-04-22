@@ -106,7 +106,13 @@ class LapTimingEngineTest {
 
         val lap = finishedSession.completedLaps.first()
         assertEquals(listOf(250_600L, 8_200L), lap.sectorTimes)
-        assertTrue(lap.qualityFlags.isEmpty())
+        // 注：本用例的 trajectory 时间戳跨度为分钟级（用于测试 sector 穿线顺序），
+        // 相邻差天然超过 200ms 阈值，会触发 ProtocolDesyncGap；
+        // 此处不关心该标志，只验证 sectors 完整时不带 IncompleteSectors。
+        assertTrue(
+            "expected no IncompleteSectors, got=${lap.qualityFlags}",
+            !lap.qualityFlags.contains(LapQualityFlag.IncompleteSectors)
+        )
         assertEquals(2, finishedSession.currentLapIndex)
         assertEquals(1, finishedSession.completedLaps.size)
     }
@@ -136,7 +142,11 @@ class LapTimingEngineTest {
 
         val lap = finishedSession.completedLaps.first()
         assertEquals(listOf(250_600L), lap.sectorTimes)
-        assertEquals(listOf(LapQualityFlag.IncompleteSectors), lap.qualityFlags)
+        // 本用例 trajectory ts 跨度为分钟级，同时带 IncompleteSectors 与 ProtocolDesyncGap
+        assertTrue(
+            "expected IncompleteSectors, got=${lap.qualityFlags}",
+            lap.qualityFlags.contains(LapQualityFlag.IncompleteSectors)
+        )
     }
 
     @Test
@@ -166,7 +176,112 @@ class LapTimingEngineTest {
         )
 
         assertEquals(1, finishedSession.completedLaps.size)
-        assertEquals(listOf(LapQualityFlag.IncompleteSectors), finishedSession.completedLaps.first().qualityFlags)
+        // 本用例 trajectory ts 跨度为分钟级，同时带 IncompleteSectors 与 ProtocolDesyncGap
+        assertTrue(
+            "expected IncompleteSectors, got=${finishedSession.completedLaps.first().qualityFlags}",
+            finishedSession.completedLaps.first().qualityFlags.contains(LapQualityFlag.IncompleteSectors)
+        )
+    }
+
+    @Test
+    fun processSample_lapWithProtocolDesyncGap_isFlagged() {
+        // 开圈：起终点穿线（prev=1773477876490, current=1773477876690）
+        val startedSession = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+
+        // 中间插入一帧：与前一帧 ts 差 = 300ms（>200ms 阈值）
+        // 取起终点线的远端位置避免误触发 gate
+        val gapSamplePrev = sample(
+            timestampMillis = 1773477876990L, // 距离上一帧 300ms
+            latitude = 0.0,
+            longitude = 0.0
+        )
+        val gapSampleCurrent = sample(
+            timestampMillis = 1773477877030L, // 40ms 正常间隔
+            latitude = 0.0,
+            longitude = 0.0
+        )
+        val afterGapSession = engine.processSample(
+            session = startedSession,
+            track = track,
+            previousSample = gapSamplePrev,
+            currentSample = gapSampleCurrent
+        )
+
+        // 闭圈：起终点再次穿线
+        val finishedSession = engine.processSample(
+            session = afterGapSession,
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773478143490L, 1773478143690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773478143490L, 1773478143690L).second
+        )
+
+        assertEquals(1, finishedSession.completedLaps.size)
+        val lap = finishedSession.completedLaps.first()
+        assertTrue(
+            "expected ProtocolDesyncGap flag, got=${lap.qualityFlags}",
+            lap.qualityFlags.contains(LapQualityFlag.ProtocolDesyncGap)
+        )
+        // durationMillis 不扣除失联段
+        assertEquals(1773478143690L - 1773477876690L, lap.durationMillis)
+    }
+
+    @Test
+    fun processSample_lapWithoutGap_isNotFlagged() {
+        // 开圈
+        val startedSession = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+
+        // 中间一帧：相邻 ts 差 = 40ms（正常）
+        val normalPrev = sample(
+            timestampMillis = 1773477876730L, // 距离上一帧 40ms
+            latitude = 0.0,
+            longitude = 0.0
+        )
+        val normalCurrent = sample(
+            timestampMillis = 1773477876770L, // 40ms
+            latitude = 0.0,
+            longitude = 0.0
+        )
+        val afterNormalSession = engine.processSample(
+            session = startedSession,
+            track = track,
+            previousSample = normalPrev,
+            currentSample = normalCurrent
+        )
+
+        // 闭圈：起终点再次穿线，prev 与上一帧差 40ms
+        val finishPrev = sample(
+            timestampMillis = 1773477876810L, // 40ms
+            latitude = crossingSamples(track.startFinishGate, 0L, 0L).first.latitude,
+            longitude = crossingSamples(track.startFinishGate, 0L, 0L).first.longitude
+        )
+        val finishCurrent = sample(
+            timestampMillis = 1773477876850L, // 40ms
+            latitude = crossingSamples(track.startFinishGate, 0L, 0L).second.latitude,
+            longitude = crossingSamples(track.startFinishGate, 0L, 0L).second.longitude
+        )
+        val finishedSession = engine.processSample(
+            session = afterNormalSession,
+            track = track,
+            previousSample = finishPrev,
+            currentSample = finishCurrent
+        )
+
+        assertEquals(1, finishedSession.completedLaps.size)
+        val lap = finishedSession.completedLaps.first()
+        assertTrue(
+            "expected no ProtocolDesyncGap flag, got=${lap.qualityFlags}",
+            !lap.qualityFlags.contains(LapQualityFlag.ProtocolDesyncGap)
+        )
     }
 
     @Test
