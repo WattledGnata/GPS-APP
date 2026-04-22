@@ -1288,8 +1288,11 @@ class GpsDataFilterTest {
     }
 
     /**
-     * A14：异常帧（isAnomaly=true）不得进入 speedWindow，median 输出保持窗口内非异常
-     * 帧的统计不被污染。
+     * A14：异常帧（isAnomaly=true）不得进入 speedWindow —— 中位数对单 spike 的鲁棒性验证。
+     *
+     * **测试强度局限（A55）**：中位数对单个离群天然鲁棒，"A14 生效"（window=[60,60,60]）
+     * 与"A14 失效"（window=[60,60,60,300]）median 输出均为 60，本用例无法硬区分两种实现。
+     * 硬区分用例见 `A14_process_multipleAnomalyFrames_medianHardDistinguishesWindowExclusion`。
      */
     @Test
     fun A14_process_anomalyFrame_doesNotPollutePosteriorMedianOutput() {
@@ -1320,7 +1323,10 @@ class GpsDataFilterTest {
     }
 
     /**
-     * A14：位置异常帧不进 latWindow / lonWindow，median 位置输出不被拉偏。
+     * A14：位置异常帧不进 latWindow / lonWindow —— 中位数对单 spike 的鲁棒性验证。
+     *
+     * **测试强度局限（A55）**：与 speed 版本同理，单 spike 场景无法硬区分 A14 实现。
+     * 硬区分用例见 `A14_process_multiplePositionAnomalyFrames_latLonMedianHardDistinguishesWindowExclusion`。
      */
     @Test
     fun A14_process_positionAnomalyFrame_doesNotPollutePosteriorLatLonMedian() {
@@ -1350,6 +1356,120 @@ class GpsDataFilterTest {
         assertTrue(
             "A14 前置：位置 spike 应被判 isPositionAnomaly=true（或 isAnomaly=true）",
             spike.isPositionAnomaly || spike.isAnomaly
+        )
+    }
+
+    // ==================== A55 硬区分强化：多 spike 场景拉偏 median ====================
+    //
+    // 背景：上面两条 A14 用例用"3 正常 + 1 spike"场景，中位数对单离群天然鲁棒，
+    // 无法硬区分"spike 入窗口"与"spike 不入窗口"两种实现。本节用"2 正常 + 4 连 spike + 1 正常"
+    // 场景：若 A14 生效，最终窗口仅含 3 个正常值 → median 正常；若 A14 失效（spike 入窗口），
+    // 窗口含 4 个 spike → median 被 spike 值拉走。两种情况输出截然不同，用例提供回归锁定。
+    //
+    // 设计约束：
+    //   - 4 连 spike 每帧到 previousRaw(ts=40) 的 dt < 200ms，避免 A12 兜底重置；
+    //   - 4 连 spike 每帧 dv / Δd 持续触发 isAnomaly / isPositionAnomaly（依赖 A13 的
+    //     "异常帧不更新 previousRaw" 把 previousRaw 锁在 ts=40）；
+    //   - 恢复帧 ts=230，dt=190ms<200ms，不触发 A12 重置；恢复帧自身不是异常帧。
+
+    /**
+     * A55-1：多 speed spike 硬区分场景 —— A14 失效会让 median 偏到 spike 值。
+     *
+     * A14 生效：speedWindow 末态 = [60,60,60]，median = 60（正确）
+     * A14 失效：speedWindow 末态 = [60,60,300,300,300,300,60]，sorted 后中间值 = 300
+     *
+     * 依赖：A13（异常帧不更新 previousRaw）保证 4 连 spike 相对 previousRaw(ts=40) 的 dt
+     * 分别为 40/80/120/160ms 均 < 200ms（A12 不重置），speedDelta=240 恒 >> maxDelta=90×dt
+     * → 4 帧均 isAnomaly=true。
+     */
+    @Test
+    fun A14_process_multipleAnomalyFrames_medianHardDistinguishesWindowExclusion() {
+        val localFilter = GpsDataFilter()
+        // 2 正常帧：speedWindow = [60, 60]（size<3，output=raw.speed）
+        localFilter.process(createGpsData(timestamp = 0L, speed = 60.0))
+        localFilter.process(createGpsData(timestamp = 40L, speed = 60.0))
+
+        // 4 连 spike：每帧 speed=300，isAnomaly=true（A13 下 previousRaw 保持 ts=40）
+        listOf(80L, 120L, 160L, 200L).forEach { ts ->
+            val r = localFilter.process(createGpsData(timestamp = ts, speed = 300.0))
+            assertTrue("前置：ts=$ts 的 spike 应被判 isAnomaly=true", r.isAnomaly)
+        }
+
+        // 恢复帧：ts=230 相对 previousRaw(40,60) dt=190ms<200ms（A12 不重置），dv=0 不异常
+        val recovered = localFilter.process(createGpsData(timestamp = 230L, speed = 60.0))
+        assertFalse("前置：恢复帧本身不应为 isAnomaly", recovered.isAnomaly)
+        assertEquals(
+            "A55 硬区分：A14 生效时 speedWindow 末态 [60,60,60] median=60；" +
+                "若 A14 失效，末态 [60,60,300,300,300,300,60] sorted 后中间值=300",
+            60.0,
+            recovered.speed,
+            1e-9
+        )
+    }
+
+    /**
+     * A55-2：多位置 spike 硬区分场景 —— A14 失效会让 lat/lon median 偏到 spike 位置。
+     *
+     * A14 生效：latWindow 末态仅含 3 个正常点 → median ≈ baseLat（偏离 < 1e-5）
+     * A14 失效：latWindow 末态含 4 个 spikeLat → sorted 后中间值 = spikeLat（偏离 ≈ 1e-4）
+     *
+     * 位置 spike 偏移 1e-4 度 ≈ 11 米 >> 0.5m 一致性检查阈值，且 vImplied >> 速度容差，
+     * 触发 isPositionAnomaly=true。
+     */
+    @Test
+    fun A14_process_multiplePositionAnomalyFrames_latLonMedianHardDistinguishesWindowExclusion() {
+        val localFilter = GpsDataFilter()
+        val baseLat = 30.4961
+        val baseLon = 104.4331
+        val spikeLat = baseLat + 1e-4
+        val spikeLon = baseLon + 1e-4
+
+        // 2 正常帧（位置微动 1e-6 量级远小于 0.5m 阈值，一致性检查跳过）
+        localFilter.process(
+            createGpsData(timestamp = 0L, speed = 60.0, latitude = baseLat, longitude = baseLon)
+        )
+        localFilter.process(
+            createGpsData(
+                timestamp = 40L,
+                speed = 60.0,
+                latitude = baseLat + 1e-6,
+                longitude = baseLon + 1e-6
+            )
+        )
+
+        // 4 连位置 spike：每帧到 previousPosition(baseLat+1e-6) 的 distanceM ≈ 14.6m >> 0.5m
+        // vImplied >> 60 km/h 容差 → isPositionAnomaly=true
+        listOf(80L, 120L, 160L, 200L).forEach { ts ->
+            val r = localFilter.process(
+                createGpsData(timestamp = ts, speed = 60.0, latitude = spikeLat, longitude = spikeLon)
+            )
+            assertTrue("前置：ts=$ts 的位置 spike 应被判 isPositionAnomaly=true", r.isPositionAnomaly)
+        }
+
+        // 恢复帧：位置回到 baseLat 微动区，distanceM<0.5m 跳过检查，非位置异常
+        val recovered = localFilter.process(
+            createGpsData(
+                timestamp = 230L,
+                speed = 60.0,
+                latitude = baseLat + 3e-6,
+                longitude = baseLon + 3e-6
+            )
+        )
+        assertFalse("前置：恢复帧本身不应为 isPositionAnomaly", recovered.isPositionAnomaly)
+
+        // A14 生效：latWindow=[baseLat, baseLat+1e-6, baseLat+3e-6] median=baseLat+1e-6（偏离 1e-6）
+        // A14 失效：sorted 窗口中间值 = spikeLat（偏离 1e-4），阈值 1e-5 能硬区分两种实现
+        assertTrue(
+            "A55 硬区分：A14 生效时 latWindow 不含 spike，median 偏离 baseLat 应 < 1e-5；" +
+                "若 A14 失效，median 被 spikeLat 拉偏约 1e-4，实际偏离=" +
+                "${kotlin.math.abs(recovered.latitude - baseLat)}",
+            kotlin.math.abs(recovered.latitude - baseLat) < 1e-5
+        )
+        assertTrue(
+            "A55 硬区分：A14 生效时 lonWindow 不含 spike，median 偏离 baseLon 应 < 1e-5；" +
+                "若 A14 失效，median 被 spikeLon 拉偏约 1e-4，实际偏离=" +
+                "${kotlin.math.abs(recovered.longitude - baseLon)}",
+            kotlin.math.abs(recovered.longitude - baseLon) < 1e-5
         )
     }
 }
