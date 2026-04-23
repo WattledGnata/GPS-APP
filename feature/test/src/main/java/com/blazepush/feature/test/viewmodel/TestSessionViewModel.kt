@@ -337,12 +337,32 @@ class TestSessionViewModel(
             "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${gpsData.latitude}, lon=${gpsData.longitude}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude}, prevLon=${previousSample?.longitude}"
         )
 
-        lastLapGpsSample = currentSample
+        // A38 三段式守卫（openspec fix-lap-timing-engine-entry-hardening Requirement 4）：
+        //   段 1 首样本 → 仅赋 lastLapGpsSample 为下一帧准备基准，A34 死码一并清理
+        //   段 2 ts 回跳 → 整帧丢弃，不更新 lastLapGpsSample（保持前帧为污染源截断）
+        //   段 3 正常推进 → 赋 lastLapGpsSample + 喂 engine
+
+        // 段 1：首样本分支
+        //   历史死码 `_lapSession.value = currentSession` 删除（A34 顺手清理：StateFlow
+        //   相同引用不 emit，纯死码；留着未来换 SharedFlow 会引爆"每帧都 emit"的 bug）
         if (previousSample == null || currentSample.timestampMillis <= 0L) {
-            _lapSession.value = currentSession
+            lastLapGpsSample = currentSample
             return
         }
 
+        // 段 2：A38 ts 单调守卫
+        //   回跳帧 **不** 更新 lastLapGpsSample（保持前帧作为下一帧基准）
+        //   与 A13 "异常帧不更新 previousRaw" 模式一致
+        if (currentSample.timestampMillis < previousSample.timestampMillis) {
+            FileLogger.d(
+                TAG,
+                "bridgeGpsToLapTiming: ts regression, drop sample prevTs=${previousSample.timestampMillis} curTs=${currentSample.timestampMillis}"
+            )
+            return
+        }
+
+        // 段 3：正常推进
+        lastLapGpsSample = currentSample
         val updatedSession = lapTimingEngine.processSample(
             session = currentSession,
             track = track,

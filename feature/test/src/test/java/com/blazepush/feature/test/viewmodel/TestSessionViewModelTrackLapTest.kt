@@ -655,4 +655,159 @@ class TestSessionViewModelTrackLapTest {
             Dispatchers.resetMain()
         }
     }
+
+    // ==================== 战役 C engine 入口夯实 A38 bridge 三段式回归 ====================
+    //
+    // Change: openspec/changes/fix-lap-timing-engine-entry-hardening
+    //   Requirement 4: bridgeGpsToLapTiming 时间单调守卫 + 三段式 lastLapGpsSample 契约
+    //   顺手清理 A34: 首样本分支死码 `_lapSession.value = currentSession` 删除
+    //
+    // 间接观察手段：
+    //   - bridge 段 1（首样本）early return 不调 engine → session.samples.size 不增长
+    //   - bridge 段 2（ts 回跳）early return 不调 engine → session.samples.size 不增长 + lastLapGpsSample 保持前帧
+    //   - bridge 段 3（正常推进）调 engine → session.samples += currentSample
+    //   构造"回跳后紧跟一帧 ts 在 回跳帧 / 前帧 之间"的场景可硬区分 lastLapGpsSample 是否被污染。
+
+    @Test
+    fun bridgeGpsToLapTiming_firstSample_updatesLastLapGpsSampleForNextFrame() = runTest {
+        // R4 Scenario 1：首样本 MUST 赋 lastLapGpsSample，下一帧才能进入 engine
+        //
+        // 前置清理：gpsFlow StateFlow 初值 empty(ts=0) 在 selectLapDebugMode 后的 collect
+        // 第一次触发中已把 lastLapGpsSample 赋为 empty(ts=0)；先喂一帧 isTimeSynced=false
+        // 走 unsynced 分支（战役 A 守卫 `lastLapGpsSample = null`），让后续 emitGps(1_000L)
+        // 真正成为"首样本"。
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 清 lastLapGpsSample
+            gpsFlow.value = emptyGpsSample().copy(
+                timestamp = Long.MIN_VALUE,
+                latitude = 0.0,
+                longitude = 0.0,
+                isTimeSynced = false
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesAfterReset = viewModel.lapSession.value?.samples?.size ?: 0
+
+            // 真正的首样本 —— bridge 段 1 走首样本分支 early return，engine 未调用，session.samples 不增长
+            emitGps(1_000L, 30.4970, 104.4330)
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesAfterFirst = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "真正的首样本应走 bridge 段 1 early return，session.samples 不增长",
+                samplesAfterReset,
+                samplesAfterFirst
+            )
+
+            // 第二帧 —— 若首帧正确赋了 lastLapGpsSample，本帧走段 3 正常推进，engine 被调用
+            // 硬区分反证：若 R4 段 1 漏赋 lastLapGpsSample，本帧又走段 1，samples 仍不增长
+            emitGps(1_040L, 30.4971, 104.4331)
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesAfterSecond = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "第二帧应走 bridge 段 3 engine 被调用追加样本；若首帧未赋 lastLapGpsSample 则本帧仍走段 1 samples 不增长",
+                samplesAfterReset + 1,
+                samplesAfterSecond
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun bridgeGpsToLapTiming_dropsSamplesWithRegressingTimestamp() = runTest {
+        // R4 Scenario 2：ts 回跳帧 MUST 被 bridge 段 2 整帧丢弃
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 建立 lastLapGpsSample（两帧）
+            emitGps(1_000L, 30.4970, 104.4330)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_040L, 30.4971, 104.4331)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesBeforeRegression = viewModel.lapSession.value?.samples?.size ?: 0
+            assertTrue(
+                "第二帧应已进入 session.samples（段 3 正常推进）",
+                samplesBeforeRegression >= 1
+            )
+
+            // 喂回跳帧：ts=900 < lastLapGpsSample.ts=1_040
+            // bridge 段 2 应整帧丢弃 + 不更新 lastLapGpsSample
+            emitGps(900L, 30.4972, 104.4332)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesAfterRegression = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "ts 回跳帧应被 bridge 段 2 丢弃，session.samples 不增长",
+                samplesBeforeRegression,
+                samplesAfterRegression
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun bridgeGpsToLapTiming_afterRegressionDropped_nextForwardSampleIsProcessedAgainstPreviousFrame() = runTest {
+        // R4 Scenario 3：回跳帧被丢弃后，lastLapGpsSample MUST 保持为回跳之前的帧
+        //   硬区分设计：第四帧 ts 位于 "回跳帧 ts" 和 "前一帧 ts" 之间
+        //     - R4 生效：lastLapGpsSample = 前一帧(ts=1_040)，第四帧 ts=1_020 < 1_040 → 再次回跳丢弃
+        //     - R4 失效：lastLapGpsSample = 回跳帧(ts=900) 被污染，第四帧 ts=1_020 > 900 → engine 被调用，samples 增长
+        //   samples.size 不同 → 硬区分
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 建立 lastLapGpsSample
+            emitGps(1_000L, 30.4970, 104.4330)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_040L, 30.4971, 104.4331)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesBefore = viewModel.lapSession.value?.samples?.size ?: 0
+
+            // 回跳帧 ts=900
+            emitGps(900L, 30.4972, 104.4332)
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesAfterRegression = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "前置：回跳帧应被段 2 丢弃",
+                samplesBefore,
+                samplesAfterRegression
+            )
+
+            // 硬区分帧 ts=1_020（介于回跳帧 900 与前一帧 1_040 之间）
+            emitGps(1_020L, 30.4973, 104.4333)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val samplesAfterProbe = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "R4 生效：lastLapGpsSample 保持回跳前的 ts=1_040，探测帧 ts=1_020<1_040 再次被段 2 丢弃，samples 不增长；" +
+                    "若 R4 失效则 lastLapGpsSample 被污染为回跳帧 ts=900，探测帧 ts=1_020>900 会走段 3，samples 增长。当前断言为 R4 生效版本。",
+                samplesBefore,
+                samplesAfterProbe
+            )
+
+            // 再喂一帧真正前进的样本确认路径恢复正常
+            emitGps(1_100L, 30.4974, 104.4334)
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesAfterForward = viewModel.lapSession.value?.samples?.size ?: 0
+            assertEquals(
+                "真正前进的样本（ts=1_100>1_040）应走段 3 正常推进，samples 增长 1",
+                samplesBefore + 1,
+                samplesAfterForward
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 }
