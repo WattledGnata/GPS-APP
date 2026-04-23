@@ -46,6 +46,25 @@ class LapTimingEngine(
         previousSample: GpsSample,
         currentSample: GpsSample
     ): LapSession {
+        // A19 入口守卫：白名单语义，仅放行 Ready / Recording 两个应接受样本的状态。
+        // 未来新增 LapSessionStatus 枚举值（Paused / Interrupted / ...）默认被拦，
+        // 除非显式决定接受 —— 防御"开放默认不安全"反模式。
+        // 详见 openspec/changes/fix-lap-timing-engine-entry-hardening Requirement 1。
+        if (session.status !in setOf(LapSessionStatus.Ready, LapSessionStatus.Recording)) {
+            return session
+        }
+
+        // A21 深度防御：bridge 层若被绕过或重构，engine 兜底拦 ts 回跳。
+        // 对比基准用 previousSample（方法参数永远非空），与 A38 语义对称。
+        // 详见 openspec/changes/fix-lap-timing-engine-entry-hardening Requirement 2。
+        if (currentSample.timestampMillis < previousSample.timestampMillis) {
+            FileLogger.d(
+                TAG,
+                "processSample: ts regression, drop prevTs=${previousSample.timestampMillis} curTs=${currentSample.timestampMillis}"
+            )
+            return session
+        }
+
         val updatedSamples = session.samples + currentSample
         val startFinishDetection = detector.detect(previous = previousSample, current = currentSample, gate = track.startFinishGate)
         FileLogger.d(
@@ -133,7 +152,9 @@ class LapTimingEngine(
             durationMillis = currentSample.timestampMillis - activeLap.startedAtMillis,
             sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
             trajectory = trajectory,
-            crossingEvents = updatedEvents.dropWhile { it.timestampMillis < activeLap.startedAtMillis },
+            // A21 裁剪层：逐元素 filter 严格语义，不依赖时间戳单调假设。
+            // `dropWhile` 只在前缀首个不满足处停止，非单调序列会漏拦夹在后面的历史事件。
+            crossingEvents = updatedEvents.filter { it.timestampMillis >= activeLap.startedAtMillis },
             qualityFlags = qualityFlags
         )
         val nextLapIndex = activeLap.lapIndex + 1

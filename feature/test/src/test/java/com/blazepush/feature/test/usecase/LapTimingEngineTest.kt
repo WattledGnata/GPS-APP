@@ -1,13 +1,16 @@
 package com.blazepush.feature.test.usecase
 
+import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapQualityFlag
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.TimingGate
+import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.repository.PresetTrackCatalog
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -362,6 +365,309 @@ class LapTimingEngineTest {
         assertEquals(false, lastEvent.accepted)
         assertEquals(CrossingReason.UnexpectedGateOrder, lastEvent.reason)
     }
+
+    // ==================== 战役 C engine 入口夯实 A19 / A21 回归 ====================
+    //
+    // Change: openspec/changes/fix-lap-timing-engine-entry-hardening
+    //   Requirement 1: engine 入口 LapSessionStatus 白名单守卫（A19）
+    //   Requirement 2: engine 入口 ts 单调守卫（A21 入口层）
+    //   Requirement 3: crossingEvents 裁剪 filter 严格语义（A21 裁剪层）
+
+    @Test
+    fun processSample_onFinishedSession_returnsUnchanged() {
+        // A19 R1 Scenario 1：Finished 状态 MUST 被白名单拦下
+        val finishedSession = newSession().copy(
+            status = LapSessionStatus.Finished,
+            samples = List(3) { idx ->
+                sample(timestampMillis = 1_000L + idx * 40L, latitude = 0.0, longitude = 0.0)
+            }
+        )
+        val newPrev = sample(timestampMillis = 2_000L, latitude = 0.0, longitude = 0.0)
+        val newCurrent = sample(timestampMillis = 2_040L, latitude = 0.0, longitude = 0.0)
+
+        val result = engine.processSample(
+            session = finishedSession,
+            track = track,
+            previousSample = newPrev,
+            currentSample = newCurrent
+        )
+
+        assertEquals(LapSessionStatus.Finished, result.status)
+        assertEquals(3, result.samples.size)
+        assertEquals(finishedSession.completedLaps, result.completedLaps)
+        assertEquals(finishedSession.activeLap, result.activeLap)
+        assertEquals(finishedSession.crossingEvents, result.crossingEvents)
+        assertEquals(finishedSession.currentLapIndex, result.currentLapIndex)
+    }
+
+    @Test
+    fun processSample_onCancelledSession_returnsUnchanged() {
+        // A19 R1 Scenario 2：Cancelled 状态 MUST 被白名单拦下
+        val cancelledSession = newSession().copy(
+            status = LapSessionStatus.Cancelled,
+            samples = listOf(sample(timestampMillis = 1_000L, latitude = 0.0, longitude = 0.0))
+        )
+
+        val result = engine.processSample(
+            session = cancelledSession,
+            track = track,
+            previousSample = sample(1_000L, 0.0, 0.0),
+            currentSample = sample(1_040L, 0.0, 0.0)
+        )
+
+        assertEquals(LapSessionStatus.Cancelled, result.status)
+        assertEquals(1, result.samples.size)
+    }
+
+    @Test
+    fun processSample_onIdleSession_returnsUnchanged() {
+        // A19 R1 Scenario 3：Idle 状态 MUST 被白名单拦下
+        val idleSession = newSession().copy(status = LapSessionStatus.Idle)
+
+        val result = engine.processSample(
+            session = idleSession,
+            track = track,
+            previousSample = sample(1_000L, 0.0, 0.0),
+            currentSample = sample(1_040L, 0.0, 0.0)
+        )
+
+        assertEquals(LapSessionStatus.Idle, result.status)
+        assertEquals(0, result.samples.size)
+        assertEquals(null, result.activeLap)
+    }
+
+    @Test
+    fun processSample_onReadySession_acceptsSampleAndStartsLap() {
+        // A19 R1 Scenario 4：Ready 白名单放行 + 首次起终点过线推进到 Recording
+        val crossing = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L)
+
+        val result = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossing.first,
+            currentSample = crossing.second
+        )
+
+        assertEquals(LapSessionStatus.Recording, result.status)
+        assertNotNull(result.activeLap)
+        assertEquals(1, result.activeLap!!.lapIndex)
+        assertEquals(1, result.samples.size)
+    }
+
+    @Test
+    fun processSample_onRecordingSession_acceptsSampleAndAdvances() {
+        // A19 R1 Scenario 5：Recording 白名单放行 + 正常 sector 推进
+        val startedSession = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        assertEquals(LapSessionStatus.Recording, startedSession.status)
+
+        val sectorCross = crossingSamples(track.sectorGates[0], 1773478127090L, 1773478127290L)
+        val advanced = engine.processSample(
+            session = startedSession,
+            track = track,
+            previousSample = sectorCross.first,
+            currentSample = sectorCross.second
+        )
+
+        assertEquals(LapSessionStatus.Recording, advanced.status)
+        assertEquals(startedSession.samples.size + 1, advanced.samples.size)
+        assertEquals(1, advanced.activeLap!!.sectorEntries.size)
+    }
+
+    @Test
+    fun processSample_timestampRegressionSample_returnsUnchanged() {
+        // A21 R2 Scenario 1：ts 回跳样本必须被 engine 入口守卫整帧丢弃
+        val startedSession = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+
+        val beforeSize = startedSession.samples.size
+        val beforeCrossings = startedSession.crossingEvents.size
+
+        val regressedPrev = sample(timestampMillis = 500L, latitude = 0.0, longitude = 0.0)
+        val regressedCurrent = sample(timestampMillis = 400L, latitude = 0.0, longitude = 0.0)
+
+        val result = engine.processSample(
+            session = startedSession,
+            track = track,
+            previousSample = regressedPrev,
+            currentSample = regressedCurrent
+        )
+
+        assertEquals(beforeSize, result.samples.size)
+        assertEquals(beforeCrossings, result.crossingEvents.size)
+        assertEquals(startedSession.activeLap, result.activeLap)
+        assertEquals(startedSession.completedLaps, result.completedLaps)
+    }
+
+    @Test
+    fun processSample_firstSampleOnEmptySession_noRegressionCheckApplies() {
+        // A21 R2 Scenario 2：首次起圈 session.samples 为空，previousSample 是方法参数永远非空；
+        // 守卫基准是 previousSample.timestampMillis，不应因 session.samples 空而误拦。
+        val emptyReady = newSession()
+        assertEquals(0, emptyReady.samples.size)
+
+        val crossing = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L)
+        // crossing.first.ts < crossing.second.ts，不触发 ts 回跳
+
+        val result = engine.processSample(
+            session = emptyReady,
+            track = track,
+            previousSample = crossing.first,
+            currentSample = crossing.second
+        )
+
+        assertEquals(LapSessionStatus.Recording, result.status)
+        assertEquals(1, result.samples.size)
+    }
+
+    @Test
+    fun handleStartFinishCrossing_monotonicCrossingEvents_filterRetainsAllAboveStartedAt() {
+        // A21 R3 Scenario 1：单调序列 filter 保留所有 ts >= startedAtMillis 的事件（含边界 ts == startedAt）
+        // 构造 startedAtMillis = 200L + crossingEvents = [100, 200, 300, 400]，闭圈 currentSample.ts = 500
+        // 期望 LapRecord.crossingEvents 的 timestampMillis 顺序 = [200, 300, 400, 500]
+        //   （其中 500 是闭圈帧自己产生的 CrossingEvent）
+        val opened = openLapAt(startedAtMillis = 200L)
+        val withHistory = opened.copy(
+            crossingEvents = listOf(
+                historicalCrossing(100L),
+                historicalCrossing(200L),
+                historicalCrossing(300L),
+                historicalCrossing(400L)
+            )
+        )
+
+        val closeCrossing = crossingSamples(track.startFinishGate, 499L, 500L)
+        val closed = engine.processSample(
+            session = withHistory,
+            track = track,
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
+        )
+
+        assertEquals(1, closed.completedLaps.size)
+        val lap = closed.completedLaps.first()
+        assertEquals(
+            listOf(200L, 300L, 400L, 500L),
+            lap.crossingEvents.map { it.timestampMillis }
+        )
+    }
+
+    @Test
+    fun handleStartFinishCrossing_outOfOrderHistoricalEventHardDistinguishesFilterVsDropWhile() {
+        // A21 R3 Scenario 2：非单调序列含 ts < startedAt 夹后，filter 拒收；v1 dropWhile 会漏拦。
+        // crossingEvents = [100, 250, 150, 400] + startedAtMillis = 200L
+        //   v1 (dropWhile): 100 drop, 250 停止 → [250, 150, 400] + 闭圈帧 → [250, 150, 400, 500]
+        //   v2 (filter):    逐元素 → [250, 400] + 闭圈帧 → [250, 400, 500]
+        //   断言 == [250, 400, 500] 硬区分 v1/v2
+        val opened = openLapAt(startedAtMillis = 200L)
+        val withOutOfOrder = opened.copy(
+            crossingEvents = listOf(
+                historicalCrossing(100L),
+                historicalCrossing(250L),
+                historicalCrossing(150L), // 历史事件夹在后面
+                historicalCrossing(400L)
+            )
+        )
+
+        val closeCrossing = crossingSamples(track.startFinishGate, 499L, 500L)
+        val closed = engine.processSample(
+            session = withOutOfOrder,
+            track = track,
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
+        )
+
+        assertEquals(1, closed.completedLaps.size)
+        val lap = closed.completedLaps.first()
+        assertEquals(
+            listOf(250L, 400L, 500L),
+            lap.crossingEvents.map { it.timestampMillis }
+        )
+        // 硬区分对照：若 A21 回退为 dropWhile，同一输入会得到 [250, 150, 400, 500]（ts=150 漏拦）
+        assertFalse(
+            "v1 dropWhile 会保留 ts=150 的历史事件，本次 filter 必须拒收",
+            lap.crossingEvents.any { it.timestampMillis == 150L }
+        )
+    }
+
+    @Test
+    fun handleStartFinishCrossing_monotonicSequence_filterOutputEqualsDropWhileOutput() {
+        // A21 R3 Scenario 3：单调序列 filter 输出与 dropWhile 输出等价（防退化回归保护）
+        // startedAtMillis = 150L + crossingEvents = [100, 200, 300, 400]，闭圈 current.ts = 500
+        // 两者输出都应是 [200, 300, 400, 500]
+        val opened = openLapAt(startedAtMillis = 150L)
+        val historicalEvents = listOf(
+            historicalCrossing(100L),
+            historicalCrossing(200L),
+            historicalCrossing(300L),
+            historicalCrossing(400L)
+        )
+        val withHistory = opened.copy(crossingEvents = historicalEvents)
+
+        val closeCrossing = crossingSamples(track.startFinishGate, 499L, 500L)
+        val closed = engine.processSample(
+            session = withHistory,
+            track = track,
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
+        )
+
+        assertEquals(1, closed.completedLaps.size)
+        val lap = closed.completedLaps.first()
+        val filterOutput = lap.crossingEvents.map { it.timestampMillis }
+
+        // 用闭圈帧同步构造等价的 updatedEvents 序列再跑一次 dropWhile 做对照
+        val closingEvent = lap.crossingEvents.last() // 闭圈帧自己产生的
+        val replayUpdatedEvents = historicalEvents + closingEvent
+        val dropWhileOutput = replayUpdatedEvents
+            .dropWhile { it.timestampMillis < 150L }
+            .map { it.timestampMillis }
+
+        assertEquals(listOf(200L, 300L, 400L, 500L), filterOutput)
+        // 防退化断言：单调场景下 filter 与 dropWhile 输出逐元素相等
+        assertEquals(
+            "单调序列 filter 应与 dropWhile 完全等价，否则防退化契约被破坏",
+            dropWhileOutput,
+            filterOutput
+        )
+    }
+
+    /**
+     * 起圈 helper：先通过一次正常起终点过线把 session 推到 Recording，再 copy
+     * 指定 startedAtMillis，便于 R3 测试在稳定的 activeLap 基础上注入历史事件。
+     * 注意：copy 不会改变原有 startFinish 过线产生的 CrossingEvent（ts = startedAtMillis 附近），
+     * R3 测试会在 copy 时 **整体替换** `crossingEvents` 字段，因此 helper 返回的基准
+     * 不带 "起圈原始事件" 这一项，干扰。
+     */
+    private fun openLapAt(startedAtMillis: Long): LapSession {
+        val crossing = crossingSamples(track.startFinishGate, startedAtMillis - 1L, startedAtMillis)
+        val started = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossing.first,
+            currentSample = crossing.second
+        )
+        return started
+    }
+
+    private fun historicalCrossing(timestampMillis: Long): CrossingEvent = CrossingEvent(
+        gateId = track.startFinishGate.id,
+        gateType = TimingGateType.StartFinish,
+        timestampMillis = timestampMillis,
+        sampleIndex = 0,
+        accepted = true,
+        reason = CrossingReason.Accepted,
+        directionalSpeedMps = 10.0,
+        directionScore = 1.0
+    )
 
     private fun newSession(): LapSession = LapSession(
         sessionId = "session-1",
