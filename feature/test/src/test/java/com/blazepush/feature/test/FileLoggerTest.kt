@@ -9,11 +9,15 @@ package com.blazepush.feature.test
 import android.content.Context
 import android.util.Log
 import com.blazepush.feature.test.FileLogger.LogLevel
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -142,8 +146,18 @@ class FileLoggerTest {
 
         val logFile = File(filesDir, "debug_log.txt")
         val content = logFile.readText()
-        assertFalse("最老消息 drop-0 应被 DROP_OLDEST 丢掉", content.contains("drop-0 "))
-        assertTrue("最新消息 drop-1999 应保留在 channel，被新 consumer 消费落盘", content.contains("drop-1999"))
+        // P2 finding 3（2026-04-24 codex code-review）：按行精确匹配代替
+        // content.contains("drop-0 ") —— 原断言用空格结尾，而实际日志行
+        // 是 "... drop-0\n"，drop-0 被误写入时也会通过断言
+        val lines = content.lineSequence().toList()
+        assertFalse(
+            "最老消息 drop-0 应被 DROP_OLDEST 丢掉（按行 endsWith 匹配，避免 drop-01/099 误通过）",
+            lines.any { it.endsWith("drop-0") },
+        )
+        assertTrue(
+            "最新消息 drop-1999 应保留在 channel，被新 consumer 消费落盘",
+            lines.any { it.endsWith("drop-1999") },
+        )
     }
 
     /**
@@ -374,6 +388,86 @@ class FileLoggerTest {
             "ts 回跳（异常路径）应保持 d()，不改为 v()（低频回归保护）",
             callStmt.startsWith("FileLogger.d("),
         )
+    }
+
+    // ==================== Review 追加：P1 并发 smoke + P2 finding 2 full-buffer 契约 ====================
+
+    /**
+     * P1 finding 1（2026-04-24 codex code-review）并发 smoke：
+     *   多协程并发 d() 不抛异常，且 flushForTest 后所有日志都落盘。
+     *   v1 `dateFormat: SimpleDateFormat` 单例在并发下概率性抛
+     *   ArrayIndexOutOfBoundsException / NumberFormatException；
+     *   v2 ThreadLocal<SimpleDateFormat> 每线程独享，0 异常。
+     */
+    @Test
+    fun d_calledConcurrentlyFromMultipleCoroutines_noThreadingExceptions() = runTest {
+        val coroutineCount = 16
+        val callsPerCoroutine = 100
+        // 用真实 IO dispatcher 跑并发，避免 runTest 的 TestDispatcher 串行化
+        runBlocking(Dispatchers.IO) {
+            val jobs: List<Deferred<Unit>> = (0 until coroutineCount).map { coIdx ->
+                async {
+                    repeat(callsPerCoroutine) { i ->
+                        FileLogger.d("T$coIdx", "concurrent-$coIdx-$i")
+                    }
+                }
+            }
+            jobs.forEach { it.await() }
+        }
+        FileLogger.flushForTest()
+
+        val logFile = File(filesDir, "debug_log.txt")
+        val content = logFile.readText()
+        // 抽样断言若干协程的若干消息都在（不做全量 N² 检查，避免测试慢）
+        listOf(0 to 0, 0 to 99, 7 to 42, 15 to 0, 15 to 99).forEach { (coIdx, i) ->
+            assertTrue(
+                "并发写入应无线程安全问题 / 消息丢失：concurrent-$coIdx-$i 应在文件里",
+                content.contains("concurrent-$coIdx-$i"),
+            )
+        }
+    }
+
+    /**
+     * P2 finding 2（2026-04-24 codex code-review）full-buffer 降级契约：
+     *   直接验证 `Channel(capacity=1024, DROP_OLDEST)` 的 `send` 语义 —— 这是
+     *   FileLogger 的 Flush / Shutdown 命令在 full-buffer 下的底层机制：
+     *   channel 满时 send 不阻塞、不抛，按 DROP_OLDEST 挤掉最老 1 项，
+     *   appendToTail 新项。核销方基于此断言确认降级契约在底层正确成立。
+     *
+     *   此测试刻意用本地 Channel<String> 独立验证，避免与 FileLogger 单例
+     *   状态（currentLogFile / initialized / flushJob 生命周期）耦合 ——
+     *   finding 2 关心的是 Channel DROP_OLDEST 语义，不是 FileLogger 集成。
+     */
+    @Test
+    fun send_onFullDropOldestChannel_dropsOldestNotNewAndDoesNotSuspend() = runTest {
+        val testChannel = kotlinx.coroutines.channels.Channel<String>(
+            capacity = 1024,
+            onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+        )
+        // 灌 1024 条到满
+        repeat(1024) { i ->
+            val result = testChannel.trySend("line-$i")
+            assertTrue("trySend 在未满时应成功", result.isSuccess)
+        }
+        // 再 send 一条模拟 Flush/Shutdown 控制命令。send 在 DROP_OLDEST 下
+        // 不应挂起（withTimeout 用 100ms 兜底，验证"不阻塞"）
+        val sendResult = withTimeoutOrNull(100L) {
+            testChannel.send("CONTROL_CMD")
+            "ok"
+        }
+        assertEquals("send 在 full DROP_OLDEST channel 上应立即返回", "ok", sendResult)
+
+        // 排空：验证 line-0 被挤掉、line-1..line-1023 + CONTROL_CMD 都在
+        val received = mutableListOf<String>()
+        repeat(1024) { received.add(testChannel.tryReceive().getOrThrow()) }
+        assertEquals("队尾应是控制命令", "CONTROL_CMD", received.last())
+        assertFalse(
+            "最老 line-0 应被 DROP_OLDEST 挤掉（控制命令优先于最老 Line）",
+            received.contains("line-0"),
+        )
+        assertTrue("line-1 作为非最老应保留", received.contains("line-1"))
+        assertTrue("line-1023 作为最新原始 Line 应保留", received.contains("line-1023"))
+        testChannel.close()
     }
 
     // ==================== 工具方法 ====================

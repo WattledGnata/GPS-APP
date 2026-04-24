@@ -55,6 +55,12 @@ object FileLogger {
      * - Flush: 测试 seam，consumer 写 batch 后 ack
      * - Shutdown: graceful handoff，consumer FIFO 收到后写 batch + 退出循环
      *   (取代 cancelAndJoin：避免 Channel.receive() 与 cancel 的交付竞态导致丢日志)
+     *
+     * P2 finding 2（2026-04-24 codex code-review）：Flush / Shutdown 通过
+     * suspend `send` 入队保证命令自身不丢，但在 channel 满（1024）时
+     * `DROP_OLDEST` 语义会挤掉最老 1 条 `Line`。此为 DROP_OLDEST 接受下的
+     * 既定降级契约：正常负载下（<1024 积压）Line 不丢；过载时 Flush /
+     * Shutdown 命令自身优先于 Line 存活（控制面比数据面更重要）。
      */
     private sealed class LogCommand {
         data class Line(val content: String) : LogCommand()
@@ -80,7 +86,14 @@ object FileLogger {
 
     private var currentLogFile: File? = null
     private var rotatedLogFile: File? = null
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+
+    // P1 finding 1（2026-04-24 codex code-review）：SimpleDateFormat 非线程安全，
+    // formatLine() 在调用方线程执行，多业务线程共享会串扰或抛异常。
+    // ThreadLocal 保证每线程独享 formatter 实例，避免引入全局锁。
+    private val dateFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    }
 
     fun init(context: Context) {
         // graceful handoff 强契约（Shutdown FIFO 方案）：
@@ -125,7 +138,7 @@ object FileLogger {
     }
 
     private fun formatLine(level: LogLevel, tag: String, message: String): String {
-        val timestamp = dateFormat.format(Date())
+        val timestamp = dateFormat.get()!!.format(Date())
         val levelChar = when (level) {
             LogLevel.VERBOSE -> "V"
             LogLevel.DEBUG -> "D"
@@ -213,8 +226,13 @@ object FileLogger {
      *
      * 语义：向 channel 发送 LogCommand.Flush(ack)，consumer 收到后先写
      * 当前 batch 再 ack.complete；flushForTest 在 ack.await() 处挂起直到
-     * consumer 完成。返回后保证 "flushForTest 调用前所有 trySend 成功的
-     * Line 已落盘到 currentLogFile"。
+     * consumer 完成。正常负载（channel 积压 <1024）下返回后保证 "flushForTest
+     * 调用前所有 trySend 成功的 Line 已落盘到 currentLogFile"。
+     *
+     * P2 finding 2（2026-04-24 codex code-review）降级契约：channel 满
+     * （1024 条未消费积压）时 `send(Flush)` 会因 DROP_OLDEST 挤掉最老 1 条
+     * Line。过载场景下 Flush 命令自身仍不丢（进入 channel 后 FIFO 消费），
+     * 但文件里会少 1 条最老 Line——这是 DROP_OLDEST 接受范围内的既定损失。
      *
      * 不保证 "flushForTest 返回后 / await 期间后续 trySend 的 Line" 已落盘。
      *
