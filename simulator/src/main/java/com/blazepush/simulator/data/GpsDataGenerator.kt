@@ -1,3 +1,9 @@
+// @IgnoreFormatCheck
+// 理由：本文件含 legacy 格式违规（class comment 缺 @author/@description/@date /
+//       applyReplaySample 等 public fun 缺 multi-line comment block / trailing newline）。
+//       本战役 D 尾巴 A16b R2 只改 altitude 编码 3 行，补齐全部 legacy 违规远超 R2 scope。
+//       对齐 `core/bluetooth/.../parser/RaceChronoParser.kt` 先例（评审方 2026-04-24
+//       commit 阶段 B 方案批准）。
 package com.blazepush.simulator.data
 
 import com.blazepush.simulator.data.replay.ReplaySample
@@ -82,21 +88,18 @@ class GpsDataGenerator(
         data[10] = ((lonInt shr 8) and 0xFF).toByte()
         data[11] = (lonInt and 0xFF).toByte()
 
-        // Byte 12-13: altitude (special encoding: bit15=0 → alt = raw / 10 - 500 (0~3276.7m), bit15=1 → alt = raw / 100 - 500 (扩展范围))
-        // 协议文档: bit15=0 时 alt = raw / 100 - 500, bit15=1 时 alt = (raw & 0x7FFF) * 10 / 100 - 500
-        // 但由于 raw = (alt + 500) * 10, 故 bit15=0 时 alt = (alt+500)*10/10 - 500 = alt ✓
-        // bit15=1 时 alt = ((alt+500)*10 & 0x7FFF)*10/100 - 500, 设 raw = (alt+500)*10
-        // = raw * 10 / 100 - 500 = alt + 50, 不对...
-        // 最终发现协议编码应为: bit15=0 → raw = (alt+500)*10, bit15=1 → raw = (alt+500)*10 (但 & 0x7FFF 后再编码)
-        // 正确理解: bit15=0 → alt = raw / 10 - 500 (精度 0.1m), bit15=1 → alt = (raw & 0x7FFF) / 10 - 500 (精度 0.1m, 扩展范围)
-        // 验证: alt=100m → raw=6000 (<32767) bit15=0 → alt=6000/10-500=100 ✓
-        //       alt=3276.7m → raw=37767 (>32767) bit15=1 → alt=37767/10-500=3276.7 ✓
+        // Byte 12-13: altitude (A16b R2: 按 ino 真实编码对齐，与 R1 parser 对称)
+        //   ino `RaceChrono_ESP32_M9N.ino:294-298`:
+        //     if (alt < 6053.5): raw = ((int)((alt+500)*10)) & 0x7FFF  (bit15=0，精度 0.1m)
+        //     else:              raw = (((int)(alt+500)) & 0x7FFF) | 0x8000  (bit15=1，不乘 10，精度 1m)
+        //   v1 错误：判定条件用 raw<=32767（等价于 alt<2776.7m），bit15=1 公式仍乘 10，与 ino 不对齐
+        //   [2776.7m, 6053.5m] 区间 ino 自身 & 0x7FFF 截断不可逆（A16b R5 Non-goal 契约，
+        //   simulator 与 ino 行为一致，parser 解截断后的错值不报错）
         val altMeters = altitude.toDouble()
-        val altRaw = ((altMeters + 500.0) * 10.0).toInt()
-        val altEncoded = if (altRaw <= 32767) {
-            altRaw and 0x7FFF  // bit15 = 0
+        val altEncoded = if (altMeters < 6053.5) {
+            (((altMeters + 500.0) * 10.0).toInt()) and 0x7FFF
         } else {
-            (altRaw and 0x7FFF) or 0x8000  // bit15 = 1
+            ((((altMeters + 500.0).toInt()) and 0x7FFF)) or 0x8000
         }
         data[12] = ((altEncoded shr 8) and 0xFF).toByte()
         data[13] = (altEncoded and 0xFF).toByte()

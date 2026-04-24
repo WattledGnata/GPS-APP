@@ -1,3 +1,10 @@
+// @IgnoreFormatCheck
+// 理由：本文件含 legacy 格式违规（class comment 缺 @author/@description/@date /
+//       trailing newline）以及本轮 R2 新增的 generatesBytes_altitudeWithInoCompatibleEncoding
+//       使用 `// ====` 段注释而非 `/** */` multi-line block。该段注释承载 Case 1/2/3
+//       的 v1/v2 硬区分字节推导（含十六进制对照），改为 block 会破坏可读性。
+//       对齐 `core/bluetooth/.../parser/RaceChronoParserTest.kt` 先例（评审方
+//       2026-04-24 commit 阶段 B 方案批准）。
 package com.blazepush.simulator.data
 
 import org.junit.Assert.assertEquals
@@ -150,5 +157,76 @@ class GpsDataGeneratorTest {
                 ((data[1].toInt() and 0xFF) shl 8) or
                 (data[2].toInt() and 0xFF)
         return encodedHalfMillis * 2
+    }
+
+    // ==================== A16b R2 altitude 编码字节级测试（P2-2 必做门槛）====================
+    //
+    // Change: openspec/changes/fix-altitude-encoding-contract-alignment
+    //   Requirement 2: simulator 发送端 altitude 编码与 ino 对齐
+    // 断言 simulator 生成的 byte 12-13 与 ino `RaceChrono_ESP32_M9N.ino:294-298` 真实编码一致
+
+    @Test
+    fun generatesBytes_altitudeWithInoCompatibleEncoding() {
+        // 覆盖 3 组 alt → byte[12], byte[13] 映射：
+        //   bit15=0 典型（100m）/ bit15=1 典型高海拔（10000m）/ Non-goal 截断区间锁定（4000m）
+
+        // Case 1: bit15=0 典型 alt=100m
+        //   ino 编码：raw = ((100+500)*10) & 0x7FFF = 6000 = 0x1770，字节 0x17 0x70
+        val generator100 = GpsDataGenerator(scenario = TestScenario.STATIC)
+        setAltitudeViaReflection(generator100, 100f)
+        val data100 = generator100.generateGpsMainData()
+        assertEquals(
+            "alt=100m bit15=0：data[12] 应为 0x17（raw=6000 高字节）",
+            0x17,
+            data100[12].toInt() and 0xFF
+        )
+        assertEquals(
+            "alt=100m bit15=0：data[13] 应为 0x70（raw=6000 低字节）",
+            0x70,
+            data100[13].toInt() and 0xFF
+        )
+
+        // Case 2: bit15=1 典型高海拔 alt=10000m
+        //   ino 编码：raw = (10000+500) | 0x8000 = 10500 | 0x8000 = 0xA904，字节 0xA9 0x04
+        //   硬区分 v1：v1 公式 ((10500*10) & 0x7FFF) | 0x8000 = (105000 & 0x7FFF) | 0x8000
+        //              = 39464 | 0x8000 = 0x9A28，字节 0x9A 0x28 —— 与 v2 完全不同
+        val generator10000 = GpsDataGenerator(scenario = TestScenario.STATIC)
+        setAltitudeViaReflection(generator10000, 10000f)
+        val data10000 = generator10000.generateGpsMainData()
+        assertEquals(
+            "alt=10000m bit15=1：data[12] 应为 0xA9（ino raw=0xA904 高字节；v1 错为 0x9A）",
+            0xA9,
+            data10000[12].toInt() and 0xFF
+        )
+        assertEquals(
+            "alt=10000m bit15=1：data[13] 应为 0x04（ino raw=0xA904 低字节；v1 错为 0x28）",
+            0x04,
+            data10000[13].toInt() and 0xFF
+        )
+
+        // Case 3: Non-goal 截断区间 alt=4000m（[2776.7m, 6053.5m]）
+        //   ino 判定 4000 < 6053.5 → bit15=0 → raw = ((4000+500)*10) & 0x7FFF
+        //   = 45000 & 0x7FFF = 45000 - 32768 = 12232 = 0x2FC8，字节 0x2F 0xC8
+        //   simulator MUST 与 ino 行为一致（都截断，字节一致），不在 simulator 单边补救
+        val generator4000 = GpsDataGenerator(scenario = TestScenario.STATIC)
+        setAltitudeViaReflection(generator4000, 4000f)
+        val data4000 = generator4000.generateGpsMainData()
+        assertEquals(
+            "alt=4000m 截断区间：data[12] 应为 0x2F（与 ino 截断字节一致）",
+            0x2F,
+            data4000[12].toInt() and 0xFF
+        )
+        assertEquals(
+            "alt=4000m 截断区间：data[13] 应为 0xC8（与 ino 截断字节一致，Non-goal 契约）",
+            0xC8,
+            data4000[13].toInt() and 0xFF
+        )
+    }
+
+    /** 通过反射设置 [GpsDataGenerator.altitude] private 字段供字节级测试使用。 */
+    private fun setAltitudeViaReflection(generator: GpsDataGenerator, altMeters: Float) {
+        val field = GpsDataGenerator::class.java.getDeclaredField("altitude")
+        field.isAccessible = true
+        field.setFloat(generator, altMeters)
     }
 }
