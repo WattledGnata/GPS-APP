@@ -1,5 +1,12 @@
+// @IgnoreFormatCheck
+// 理由：本文件含 5 处 legacy property-name 违规（SERVICE_UUID / GPS_MAIN_UUID /
+//       GPS_TIME_UUID / CCCD_UUID / _connectionState），其中 UUID 常量遵循
+//       Kotlin coding convention `const/val` 的 ALL_CAPS 惯例，`_connectionState`
+//       是 MutableStateFlow backing field 业界惯例 —— rename 会扩散到反射测试 +
+//       其他引用，超出战役 G R1~R3 scope。评审方第六轮 commit 阶段 B 方案
+//       批准此 ignore（2026-04-24）。其他格式违规（class comment / public fun
+//       comment / import-order / when-else / trailing newline）已全部修到位。
 package com.blazepush.core.bluetooth
-import com.blazepush.core.domain.model.ConnectionState
 
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -9,15 +16,27 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.*
+import com.blazepush.core.domain.model.ConnectionState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
- * BLE连接管理类
- * 负责与RaceChrono GPS设备建立和维护BLE连接
+ * @description BLE 连接管理类。负责与 RaceChrono GPS 设备建立和维护 BLE 连接，
+ *              涵盖 GATT 连接生命周期（connect / disconnect / close）、数据接收
+ *              超时检测、state 流传导。战役 G R1 后作为 GATT 资源唯一所有者
+ *              （ConnectionManager 已删除）；A40 后 close + null 统一在
+ *              onConnectionStateChange(STATE_DISCONNECTED) 回调内执行。
+ * @author haozhang93
+ * @date 2026-04-24
  */
 class BleConnection(
     private val context: Context,
@@ -26,9 +45,17 @@ class BleConnection(
 ) {
     companion object {
         private const val TAG = "BleConnection"
+
+        @Suppress("PropertyName")
         private val SERVICE_UUID = UUID.fromString("00001ff8-0000-1000-8000-00805f9b34fb")
+
+        @Suppress("PropertyName")
         private val GPS_MAIN_UUID = UUID.fromString("00000003-0000-1000-8000-00805f9b34fb")
+
+        @Suppress("PropertyName")
         private val GPS_TIME_UUID = UUID.fromString("00000004-0000-1000-8000-00805f9b34fb")
+
+        @Suppress("PropertyName")
         private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         // 超时时间设置
@@ -39,7 +66,8 @@ class BleConnection(
     private var bluetoothGatt: BluetoothGatt? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // 连��状态
+    // 连接状态
+    @Suppress("PropertyName")
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
@@ -71,9 +99,17 @@ class BleConnection(
                     cleanup()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.d(TAG, "已断开连接")
+                    Log.d(TAG, "已断开连接（回调）")
                     _connectionState.value = ConnectionState.DISCONNECTED
                     cleanup()
+                    // A40 统一释放路径：close + null 只在此回调内执行，
+                    // 覆盖主动 disconnect / 超时触发 / 远端断连三条路径
+                    bluetoothGatt?.close()
+                    bluetoothGatt = null
+                }
+                else -> {
+                    // Android BT stack 目前仅返回上述 4 种 state；else 分支为 kt-check
+                    // when-else-required 规则占位，无行为。
                 }
             }
         }
@@ -152,6 +188,10 @@ class BleConnection(
         }
     }
 
+    /**
+     * 建立 BLE GATT 连接。状态转为 CONNECTING，启动连接超时检测（15s），
+     * 调 `device.connectGatt` 开始异步连接；后续状态变化由 gattCallback 驱动。
+     */
     fun connect() {
         _connectionState.value = ConnectionState.CONNECTING
 
@@ -169,12 +209,14 @@ class BleConnection(
         bluetoothGatt = device.connectGatt(context, false, gattCallback)
     }
 
+    /**
+     * 主动断开 BLE GATT 连接。战役 G A40：只触发异步 `gatt.disconnect()`，
+     * `close + null + state 赋值` 由 `onConnectionStateChange(STATE_DISCONNECTED)`
+     * 回调统一处理，避免 "close 后仍收回调访问已关闭 gatt" 的厂商差异行为。
+     */
     fun disconnect() {
         cleanup()
         bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
-        bluetoothGatt = null
-        _connectionState.value = ConnectionState.DISCONNECTED
     }
 
     /**
@@ -244,8 +286,17 @@ class BleConnection(
     private fun startDataTimeoutCheck() {
         timeoutJob = scope.launch {
             delay(DATA_TIMEOUT_MS)
+            // A24 race 消除：delay 刚结束到 body 执行之间可能被 cancel；
+            // ensureActive() 让已取消的协程在此刻抛 CancellationException，
+            // 避免 "假断连瞬间 → 新帧立即 CONNECTED" 的 1-2ms 抖动
+            ensureActive()
             if (System.currentTimeMillis() - lastDataTime > DATA_TIMEOUT_MS) {
-                Log.w(TAG, "数据接收超时，触发重连")
+                Log.w(TAG, "数据接收超时：释放 GATT 资源")
+                // A24 释放 GATT：先 disconnect（异步），close + null 由
+                // onConnectionStateChange(STATE_DISCONNECTED) 回调负责（A40 统一路径）
+                bluetoothGatt?.disconnect()
+                // 显式设 state：下游需即刻感知，不能等 GATT 回调的异步延迟
+                // StateFlow equality 保护让后续回调重复 emit 同值不产生假帧
                 _connectionState.value = ConnectionState.DISCONNECTED
             }
         }
