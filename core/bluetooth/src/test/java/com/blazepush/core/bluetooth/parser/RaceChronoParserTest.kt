@@ -763,7 +763,10 @@ class RaceChronoParserTest {
      *   Byte 18: HDOP (raw value * 0.1)
      *   Byte 19: VDOP (raw value * 0.1)
      *
-     * Altitude encoding: alt + 500 = raw / 100.0 (or raw * 10 / 100.0 if overflow)
+     * Altitude encoding (A16b 对齐 ino `RaceChrono_ESP32_M9N.ino:294-298`)：
+     *   - alt &lt; 6053.5:  raw = ((alt + 500.0) * 10).toInt() and 0x7FFF         // bit15=0，精度 0.1m
+     *   - alt &gt;= 6053.5: raw = ((alt + 500.0).toInt() and 0x7FFF) or 0x8000    // bit15=1，精度 1m（不乘 10）
+     *   [2776.7m, 6053.5m] 区间在 ino 自身 `& 0x7FFF` 截断下不可逆（A16b Non-goal 契约）
      * Speed encoding: speed = raw / 100.0 (or raw * 10 / 100.0 if overflow)
      */
     private fun createValidGpsData20(

@@ -136,9 +136,10 @@ class RaceChronoParser {
      *   Byte 18: HDOP (raw value * 0.1)
      *   Byte 19: VDOP (raw value * 0.1)
      *
-     * Altitude encoding:
-     *   - Bit 15 = 0: alt = raw / 100.0 - 500.0
-     *   - Bit 15 = 1: alt = ((raw & 0x7FFF) * 10) / 100.0 - 500.0
+     * Altitude encoding (A16b 对齐 ino `RaceChrono_ESP32_M9N.ino:294-298`)：
+     *   - Bit 15 = 0（低海拔，精度 0.1m）：alt = (raw & 0x7FFF) / 10.0 - 500.0
+     *   - Bit 15 = 1（高海拔，精度 1m，发送端 alt >= 6053.5m 进入此分支且不乘 10）：
+     *     alt = (raw & 0x7FFF).toDouble() - 500.0
      *
      * Speed encoding:
      *   - Bit 15 = 0: speed = raw / 100.0
