@@ -6,7 +6,6 @@
 //       commit 阶段 B 方案批准此 ignore。
 package com.blazepush.core.bluetooth.parser
 
-import android.location.Location
 import android.util.Log
 import com.blazepush.core.domain.model.GpsData
 import java.util.Collections
@@ -15,7 +14,7 @@ import java.util.ArrayList
 /**
  * RaceChrono GPS Protocol Parser
  * Handles parsing of raw byte arrays into GpsData objects.
- * Maintains state for frequency calculation and tracking (distance/time).
+ * Maintains state for frequency calculation (A41 已清除内部 tracking 死状态 2026-04-24).
  *
  * Protocol: ESP32 20-byte GPS Main Data + 3-byte GPS Time Data
  * See: docs/RaceChrono_BLE_Protocol.md
@@ -33,12 +32,6 @@ class RaceChronoParser {
     private val updateIntervalMs = 500 // Update frequency display every 500ms
     private var gpsFrequency = 0.0 // Current GPS frequency in Hz
 
-    // Tracking state for calculations
-    private var startTime: Long = 0
-    private var totalDistance: Double = 0.0
-    private var lastLatitude: Double? = null
-    private var lastLongitude: Double? = null
-    private var hasStartedTracking = false
     private var protocolTimeReference: ProtocolTimeReference? = null
 
     private data class ProtocolTimeReference(
@@ -50,11 +43,6 @@ class RaceChronoParser {
      * Resets all tracking state (distance, time, frequency)
      */
     fun reset() {
-        hasStartedTracking = false
-        startTime = 0
-        totalDistance = 0.0
-        lastLatitude = null
-        lastLongitude = null
         gpsDataTimestamps.clear()
         gpsFrequency = 0.0
         protocolTimeReference = null
@@ -240,45 +228,6 @@ class RaceChronoParser {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error calculating frequency", e)
-            }
-
-            // Tracking Calculation (Non-Critical)
-            try {
-                // Only calculate if we have a valid fix
-                if (fixQuality > 0 && satellites >= 3) {
-                    if (!hasStartedTracking) {
-                        hasStartedTracking = true
-                        startTime = System.currentTimeMillis()
-                        lastLatitude = currentLatitude
-                        lastLongitude = currentLongitude
-                        totalDistance = 0.0
-                        if (shouldLog) Log.d(TAG, "Tracking started: Lat=$currentLatitude, Lon=$currentLongitude")
-                    } else {
-                        val lastLat = lastLatitude
-                        val lastLon = lastLongitude
-
-                        if (lastLat != null && lastLon != null) {
-                            val results = FloatArray(1)
-                            try {
-                                Location.distanceBetween(
-                                    lastLat, lastLon,
-                                    currentLatitude, currentLongitude,
-                                    results
-                                )
-                                val distanceStep = results[0]
-                                if (speedKmh > 1.0) {
-                                    totalDistance += distanceStep / 1000.0
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error in distanceBetween", e)
-                            }
-                        }
-                        lastLatitude = currentLatitude
-                        lastLongitude = currentLongitude
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in tracking calculation", e)
             }
 
             // 协议时间对齐判定（A8 / opsx code review C.4：从单源 `protocolTimeReference` 派生）：
