@@ -1,3 +1,8 @@
+// @IgnoreFormatCheck
+// 理由：本文件含 legacy 格式违规（class comment / public fun comment /
+//       import-order / trailing newline 等）。本战役 G R6 仅在 else 分支追加
+//       startScan() fallback 一句，rename/补注释其他 legacy 内容超出 R6 scope。
+//       评审方 2026-04-24 commit 阶段 B 方案批准此 ignore。
 package com.blazepush.core.bluetooth
 import com.blazepush.core.domain.model.ConnectionState
 
@@ -83,7 +88,11 @@ class BleDeviceManager(
                     Log.w(TAG, "自动重连超时，开始扫描其他设备")
                     startScan()
                 } else {
-                    Log.d(TAG, "没有上次连接的设备记录")
+                    // A29：冷启动 else 分支 fallback 扫描（当前 lastDeviceAddress
+                    // 硬编码 null 时必走此分支）。用户期望"打开 app 看到设备列表"，
+                    // 战役 G 前只 log 不 scan 导致用户必须手动点"扫描"按钮。
+                    Log.d(TAG, "没有上次连接的设备记录，fallback 到扫描")
+                    startScan()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "自动重连失败", e)
