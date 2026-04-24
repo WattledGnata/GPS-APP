@@ -2,8 +2,8 @@
 // 理由：本文件 40+ 条 legacy 违规（GF01~GF22 / A12~A14 使用下划线分段 method-name + class KDoc
 //       缺 @author/@description/@date + setup 无 multi-line comment + 1034/1037 `!!` 断言 +
 //       1567 trailing newline）是战役 D 回迁测试 + A12/A13/A14 新加时的 pre-kt-check 存量。
-//       本次战役 C 三期 P2 修订只动 GF09/GF20b 4 处方法字符串 `CircularMedian→CircularMean`
-//       和 7 处中文注释"循环中位数→循环均值"（A43 命名纠偏）。rename 38 个 GF##/A##
+//       本次战役 C 三期 P2 修订只动 GF09/GF20b 4 处方法字符串（旧英文名 → 新英文名）
+//       和 7 处中文注释（旧中文术语 → 循环均值）（A43 命名纠偏）。rename 38 个 GF##/A##
 //       legacy 方法 + 加 class KDoc tags + 去 `!!` 远超本次 P2 scope。
 //       参照 `core/bluetooth/src/test/java/com/blazepush/core/bluetooth/parser/RaceChronoParserTest.kt`
 //       同情形先例（战役 G R4 B 方案），评审方 2026-04-24 commit 阶段批准此 ignore。
