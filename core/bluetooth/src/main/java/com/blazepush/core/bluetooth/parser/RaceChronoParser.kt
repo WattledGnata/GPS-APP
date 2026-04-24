@@ -170,19 +170,23 @@ class RaceChronoParser {
             val fixQuality = (data[3].toInt() shr 6) and 0x03
             val satellites = data[3].toInt() and 0x3F
 
-            // Byte 4-7: latitude (big endian uint32, 度 * 10,000,000)
+            // Byte 4-7: latitude (big endian int32, 度 * 10,000,000)
             val latInt = ((data[4].toInt() and 0xFF) shl 24) or
                     ((data[5].toInt() and 0xFF) shl 16) or
                     ((data[6].toInt() and 0xFF) shl 8) or
                     (data[7].toInt() and 0xFF)
-            val currentLatitude = (latInt.toLong() and 0xFFFFFFFFL) / 10000000.0
+            // A16a: 协议 / ESP32 ino 明确 lat 是 signed int32。`.toLong() and 0xFFFFFFFFL`
+            //       会把 signed 抹成 unsigned，所有南纬解成 +[180°, 400°] 大数。Kotlin
+            //       Int / Double 除法按 IEEE 754 保留符号位扩展为 Double，结果 signed。
+            val currentLatitude = latInt / 10_000_000.0
 
-            // Byte 8-11: longitude (big endian uint32, 度 * 10,000,000)
+            // Byte 8-11: longitude (big endian int32, 度 * 10,000,000)
             val lonInt = ((data[8].toInt() and 0xFF) shl 24) or
                     ((data[9].toInt() and 0xFF) shl 16) or
                     ((data[10].toInt() and 0xFF) shl 8) or
                     (data[11].toInt() and 0xFF)
-            val currentLongitude = (lonInt.toLong() and 0xFFFFFFFFL) / 10000000.0
+            // A16a: 协议 / ESP32 ino 明确 lon 是 signed int32。参考 latitude 同源修复。
+            val currentLongitude = lonInt / 10_000_000.0
 
             // Byte 12-13: altitude special encoding (big endian uint16)
             val altRaw = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)

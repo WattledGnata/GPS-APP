@@ -276,11 +276,6 @@ class RaceChronoParserTest {
     }
 
     @Test
-    @Ignore(
-        "暴露 parser 实际 bug：parseGpsData L164 `latInt.toLong() and 0xFFFFFFFFL` 把" +
-            " signed int32 抹成 unsigned，负纬度解不回来。测试断言正确，实现有 bug。" +
-            " 不在本次战役（时间戳可信性 + detector 量纲 + 测试迁移）范围，待独立战役修 parser 字段解析。"
-    )
     fun RP16_parseLatitude_negative() {
         // Given: 南纬33.8688
         val data = createValidGpsData20(latitude = -33.8688)
@@ -319,10 +314,6 @@ class RaceChronoParserTest {
     }
 
     @Test
-    @Ignore(
-        "暴露 parser 实际 bug：parseGpsData L171 `lonInt.toLong() and 0xFFFFFFFFL` 与 RP16 同源，" +
-            "signed int32 被 unsigned 抹掉。测试断言正确。待独立战役修。"
-    )
     fun RP19_parseLongitude_negative() {
         // Given: 西经 (负值)
         val data = createValidGpsData20(longitude = -122.4194)
@@ -332,6 +323,26 @@ class RaceChronoParserTest {
 
         // Then
         assertEquals("西经应为负值", -122.4194, result.longitude, 0.0001)
+    }
+
+    // A16a 战役 D 尾巴：lat/lon signed int32 边界覆盖（对应 Spec R3 两条 Scenario）
+
+    @Test
+    fun parseGpsData_southernHemisphereAndWesternHemisphere_decodeBothNegativeCorrectly() {
+        // 布宜诺斯艾利斯 (-34.6037°, -58.3816°) —— 两轴同时为负
+        val data = createValidGpsData20(latitude = -34.6037, longitude = -58.3816)
+        val result = parser.parseGpsData(data, createTestData())
+        assertEquals("南纬", -34.6037, result.latitude, 0.0001)
+        assertEquals("西经", -58.3816, result.longitude, 0.0001)
+    }
+
+    @Test
+    fun parseGpsData_extremeBoundaryValues_nearPolesAndAntimeridian() {
+        // 南极附近 + 接近反子午线西半球边界值
+        val data = createValidGpsData20(latitude = -89.9999, longitude = -179.9999)
+        val result = parser.parseGpsData(data, createTestData())
+        assertEquals("接近南极纬度", -89.9999, result.latitude, 0.00001)
+        assertEquals("接近反子午线经度", -179.9999, result.longitude, 0.00001)
     }
 
     // ==================== 海拔解析测试 ====================
