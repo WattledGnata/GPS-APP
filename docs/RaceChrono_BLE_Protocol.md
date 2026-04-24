@@ -93,10 +93,13 @@ altitude 和 speed 字段使用 2 字节 uint16，但使用 bit 15 作为 overfl
 
 **海拔（Altitude）:**
 
-- Bit 15 = 0（无溢出）: `alt = raw / 100.0 - 500.0`
-  - raw 范围: 0-32767, 对应 -500.0m 到 277.67m
-- Bit 15 = 1（有溢出）: `alt = ((raw & 0x7FFF) * 10) / 100.0 - 500.0`
-  - raw 范围: 32768-65535, 对应 277.68m 到 6052.7m
+- Bit 15 = 0（低海拔）: `alt = raw / 10.0 - 500.0`
+  - raw 范围: 0-32767, 对应 -500.0m 到 2776.7m（精度 0.1m）
+  - **精度契约**：ESP32 ino 按 `alt < 6053.5m` 判定走本分支，但 `alt ∈ [2776.7m, 6053.5m]` 区间 ino 编码 `raw = ((alt+500)*10) & 0x7FFF` 会被 `& 0x7FFF` 截断丢失高位，parser 单边无法恢复原 alt（已知 ino 自身 bug，不在 A16b change 修复 scope；改 ino 固件后统一对齐）
+- Bit 15 = 1（高海拔）: `alt = (raw & 0x7FFF) - 500.0`
+  - raw 低 15 位范围 0-32767；发送端 `alt >= 6053.5m` 触发 bit15=1
+  - 解码值精度 1m，最小可回读整数 6053m（量化回读），典型高海拔场景至 33267m
+  - ino 编码: `raw = (((int)(alt + 500)) & 0x7FFF) | 0x8000`（**不乘 10**）
 
 **速度（Speed）:**
 
@@ -140,12 +143,14 @@ private fun parseGpsData(data: ByteArray) {
                  (data[11].toInt() and 0xFF)
     val longitude = lonInt / 10000000.0
 
-    // Byte 12-13: altitude special encoding
+    // Byte 12-13: altitude special encoding (A16b：对称 ino 编码)
     val altRaw = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
     val altitude = if ((altRaw and 0x8000) == 0) {
-        (altRaw and 0x7FFF) / 100.0 - 500.0
+        // bit15=0 低海拔：alt = raw / 10 - 500（精度 0.1m；[2776.7m, 6053.5m] ino 自身截断不可逆）
+        (altRaw and 0x7FFF) / 10.0 - 500.0
     } else {
-        ((altRaw and 0x7FFF) * 10) / 100.0 - 500.0
+        // bit15=1 高海拔：alt = (raw & 0x7FFF) - 500（精度 1m；发送端 alt >= 6053.5m 触发）
+        (altRaw and 0x7FFF).toDouble() - 500.0
     }
 
     // Byte 14-15: speed special encoding

@@ -372,25 +372,96 @@ class RaceChronoParserTest {
     }
 
     @Test
-    @Ignore(
-        "暴露 parser altitude overflow bit 编码的解析差异 (bit15=1 高位分支)。" +
-            "当前 parseGpsData L175-181 实现与测试期望的 `raw/10` 约定不完全一致 " +
-            "(代码是 `((raw & 0x7FFF) * 10) / 100`)。实际应该按哪个约定由协议文档 " +
-            "`docs/RaceChrono_BLE_Protocol.md` 认定。待独立战役核对协议并修 parser。"
-    )
-    fun RP22_parseAltitude_overflow() {
-        // Given: 海拔溢出场景 (altitude > 327.675m 需要 overflow bit)
-        // 1600m + 500 = 2100, 2100 * 10 = 21000 = 0x5208
-        // overflow: 0xD208 (overflow bit + high byte 0xD2, low byte 0x08)
+    fun RP22_parseAltitude_bit15ZeroBranch_1600m() {
+        // A16b R3：1600m 走 bit15=0 分支（`1600 < 6053.5`）
+        // ino 真实编码：raw = (1600+500)*10 = 21000 = 0x5208，字节 `0x52 0x08`
+        // v1 错字节 `0xD2 0x08`（= 0x5208 | 0x8000）是按错公式反推自洽，现已修正
         val data = createValidGpsData20(altitude = 100.0)  // 先创建基础数据
-        data[12] = 0xD2.toByte()
+        data[12] = 0x52.toByte()
         data[13] = 0x08.toByte()
 
         // When
         val result = parser.parseGpsData(data, createTestData())
 
-        // Then: 海拔应为1600.0
-        assertEquals("海拔溢出时应为1600", 1600.0, result.altitude, 0.1)
+        // Then: bit15=0 分支 parser 解 `21000 / 10 - 500 = 1600`
+        assertEquals(
+            "bit15=0 低海拔分支应为 1600m（ino 真实编码 0x52 0x08）",
+            1600.0,
+            result.altitude,
+            0.1
+        )
+    }
+
+    @Test
+    fun RP22b_parseAltitude_bit15OneMinIntegerBoundary_6054m() {
+        // A16b R3 新增：6054m 是 bit15=1 最小整数精确边界
+        // ino 判定 `6054 >= 6053.5` → bit15=1 → raw = (6054+500) | 0x8000 = 6554 | 0x8000 = 0x999A
+        // 字节 `0x99 0x9A`
+        // 注意：6053m 走 bit15=0 截断区间（`6053 < 6053.5`），非 bit15=1
+        val data = createValidGpsData20(altitude = 100.0)
+        data[12] = 0x99.toByte()
+        data[13] = 0x9A.toByte()
+
+        val result = parser.parseGpsData(data, createTestData())
+
+        // parser v2 解码：(0x999A and 0x7FFF) - 500 = 6554 - 500 = 6054（精度 1m 精确整数 round-trip）
+        // 硬区分 v1：v1 bit15=1 公式 ((0x999A and 0x7FFF) * 10) / 100 - 500 = 65540/100 - 500 = 155.4m
+        assertEquals(
+            "bit15=1 最小整数边界 6054m 精确 round-trip",
+            6054.0,
+            result.altitude,
+            0.1
+        )
+    }
+
+    @Test
+    fun RP22c_parseAltitude_bit15OneTypicalHighAltitude_10000m() {
+        // A16b R3 新增：10000m bit15=1 典型高海拔
+        // ino 编码：raw = (10000+500) | 0x8000 = 10500 | 0x8000 = 0xA904，字节 `0xA9 0x04`
+        val data = createValidGpsData20(altitude = 100.0)
+        data[12] = 0xA9.toByte()
+        data[13] = 0x04.toByte()
+
+        val result = parser.parseGpsData(data, createTestData())
+
+        // parser v2 解码：(0xA904 and 0x7FFF) - 500 = 10500 - 500 = 10000
+        // 硬区分 v1：v1 公式 ((0xA904 and 0x7FFF) * 10) / 100 - 500 = 105000/100 - 500 = 550m
+        assertEquals(
+            "bit15=1 高海拔 10000m 精确 round-trip",
+            10000.0,
+            result.altitude,
+            0.1
+        )
+    }
+
+    @Test
+    fun RP22d_parseAltitude_inoTruncationRange_4000m_nonGoalContract() {
+        // A16b R5 Non-goal 机器锚点：[2776.7m, 6053.5m] 区间 ino 自身 `& 0x7FFF` 截断不可逆
+        // ino 对 4000m 按 bit15=0 编码（`4000 < 6053.5`）：
+        //   raw = ((4000+500)*10) & 0x7FFF = 45000 & 0x7FFF = 45000 - 32768 = 12232 = 0x2FC8
+        //   字节 `0x2F 0xC8`，高位信息丢失不可逆
+        // parser 单边无法恢复，本 change Non-goal 区间锚点
+        val data = createValidGpsData20(altitude = 100.0)
+        data[12] = 0x2F.toByte()
+        data[13] = 0xC8.toByte()
+
+        val result = parser.parseGpsData(data, createTestData())
+
+        // 断言 1：parser 不抛异常（隐含：测试方法无 expected 异常仍能 pass）
+        // 断言 2：解码值 = 截断后的 723.2m（12232 / 10 - 500）
+        assertEquals(
+            "ino 截断区间 parser 按 bit15=0 公式解得截断后的错值",
+            723.2,
+            result.altitude,
+            0.1
+        )
+        // 断言 3：显式声明**不恢复**真实高度（Non-goal 契约不允许精确往返）
+        assertNotEquals(
+            "Non-goal 契约：parser 单边无法恢复截断前的真实 alt=4000m",
+            4000.0,
+            result.altitude,
+            0.1
+        )
     }
 
     // ==================== 方位角解析测试 ====================
@@ -731,18 +802,16 @@ class RaceChronoParserTest {
         data[10] = ((lonInt shr 8) and 0xFF).toByte()
         data[11] = (lonInt and 0xFF).toByte()
 
-        // Byte 12-13: altitude (特殊编码: alt + 500 = raw / 100.0)
-        // 无溢出: raw = (alt + 500) * 100
-        val altRaw = ((altitude + 500.0) * 100.0).toInt()
-        if (altRaw <= 0x7FFF) {
-            data[12] = ((altRaw shr 8) and 0xFF).toByte()
-            data[13] = (altRaw and 0xFF).toByte()
+        // Byte 12-13: altitude (A16b: 按 ino 真实编码公式，与 R2 simulator / R1 parser 对称)
+        // bit15=0 (低海拔, alt < 6053.5): raw = ((alt+500)*10) & 0x7FFF
+        // bit15=1 (高海拔, alt >= 6053.5): raw = ((alt+500).toInt() & 0x7FFF) | 0x8000 (不乘 10)
+        val altEncoded = if (altitude < 6053.5) {
+            (((altitude + 500.0) * 10.0).toInt()) and 0x7FFF
         } else {
-            // 溢出: raw = ((alt + 500) * 10) | 0x8000
-            val altOverflowRaw = ((altitude + 500.0) * 10.0).toInt() or 0x8000
-            data[12] = ((altOverflowRaw shr 8) and 0xFF).toByte()
-            data[13] = (altOverflowRaw and 0xFF).toByte()
+            ((((altitude + 500.0).toInt()) and 0x7FFF)) or 0x8000
         }
+        data[12] = ((altEncoded shr 8) and 0xFF).toByte()
+        data[13] = (altEncoded and 0xFF).toByte()
 
         // Byte 14-15: speed (特殊编码: speed = raw / 100.0)
         // 无溢出: raw = speed * 100

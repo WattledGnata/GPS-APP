@@ -189,13 +189,21 @@ class RaceChronoParser {
             val currentLongitude = lonInt / 10_000_000.0
 
             // Byte 12-13: altitude special encoding (big endian uint16)
+            // A16b：两分支公式对称于 ESP32 ino `RaceChrono_ESP32_M9N.ino:294-298` 真实编码。
+            //       v1 公式 `raw/100 - 500` / `raw*10/100 - 500` 与 ino 不对称，生产中所有
+            //       altitude 解成 -500m 附近负值（audit § 6 / § 10 / 2026-04-24）。
             val altRaw = ((data[12].toInt() and 0xFF) shl 8) or (data[13].toInt() and 0xFF)
             val altitudeMeters = if ((altRaw and 0x8000) == 0) {
-                // bit15=0: alt = raw / 100 - 500 (精度 0.01m, 范围 -500 ~ 277.67m)
-                (altRaw and 0x7FFF) / 100.0 - 500.0
+                // bit15=0 (低海拔)：ino 编码 raw = ((alt+500)*10) & 0x7FFF，逆运算 alt = raw/10 - 500
+                // 精度 0.1m，范围 -500m ~ 2776.7m；
+                // [2776.7m, 6053.5m] 区间 ino 自身 & 0x7FFF 截断不可逆（A16b R1 Scenario 5
+                // Non-goal 契约），parser 单边无法恢复，解得截断值不报错。
+                (altRaw and 0x7FFF) / 10.0 - 500.0
             } else {
-                // bit15=1: alt = (raw & 0x7FFF) * 10 / 100 - 500 (精度 0.1m, 扩展范围到 6052.7m)
-                ((altRaw and 0x7FFF) * 10.0) / 100.0 - 500.0
+                // bit15=1 (高海拔)：ino 编码 raw = (alt+500) & 0x7FFF | 0x8000（不乘 10）
+                // 逆运算 alt = (raw & 0x7FFF) - 500。发送端 `alt >= 6053.5m` 触发 bit15=1；
+                // 解码值精度 1m，最小可回读整数 6053m（量化回读）。
+                (altRaw and 0x7FFF).toDouble() - 500.0
             }
 
             // Byte 14-15: speed special encoding (big endian uint16)
