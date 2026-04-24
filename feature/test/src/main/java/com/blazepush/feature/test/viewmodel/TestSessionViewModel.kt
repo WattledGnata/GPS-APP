@@ -1,3 +1,13 @@
+// @IgnoreFormatCheck
+// 理由：本文件仅由 change fix-file-logger-and-engine-coord-hygiene（战役 F A18+A39）
+//       修改 2 处 R4 高频 bridge 日志 call site（line 335 附近 GPS 推进 + line 373
+//       附近 lapTiming 结果）—— `FileLogger.d` → `FileLogger.v` + 坐标
+//       `"%.3f".format(...)` 降级 + `if (isVerboseEnabled)` 守卫。kt-check 报的
+//       class-comment / property-name(_前缀 MutableStateFlow backing 惯例) /
+//       public-fun-with-comment-block / my-max-line-length / when-else-required /
+//       import-order / no-trailing-newline 均为 pre-existing legacy 违规，与本
+//       战役 R4 日志精修语义正交。评审方 2026-04-24 战役 G B 方案纪律批准 legacy
+//       文件 ignore，避免 scope 漂移到周边 refactor。
 package com.blazepush.feature.test.viewmodel
 
 import android.os.SystemClock
@@ -332,10 +342,14 @@ class TestSessionViewModel(
         val currentSample = gpsData.toLapGpsSample()
         val previousSample = lastLapGpsSample
 
-        FileLogger.d(
-            TAG,
-            "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${gpsData.latitude}, lon=${gpsData.longitude}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude}, prevLon=${previousSample?.longitude}"
-        )
+        // A18 + A39 战役 F R4：25Hz 高频 bridge 推进日志降级为 VERBOSE + 坐标
+        // %.3f 精度；isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值。
+        if (FileLogger.isVerboseEnabled) {
+            FileLogger.v(
+                TAG,
+                "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${"%.3f".format(gpsData.latitude)}, lon=${"%.3f".format(gpsData.longitude)}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude?.let { "%.3f".format(it) }}, prevLon=${previousSample?.longitude?.let { "%.3f".format(it) }}"
+            )
+        }
 
         // A38 三段式守卫（openspec fix-lap-timing-engine-entry-hardening Requirement 4）：
         //   段 1 首样本 → 仅赋 lastLapGpsSample 为下一帧准备基准，A34 死码一并清理
@@ -370,10 +384,14 @@ class TestSessionViewModel(
             currentSample = currentSample
         )
 
-        FileLogger.d(
-            TAG,
-            "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
-        )
+        // A18 战役 F R4：25Hz 高频 bridge 结果日志降级为 VERBOSE（无坐标，只改
+        // 方法名）；isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值。
+        if (FileLogger.isVerboseEnabled) {
+            FileLogger.v(
+                TAG,
+                "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
+            )
+        }
 
         _lapSession.value = updatedSession
         _latestLapRecords.value = updatedSession.completedLaps

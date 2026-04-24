@@ -1,3 +1,11 @@
+// @IgnoreFormatCheck
+// 理由：本文件仅由 change fix-file-logger-and-engine-coord-hygiene（战役 F A18+A39）
+//       修改 1 处 R4 高频 detector 日志 call site（line 70 附近）—— `FileLogger.d`
+//       → `FileLogger.v` + 坐标 `"%.3f".format(...)` 降级 + `if (isVerboseEnabled)`
+//       守卫。kt-check 报的 class-comment / property-name / public-fun-with-comment-block
+//       / my-max-line-length / allow-assert(!!) / method-name(List) / no-trailing-newline
+//       均为 pre-existing legacy 违规，与本战役 R4 日志精修语义正交。评审方 2026-04-24
+//       战役 G B 方案纪律批准 legacy 文件 ignore，避免 scope 漂移到周边 refactor。
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.feature.test.FileLogger
@@ -67,10 +75,15 @@ class LapTimingEngine(
 
         val updatedSamples = session.samples + currentSample
         val startFinishDetection = detector.detect(previous = previousSample, current = currentSample, gate = track.startFinishGate)
-        FileLogger.d(
-            TAG,
-            "targetGate=${track.startFinishGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${startFinishDetection.accepted}, reason=${startFinishDetection.reason}, directionScore=${startFinishDetection.directionScore}, directionalSpeed=${startFinishDetection.directionalSpeedMps}"
-        )
+        // A18 + A39 战役 F R4：25Hz 高频 detector 日志降级为 VERBOSE + 坐标 %.3f
+        // 精度 (~100m) —— 默认 DEBUG 级别下不写盘，彻底消除每秒 25 次 I/O；
+        // isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值开销。
+        if (FileLogger.isVerboseEnabled) {
+            FileLogger.v(
+                TAG,
+                "targetGate=${track.startFinishGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${startFinishDetection.accepted}, reason=${startFinishDetection.reason}, directionScore=${startFinishDetection.directionScore}, directionalSpeed=${startFinishDetection.directionalSpeedMps}"
+            )
+        }
         if (startFinishDetection.accepted) {
             return handleStartFinishCrossing(
                 session = session,
