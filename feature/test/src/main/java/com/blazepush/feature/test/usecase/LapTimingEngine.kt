@@ -167,9 +167,12 @@ class LapTimingEngine(
             durationMillis = finishedMillis - activeLap.startedAtMillis,
             sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
             trajectory = trajectory,
-            // A21 裁剪层：逐元素 filter 严格语义，不依赖时间戳单调假设。
-            // `dropWhile` 只在前缀首个不满足处停止，非单调序列会漏拦夹在后面的历史事件。
-            crossingEvents = updatedEvents.filter { it.timestampMillis >= activeLap.startedAtMillis },
+            // A21 裁剪层（R5 修订）：严格 `>` 大于，边界事件归前一圈。
+            //   v1 (engine-entry-hardening) 用 `>=` 含边界：`CrossingEvent.timestampMillis` 升级为插值毫秒后，
+            //   闭圈 event.ts 与下圈 startedAtMillis 精确相等（同一过线瞬间），`>=` 会让 Lap N 闭圈 event 被
+            //   Lap N+1 filter 同时捞走造成跨圈重复。改严格 `>` 让边界 event 归前圈，彻底消除碰撞。
+            //   本 change spec 通过 `## MODIFIED Requirements` 段覆盖 engine-entry-hardening R3 Scenario 1。
+            crossingEvents = updatedEvents.filter { it.timestampMillis > activeLap.startedAtMillis },
             qualityFlags = qualityFlags
         )
         val nextLapIndex = activeLap.lapIndex + 1
@@ -217,60 +220,61 @@ class LapTimingEngine(
         val activeLap = session.activeLap ?: return session.copy(samples = updatedSamples)
         val orderedSectorGates = track.sectorGates.sortedBy { it.sequenceIndex }
 
-        val unexpectedGate = orderedSectorGates
-            .asSequence()
-            .filter { it.id != targetGate.id }
-            .map { gate -> gate to detector.detect(previous = previousSample, current = currentSample, gate = gate) }
-            .firstOrNull { (_, detection) -> detection.accepted }
+        // R4：遍历所有 sector 门 detect（替代 v1 的 firstOrNull accepted）
+        val allDetections = orderedSectorGates.map { gate ->
+            gate to detector.detect(previous = previousSample, current = currentSample, gate = gate)
+        }
+        val expectedPair = allDetections.first { (gate, _) -> gate.id == targetGate.id }
+        val expectedGateDetection = expectedPair.second
+        val unexpectedAccepted = allDetections.filter { (gate, d) -> gate.id != targetGate.id && d.accepted }
 
-        if (unexpectedGate != null) {
-            val (gate, detection) = unexpectedGate
-            val crossingEvent = CrossingEvent(
+        FileLogger.d(
+            TAG,
+            "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${expectedGateDetection.accepted}, reason=${expectedGateDetection.reason}, directionScore=${expectedGateDetection.directionScore}, directionalSpeed=${expectedGateDetection.directionalSpeedMps}, unexpectedAcceptedCount=${unexpectedAccepted.size}"
+        )
+
+        // 期待门 CrossingEvent：accepted 用插值时刻，rejected 降级到 currentSample.ts（R2 B2 契约）
+        val expectedCrossingMillis = if (expectedGateDetection.accepted) {
+            interpolatedMillis(previousSample, currentSample, expectedGateDetection.crossingProgress!!)
+        } else {
+            currentSample.timestampMillis
+        }
+        val expectedEvent = CrossingEvent(
+            gateId = targetGate.id,
+            gateType = targetGate.type,
+            timestampMillis = expectedCrossingMillis,
+            sampleIndex = updatedSamples.lastIndex,
+            accepted = expectedGateDetection.accepted,
+            reason = expectedGateDetection.reason,
+            directionalSpeedMps = expectedGateDetection.directionalSpeedMps,
+            directionScore = expectedGateDetection.directionScore
+        )
+
+        // R4：非期待门 accepted 的 CrossingEvent 全部记录为 UnexpectedGateOrder（accepted=false）
+        // 顺序：按 orderedSectorGates.sequenceIndex 从小到大（orderedSectorGates 已排序，filter 保持顺序）
+        val unexpectedEvents = unexpectedAccepted.map { (gate, detection) ->
+            CrossingEvent(
                 gateId = gate.id,
                 gateType = gate.type,
-                timestampMillis = currentSample.timestampMillis,
+                timestampMillis = interpolatedMillis(previousSample, currentSample, detection.crossingProgress!!),
                 sampleIndex = updatedSamples.lastIndex,
                 accepted = false,
                 reason = CrossingReason.UnexpectedGateOrder,
                 directionalSpeedMps = detection.directionalSpeedMps,
                 directionScore = detection.directionScore
             )
-            return session.copy(
-                samples = updatedSamples,
-                crossingEvents = session.crossingEvents + crossingEvent
-            )
         }
 
-        val detection = detector.detect(previous = previousSample, current = currentSample, gate = targetGate)
-        FileLogger.d(
-            TAG,
-            "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${detection.accepted}, reason=${detection.reason}, directionScore=${detection.directionScore}, directionalSpeed=${detection.directionalSpeedMps}"
-        )
+        // R4 追加顺序：期待门先 + 所有非期待门按 orderedSectorGates 顺序
+        val allNewEvents = listOf(expectedEvent) + unexpectedEvents
+        val updatedEvents = session.crossingEvents + allNewEvents
 
-        // R2：accepted 分支用插值毫秒时刻，rejected 分支降级到 currentSample.ts（spec B2 两档契约）
-        val crossingEventMillis = if (detection.accepted) {
-            interpolatedMillis(previousSample, currentSample, detection.crossingProgress!!)
-        } else {
-            currentSample.timestampMillis
-        }
-
-        val crossingEvent = CrossingEvent(
-            gateId = targetGate.id,
-            gateType = targetGate.type,
-            timestampMillis = crossingEventMillis,
-            sampleIndex = updatedSamples.lastIndex,
-            accepted = detection.accepted,
-            reason = detection.reason,
-            directionalSpeedMps = detection.directionalSpeedMps,
-            directionScore = detection.directionScore
-        )
-
-        val updatedEvents = session.crossingEvents + crossingEvent
-
-        if (!detection.accepted) {
+        // 期待门 rejected：state 保持不变，仅记 event（R4 B5 两档分支契约）
+        if (!expectedGateDetection.accepted) {
             return session.copy(samples = updatedSamples, crossingEvents = updatedEvents)
         }
 
+        // 期待门 accepted：推进 nextExpectedGateIndex + SectorEntry + passedGateIds
         return session.copy(
             samples = updatedSamples,
             nextExpectedGateIndex = session.nextExpectedGateIndex + 1,
@@ -279,7 +283,7 @@ class LapTimingEngine(
                 passedGateIds = activeLap.passedGateIds + targetGate.id,
                 sectorEntries = activeLap.sectorEntries + SectorEntry(
                     gateId = targetGate.id,
-                    crossedAtMillis = crossingEventMillis
+                    crossedAtMillis = expectedCrossingMillis
                 )
             )
         )

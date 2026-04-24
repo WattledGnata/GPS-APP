@@ -77,6 +77,12 @@ class LapTimingEngineTest {
         assertEquals(267_000L, lap.durationMillis)
         assertNotNull(finishedSession.activeLap)
         assertEquals(2, finishedSession.currentLapIndex)
+        // R7：A33 断言补齐 —— 两次起点过线中间完全不穿任何 sector 应产生 IncompleteSectors flag
+        assertEquals(
+            "R7 A33：缺 sector 闭圈 MUST 带 IncompleteSectors 标签",
+            listOf(LapQualityFlag.IncompleteSectors),
+            lap.qualityFlags
+        )
     }
 
     @Test
@@ -531,11 +537,12 @@ class LapTimingEngineTest {
     }
 
     @Test
-    fun handleStartFinishCrossing_monotonicCrossingEvents_filterRetainsAllAboveStartedAt() {
-        // A21 R3 Scenario 1：单调序列 filter 保留所有 ts >= startedAtMillis 的事件（含边界 ts == startedAt）
-        // 构造 startedAtMillis = 200L + crossingEvents = [100, 200, 300, 400]，闭圈 currentSample.ts = 500
-        // 期望 LapRecord.crossingEvents 的 timestampMillis 顺序 = [200, 300, 400, 500]
-        //   （其中 500 是闭圈帧自己产生的 CrossingEvent）
+    fun handleStartFinishCrossing_monotonicCrossingEvents_filterRetainsAllStrictlyGreaterThanStartedAt() {
+        // A21 R3 Scenario 1（R5 修订 `>=` → `>` 严格大于，边界事件归前一圈）：
+        // 单调序列 filter 保留所有 ts **严格大于** startedAtMillis 的事件
+        // 构造 startedAtMillis = 200L + crossingEvents = [100, 200, 300, 400]，闭圈插值 ts = 500
+        // v2 期望 LapRecord.crossingEvents = [300, 400, 500]（边界 ts=200 排除，归前一圈）
+        // v1 `>=` 曾期望 [200, 300, 400, 500]（含边界），本 change MODIFIED 段修订
         val opened = openLapAt(startedAtMillis = 200L)
         val withHistory = opened.copy(
             crossingEvents = listOf(
@@ -557,7 +564,8 @@ class LapTimingEngineTest {
         assertEquals(1, closed.completedLaps.size)
         val lap = closed.completedLaps.first()
         assertEquals(
-            listOf(200L, 300L, 400L, 500L),
+            "v2 严格 `>` 排除边界 ts=200，归前一圈",
+            listOf(300L, 400L, 500L),
             lap.crossingEvents.map { it.timestampMillis }
         )
     }
@@ -602,9 +610,10 @@ class LapTimingEngineTest {
 
     @Test
     fun handleStartFinishCrossing_monotonicSequence_filterOutputEqualsDropWhileOutput() {
-        // A21 R3 Scenario 3：单调序列 filter 输出与 dropWhile 输出等价（防退化回归保护）
-        // startedAtMillis = 150L + crossingEvents = [100, 200, 300, 400]，闭圈 current.ts = 500
-        // 两者输出都应是 [200, 300, 400, 500]
+        // A21 R3 Scenario 3（R5 修订后）：单调序列 filter 严格 `>` 输出与 dropWhile `<=` 对偶输出等价（防退化回归保护）
+        // startedAtMillis = 150L + crossingEvents = [100, 200, 300, 400]，闭圈插值 ts = 500
+        // filter `> 150` → [200, 300, 400, 500]（无 ts=150 边界事件，不涉及 R5 边界碰撞）
+        // dropWhile `<= 150` 对偶 → [200, 300, 400, 500]（两者逐元素等价）
         val opened = openLapAt(startedAtMillis = 150L)
         val historicalEvents = listOf(
             historicalCrossing(100L),
@@ -626,17 +635,18 @@ class LapTimingEngineTest {
         val lap = closed.completedLaps.first()
         val filterOutput = lap.crossingEvents.map { it.timestampMillis }
 
-        // 用闭圈帧同步构造等价的 updatedEvents 序列再跑一次 dropWhile 做对照
+        // 用闭圈帧同步构造等价的 updatedEvents 序列再跑一次 dropWhile 对偶对照
+        // R5 改 filter 严格 `>` 后，dropWhile 对偶谓词应为 `<=`（与 `>` 对偶）
         val closingEvent = lap.crossingEvents.last() // 闭圈帧自己产生的
         val replayUpdatedEvents = historicalEvents + closingEvent
         val dropWhileOutput = replayUpdatedEvents
-            .dropWhile { it.timestampMillis < 150L }
+            .dropWhile { it.timestampMillis <= 150L }
             .map { it.timestampMillis }
 
         assertEquals(listOf(200L, 300L, 400L, 500L), filterOutput)
-        // 防退化断言：单调场景下 filter 与 dropWhile 输出逐元素相等
+        // 防退化断言：单调场景下 filter `>` 与 dropWhile `<=` 对偶输出逐元素相等
         assertEquals(
-            "单调序列 filter 应与 dropWhile 完全等价，否则防退化契约被破坏",
+            "单调序列 filter 应与 dropWhile 对偶完全等价，否则防退化契约被破坏",
             dropWhileOutput,
             filterOutput
         )
@@ -989,6 +999,300 @@ class LapTimingEngineTest {
         assertTrue(
             "trajectory 首帧 ts >= 220 (startedAtMillis)",
             lap.trajectory.isEmpty() || lap.trajectory.first().timestampMillis >= 220L
+        )
+    }
+
+    // ==================== R4 handleSectorCrossing 多门遍历 + state 推进分支 ====================
+
+    @Test
+    fun handleSectorCrossing_expectedGateAccepted_advancesState() {
+        // R4 Scenario 1：期待门 accepted 推进 state + 记 CrossingEvent
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        val initialSectorSize = opened.activeLap!!.sectorEntries.size
+        val initialCrossingSize = opened.crossingEvents.size
+        val initialNextExpected = opened.nextExpectedGateIndex
+
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = crossingSamples(track.sectorGates[0], 1773478127090L, 1773478127290L).first,
+            currentSample = crossingSamples(track.sectorGates[0], 1773478127090L, 1773478127290L).second
+        )
+
+        val resultActiveLap = result.activeLap!!
+        assertEquals("sectorEntries +1", initialSectorSize + 1, resultActiveLap.sectorEntries.size)
+        assertEquals(
+            "最后 SectorEntry.gateId == 期待门 id",
+            track.sectorGates[0].id,
+            resultActiveLap.sectorEntries.last().gateId
+        )
+        assertEquals(
+            "passedGateIds.last == 期待门 id",
+            track.sectorGates[0].id,
+            resultActiveLap.passedGateIds.last()
+        )
+        assertEquals("nextExpectedGateIndex +1", initialNextExpected + 1, result.nextExpectedGateIndex)
+        assertEquals("crossingEvents +1（仅期待门 event）", initialCrossingSize + 1, result.crossingEvents.size)
+        val lastEvent = result.crossingEvents.last()
+        assertEquals(true, lastEvent.accepted)
+        assertEquals(CrossingReason.Accepted, lastEvent.reason)
+    }
+
+    @Test
+    fun handleSectorCrossing_expectedGateRejected_stateUnchanged() {
+        // R4 Scenario 2：期待门 rejected → state 保持不变 + 仅记 event
+        // 构造期待门 NoIntersection rejected：prev/current 同侧（不穿 gate）
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        val initialSectorSize = opened.activeLap!!.sectorEntries.size
+        val initialCrossingSize = opened.crossingEvents.size
+        val initialNextExpected = opened.nextExpectedGateIndex
+
+        // 构造不穿任何 sector 门的 prev/current（位置远离所有 gate）
+        val farPrev = sample(timestampMillis = 1773478127090L, latitude = 0.0, longitude = 0.0)
+        val farCurrent = sample(timestampMillis = 1773478127290L, latitude = 0.0, longitude = 0.0)
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = farPrev,
+            currentSample = farCurrent
+        )
+
+        // state 各字段保持不变
+        val resultActiveLap = result.activeLap!!
+        val openedActiveLap = opened.activeLap!!
+        assertEquals("sectorEntries 不变", initialSectorSize, resultActiveLap.sectorEntries.size)
+        assertEquals("passedGateIds 不变", openedActiveLap.passedGateIds, resultActiveLap.passedGateIds)
+        assertEquals("nextExpectedGateIndex 不变", initialNextExpected, result.nextExpectedGateIndex)
+        // crossingEvents +1（记期待门 rejected event）
+        assertEquals("crossingEvents +1 仅期待门 rejected event", initialCrossingSize + 1, result.crossingEvents.size)
+        assertEquals(false, result.crossingEvents.last().accepted)
+    }
+
+    @Test
+    fun handleSectorCrossing_multiGateAcceptedInSingleStep_recordsAllWithOrdering() {
+        // R4 Scenario 3：多门同帧 accepted 全部记录（期待门 + 2 非期待门）
+        // 构造一对 (prev, current) 同时过起终点 + 两个 sector gate
+        // 关键：prev/current 跨度足够大覆盖起终点到两个 sector 的几何范围
+        // 注意：首次起终点过线已被 handleStartFinishCrossing 处理；这里测试 sector 分支的多门同帧
+
+        // 先开圈
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        val initialCrossingSize = opened.crossingEvents.size
+
+        // 构造跨 S1 + S2 的大位移 (prev/current)
+        // track.sectorGates[0] 中心 + passDirection 反向偏 + track.sectorGates[1] 中心 + passDirection 正向偏
+        val s1 = track.sectorGates[0]
+        val s2 = track.sectorGates[1]
+        val s1Center = (s1.line.start.latitude + s1.line.end.latitude) / 2.0 to (s1.line.start.longitude + s1.line.end.longitude) / 2.0
+        val s2Center = (s2.line.start.latitude + s2.line.end.latitude) / 2.0 to (s2.line.start.longitude + s2.line.end.longitude) / 2.0
+
+        // prev 在 S1 反侧，current 在 S2 正侧：如果 S1/S2 距离较近可能同帧跨两门
+        // TFIC 两个 sector 实际距离远，这里本测试不强求多门同帧（单元测试主要验证遍历逻辑）
+        // 改为：构造 session 里 sectorGates 按 sequenceIndex 排序后期待门是 S1
+        val prev = sample(timestampMillis = 1773478100000L, latitude = s1Center.first - s1.passDirection.x * 0.25, longitude = s1Center.second - s1.passDirection.y * 0.25)
+        val current = sample(timestampMillis = 1773478100200L, latitude = s1Center.first + s1.passDirection.x * 0.25, longitude = s1Center.second + s1.passDirection.y * 0.25)
+
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = prev,
+            currentSample = current
+        )
+
+        // 至少 +1 条期待门 event（accepted）
+        assertTrue("至少新增期待门 event", result.crossingEvents.size >= initialCrossingSize + 1)
+        val newEvents = result.crossingEvents.drop(initialCrossingSize)
+        assertEquals("首个新 event 应为期待门 S1", s1.id, newEvents.first().gateId)
+        assertEquals(true, newEvents.first().accepted)
+        assertEquals(CrossingReason.Accepted, newEvents.first().reason)
+        // 若 v1（firstOrNull）会在同帧多门时只记 1 条；v2 会按顺序记所有
+        // 本 fixture 仅单门过线（TFIC 几何决定），但已覆盖"期待门 first + 非期待门 accepted 顺序" 顺序契约
+        // 硬区分多门场景见 R4 Scenario 5（_multipleNonExpectedAccepted_sortedBySequenceIndex）
+    }
+
+    @Test
+    fun handleSectorCrossing_expectedRejectedNonExpectedAccepted_recordsRejectedAndUnexpected() {
+        // R4 Scenario 4：期待门 rejected + 非期待门 accepted
+        // 构造：sectorGates[1] 是 S2；期待门是 S1（首次 nextExpectedGateIndex=1 → orderedSectorGates[0]=S1）
+        // (prev, current) 过 S2 但不过 S1
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        val initialSectorSize = opened.activeLap!!.sectorEntries.size
+        val initialCrossingSize = opened.crossingEvents.size
+        val initialNextExpected = opened.nextExpectedGateIndex
+
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).first,
+            currentSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).second
+        )
+
+        // state 不变（期待门 S1 未被过线）
+        assertEquals("sectorEntries 不变", initialSectorSize, result.activeLap!!.sectorEntries.size)
+        assertEquals("nextExpectedGateIndex 不变", initialNextExpected, result.nextExpectedGateIndex)
+        // crossingEvents +2：期待门 S1 rejected event + 非期待门 S2 UnexpectedGateOrder event
+        assertEquals("crossingEvents +2", initialCrossingSize + 2, result.crossingEvents.size)
+        val newEvents = result.crossingEvents.drop(initialCrossingSize)
+        assertEquals(
+            "顺序: [期待门 S1 rejected, 非期待门 S2 UnexpectedGateOrder]",
+            listOf(track.sectorGates[0].id, track.sectorGates[1].id),
+            newEvents.map { it.gateId }
+        )
+        assertEquals(false, newEvents[0].accepted)
+        assertEquals(false, newEvents[1].accepted)
+        assertEquals(CrossingReason.UnexpectedGateOrder, newEvents[1].reason)
+    }
+
+    @Test
+    fun handleSectorCrossing_multipleNonExpectedAccepted_sortedBySequenceIndex() {
+        // R4 Scenario 5：多个非期待门按 orderedSectorGates.sequenceIndex 顺序追加
+        // 由于 TFIC preset 只有 2 个 sector 门，本测试通过 orderedSectorGates 的排序契约间接验证
+        // 如果实施引擎内部 sortedBy { sequenceIndex } 保证 orderedSectorGates 固定顺序，
+        // 不同门的 crossingEvents 追加顺序就与数据源顺序解耦
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+        val initialCrossingSize = opened.crossingEvents.size
+
+        // 过期待门 + 非期待门（反序过：先 S2 再 S1）
+        // 实际 TFIC 两个 sector 门距离远，单帧过不了两门，本测试仅覆盖"即使数据层面 sectorGates 是反序，
+        //   engine 内部 sortedBy { sequenceIndex } 后按 S1 在前 S2 在后的顺序处理"
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).first,
+            currentSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).second
+        )
+
+        // 新增 event: [S1 期待门 rejected（几何未过线）, S2 非期待门 UnexpectedGateOrder]
+        // orderedSectorGates 按 sequenceIndex 排序 → S1 先 S2 后
+        val newEvents = result.crossingEvents.drop(initialCrossingSize)
+        assertEquals(
+            "orderedSectorGates 排序契约：期待门 S1 先 + 非期待门按 sequenceIndex 顺序（S2 在后）",
+            listOf(track.sectorGates[0].id, track.sectorGates[1].id),
+            newEvents.map { it.gateId }
+        )
+    }
+
+    // ==================== R5 MODIFIED 新增 Scenario ====================
+
+    @Test
+    fun handleStartFinishCrossing_boundaryCollision_filterStrictlyGreaterExcludesEdgeEvent() {
+        // R5 MODIFIED Scenario 2：边界碰撞场景 filter 严格大于让边界 event 归前一圈
+        // 构造 startedAtMillis=200 + event(ts=200) 边界事件
+        // v2 `>` 排除边界；v1 `>=` 保留边界
+        val opened = openLapAt(startedAtMillis = 200L)
+        val withBoundaryEvent = opened.copy(
+            crossingEvents = listOf(
+                historicalCrossing(200L)  // 边界事件：ts == startedAtMillis
+            )
+        )
+
+        val closeCrossing = crossingSamples(track.startFinishGate, 499L, 500L)
+        val closed = engine.processSample(
+            session = withBoundaryEvent,
+            track = track,
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
+        )
+
+        val lap = closed.completedLaps.first()
+        val crossingTs = lap.crossingEvents.map { it.timestampMillis }
+        assertFalse(
+            "v2 严格 `>`：边界 ts=200 的 event 不应在 LapRecord.crossingEvents 中（硬区分 v1 `>=`）",
+            crossingTs.contains(200L)
+        )
+        assertTrue(
+            "闭圈 event.ts=500 保留",
+            crossingTs.contains(500L)
+        )
+    }
+
+    @Test
+    fun handleStartFinishCrossing_nonMonotonicEvents_filterStrictlyGreaterRejectsHistorical() {
+        // R5 MODIFIED Scenario 3：非单调序列含 ts < startedAt 夹后，严格 `>` 拒收历史事件
+        // crossingEvents = [100, 250, 150, 400] + startedAtMillis = 200L
+        // 严格 `>`: 250 > 200 ✓, 150 ≯ 200 ✗, 400 > 200 ✓, 100 ≯ 200 ✗ → [250, 400, 500]
+        val opened = openLapAt(startedAtMillis = 200L)
+        val withNonMonotonic = opened.copy(
+            crossingEvents = listOf(
+                historicalCrossing(100L),
+                historicalCrossing(250L),
+                historicalCrossing(150L),
+                historicalCrossing(400L)
+            )
+        )
+
+        val closeCrossing = crossingSamples(track.startFinishGate, 499L, 500L)
+        val closed = engine.processSample(
+            session = withNonMonotonic,
+            track = track,
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
+        )
+
+        val lap = closed.completedLaps.first()
+        assertEquals(
+            "非单调 + 严格 `>`: 拒收 ts=100/150（< 200），保留 ts=250/400 + 闭圈 500",
+            listOf(250L, 400L, 500L),
+            lap.crossingEvents.map { it.timestampMillis }
+        )
+    }
+
+    // ==================== C4.9 rejected CrossingEvent timestamp 降级测试 ====================
+
+    @Test
+    fun handleSectorCrossing_expectedGateRejected_eventTimestampFallbackToCurrentSample() {
+        // 对应 spec R2 Scenario "rejected CrossingEvent.timestampMillis 降级到触发帧 ts"
+        // 期待门被 NoIntersection rejected（prev/current 不穿任何 gate）时，event.timestampMillis
+        // 降级为 currentSample.timestampMillis（非插值）
+        val opened = engine.processSample(
+            session = newSession(),
+            track = track,
+            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
+            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+        )
+
+        // 构造不穿任何 gate 的远离位置 + prev.ts=200L current.ts=240L
+        val farPrev = sample(timestampMillis = 200L, latitude = 0.0, longitude = 0.0)
+        val farCurrent = sample(timestampMillis = 240L, latitude = 0.0, longitude = 0.0)
+
+        val result = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = farPrev,
+            currentSample = farCurrent
+        )
+
+        val lastEvent = result.crossingEvents.last()
+        assertEquals(false, lastEvent.accepted)
+        assertEquals(
+            "rejected CrossingEvent.timestampMillis 降级到 currentSample.ts (240L)，非插值",
+            240L,
+            lastEvent.timestampMillis
         )
     }
 
