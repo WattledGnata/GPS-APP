@@ -76,6 +76,7 @@ class LapTimingEngine(
                 session = session,
                 track = track,
                 updatedSamples = updatedSamples,
+                previousSample = previousSample,
                 currentSample = currentSample,
                 detection = startFinishDetection
             )
@@ -97,13 +98,18 @@ class LapTimingEngine(
         session: LapSession,
         track: Track,
         updatedSamples: List<GpsSample>,
+        previousSample: GpsSample,
         currentSample: GpsSample,
         detection: GateCrossingDetection
     ): LapSession {
+        // R2：所有圈时字段 MUST 用过线插值毫秒时刻（不用帧 ts）。
+        // detection.crossingProgress 在 accepted 分支（processSample 已守卫）必非 null。
+        val crossingMillis = interpolatedMillis(previousSample, currentSample, detection.crossingProgress!!)
+
         val crossingEvent = CrossingEvent(
             gateId = track.startFinishGate.id,
             gateType = track.startFinishGate.type,
-            timestampMillis = currentSample.timestampMillis,
+            timestampMillis = crossingMillis,
             sampleIndex = updatedSamples.lastIndex,
             accepted = detection.accepted,
             reason = detection.reason,
@@ -115,14 +121,14 @@ class LapTimingEngine(
         if (session.activeLap == null) {
             return session.copy(
                 status = LapSessionStatus.Recording,
-                startedAtMillis = session.startedAtMillis ?: currentSample.timestampMillis,
+                startedAtMillis = session.startedAtMillis ?: crossingMillis,
                 samples = updatedSamples,
                 currentLapIndex = 1,
                 nextExpectedGateIndex = 1,
                 crossingEvents = updatedEvents,
                 activeLap = ActiveLap(
                     lapIndex = 1,
-                    startedAtMillis = currentSample.timestampMillis,
+                    startedAtMillis = crossingMillis,
                     passedGateIds = listOf(track.startFinishGate.id),
                     sampleStartIndex = updatedSamples.lastIndex
                 )
@@ -130,7 +136,16 @@ class LapTimingEngine(
         }
 
         val activeLap = session.activeLap
-        val trajectory = updatedSamples.drop(activeLap.sampleStartIndex)
+        val finishedMillis = crossingMillis
+        // R3：trajectory 两段式切分 —— subList(sampleStartIndex) 作性能起点 + filter 时间窗口裁剪归属。
+        //   sampleStartIndex 作为搜索跳过前缀的性能索引（语义降级为非归属判定依据）；
+        //   归属判定严格按时间窗口 [startedAt, finishedAt)，闭圈帧归下一圈首帧。
+        val trajectory = updatedSamples
+            .subList(activeLap.sampleStartIndex, updatedSamples.size)
+            .filter { sample ->
+                sample.timestampMillis >= activeLap.startedAtMillis &&
+                    sample.timestampMillis < finishedMillis
+            }
         val hasDesyncGap = trajectory.zipWithNext().any { (a, b) ->
             (b.timestampMillis - a.timestampMillis) > desyncGapThresholdMillis
         }
@@ -148,8 +163,8 @@ class LapTimingEngine(
             trackId = session.trackId,
             lapIndex = activeLap.lapIndex,
             startedAtMillis = activeLap.startedAtMillis,
-            finishedAtMillis = currentSample.timestampMillis,
-            durationMillis = currentSample.timestampMillis - activeLap.startedAtMillis,
+            finishedAtMillis = finishedMillis,
+            durationMillis = finishedMillis - activeLap.startedAtMillis,
             sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
             trajectory = trajectory,
             // A21 裁剪层：逐元素 filter 严格语义，不依赖时间戳单调假设。
@@ -167,12 +182,29 @@ class LapTimingEngine(
             completedLaps = session.completedLaps + lapRecord,
             activeLap = ActiveLap(
                 lapIndex = nextLapIndex,
-                startedAtMillis = currentSample.timestampMillis,
+                startedAtMillis = crossingMillis,
                 passedGateIds = listOf(track.startFinishGate.id),
                 sampleStartIndex = updatedSamples.lastIndex
             )
         )
     }
+
+    /**
+     * 过线插值毫秒时刻（R2）：从 detector 的 `crossingProgress` 线性插值到两帧 ts 之间。
+     *
+     * 公式：`prev.ts + t × (current.ts - prev.ts)`，四舍五入到整数毫秒。
+     *
+     * 插值模型选型：**帧间线性（匀速）插值**。详见 proposal 决策 5 与 spec 头部的"插值模型约束"段：
+     * 本 change 范围内 MUST NOT 引入匀加速 / 朝向几何等升级代码路径（防止扰乱 ±5ms 合成契约
+     * 前置量级假设）。1Hz 弱定位设备升级路径留给未来战役。
+     */
+    private fun interpolatedMillis(
+        previousSample: GpsSample,
+        currentSample: GpsSample,
+        crossingProgress: Double
+    ): Long = Math.round(
+        previousSample.timestampMillis + crossingProgress * (currentSample.timestampMillis - previousSample.timestampMillis)
+    )
 
     private fun handleSectorCrossing(
         session: LapSession,
@@ -215,10 +247,17 @@ class LapTimingEngine(
             "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${detection.accepted}, reason=${detection.reason}, directionScore=${detection.directionScore}, directionalSpeed=${detection.directionalSpeedMps}"
         )
 
+        // R2：accepted 分支用插值毫秒时刻，rejected 分支降级到 currentSample.ts（spec B2 两档契约）
+        val crossingEventMillis = if (detection.accepted) {
+            interpolatedMillis(previousSample, currentSample, detection.crossingProgress!!)
+        } else {
+            currentSample.timestampMillis
+        }
+
         val crossingEvent = CrossingEvent(
             gateId = targetGate.id,
             gateType = targetGate.type,
-            timestampMillis = currentSample.timestampMillis,
+            timestampMillis = crossingEventMillis,
             sampleIndex = updatedSamples.lastIndex,
             accepted = detection.accepted,
             reason = detection.reason,
@@ -240,7 +279,7 @@ class LapTimingEngine(
                 passedGateIds = activeLap.passedGateIds + targetGate.id,
                 sectorEntries = activeLap.sectorEntries + SectorEntry(
                     gateId = targetGate.id,
-                    crossedAtMillis = currentSample.timestampMillis
+                    crossedAtMillis = crossingEventMillis
                 )
             )
         )
