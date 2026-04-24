@@ -294,25 +294,74 @@ class GateCrossingDetectorTest {
 
     @Test
     fun detect_floatingPointOverflow_crossingProgressIsClamped() {
-        // R1 Scenario 3：浮点边界越界被 clamp 到 [0.0, 1.0]
-        // 按 C1/C2 visibility 条款，通过 @VisibleForTesting internal 路径直接验证 clamp 契约
-        // 由于 coerceIn 是 detect 内对 segmentsIntersectMeters 返回值的纯函数处理，
-        // 这里直接断言 coerceIn 语义（clamp 契约的等价证明）：
-        assertEquals("上界 clamp", 1.0, (1.0000001).coerceIn(0.0, 1.0), 0.0)
-        assertEquals("下界 clamp", 0.0, (-1e-16).coerceIn(0.0, 1.0), 0.0)
-        assertEquals("正常值保持", 0.5, (0.5).coerceIn(0.0, 1.0), 0.0)
+        // R1 Scenario 3 / P1-1：浮点边界越界被 coerceIn 收敛到 [0, 1]
+        // 硬区分 v1（segmentsIntersectMeters 内部严格 `t in 0.0..1.0` 直接返回 null）
+        //   vs v2（接受 [-tolerance, 1 + tolerance] 容差，返回 t；detect 的 coerceIn 做最终 clamp）
 
-        // 间接验证：accepted 分支 crossingProgress 永远落在 [0, 1]
-        // 即使构造极端几何（prev / current 非常接近 gate 线），`coerceIn(0.0, 1.0)` 保证不越界
-        val detection = detector.detect(
-            previous = sample(timestampMillis = 1_000L, latitude = -1e-9, longitude = 0.5),
-            current = sample(timestampMillis = 1_100L, latitude = 1e-9, longitude = 0.5),
+        // 构造几何让 t = 2.0 显著越界（prev→current 线段 a→b 的 1/2 长度外，gate 线垂直于路径）
+        // 线段 prev(0,0)→current(0,1)，gate (-1,2)→(1,2)：
+        //   denominator = abx × cdy - aby × cdx = 0 × 0 - 1 × 2 = -2
+        //   t = (acx × cdy - acy × cdx) / denom = ((-1)×0 - 2×2) / -2 = -4 / -2 = 2.0
+        //   u = (acx × aby - acy × abx) / denom = ((-1)×1 - 2×0) / -2 = -1 / -2 = 0.5
+
+        // v1 默认严格语义下 t=2.0 显著越界 → 返回 null（"不相交"）
+        val strict = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = 0.0, bx = 0.0, by = 1.0,
+            cx = -1.0, cy = 2.0, dx = 1.0, dy = 2.0
+        )
+        assertNull(
+            "default tolerance=1e-9 下 t=2.0 显著越界 MUST 返回 null（v1/v2 公共行为）",
+            strict
+        )
+
+        // 传大 tolerance=3.0 验证容差接受路径：v2 返回 t=2.0（不 null）
+        val relaxed = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = 0.0, bx = 0.0, by = 1.0,
+            cx = -1.0, cy = 2.0, dx = 1.0, dy = 2.0,
+            tolerance = 3.0
+        )
+        assertNotNull(
+            "tolerance=3.0 接受 t=2.0 微越界（EPSILON 容差机制生效）",
+            relaxed
+        )
+        assertEquals(
+            "容差接受后返回原始 t=2.0（交给 detect 的 coerceIn 做 clamp）",
+            2.0,
+            relaxed!!,
+            1e-9
+        )
+
+        // 模拟 detect 路径：对 segmentsIntersectMeters 返回的越界 t 做 coerceIn → [0, 1]
+        assertEquals(
+            "detect 内 intersectionT.coerceIn(0.0, 1.0)：t=2.0 → 1.0 上界 clamp",
+            1.0,
+            relaxed.coerceIn(0.0, 1.0),
+            0.0
+        )
+        assertEquals(
+            "对称：t=-1e-16 → 0.0 下界 clamp",
+            0.0,
+            (-1e-16).coerceIn(0.0, 1.0),
+            0.0
+        )
+
+        // 硬区分反证：若 v1 实现保留（严格 `t in 0.0..1.0` 返回 null），
+        // 同一几何在 default tolerance 下会给出 null，从而 detect 走 NoIntersection 路径、
+        // 返回 accepted=false / crossingProgress=null —— clamp 契约名存实亡。
+        // default tolerance 下 v2 也可能对显著越界返回 null，所以本 Scenario 硬区分的是
+        // **"扩大 tolerance 下容差机制是否真的接受越界 t"**；实际生产路径下微越界（~1e-16）
+        // 被 `FLOAT_BOUNDARY_TOLERANCE = 1e-9` 接受后由 detect 的 coerceIn clamp。
+
+        // 正向行为：端点过线（几何上 t=1.0 精确）在 default tolerance 下被 accepted
+        val endpointDetection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.1, longitude = 0.5),
+            current = sample(timestampMillis = 1_100L, latitude = 0.0, longitude = 0.5),  // current 刚好位于 gate 线 lat=0 上
             gate = gate()
         )
-        if (detection.accepted) {
-            val progress = detection.crossingProgress!!
+        if (endpointDetection.accepted) {
+            val progress = endpointDetection.crossingProgress!!
             assertTrue(
-                "clamp 后 crossingProgress 必在 [0, 1] 内，实际=$progress",
+                "端点过线 crossingProgress MUST 在 [0, 1] 内（coerceIn 兜底）",
                 progress in 0.0..1.0
             )
         }

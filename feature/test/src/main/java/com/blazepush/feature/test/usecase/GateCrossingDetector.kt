@@ -149,9 +149,15 @@ class GateCrossingDetector {
     /**
      * 米空间线段相交（R1 返回 Double? 带 t 参数）。
      *
-     * - 几何相交时返回 `t ∈ [0, 1]`（prev→current 线段上过线点的归一化位置）
-     * - 不相交（t/u 越界）返回 null
+     * - 几何相交时返回 `t ∈ [-tolerance, 1 + tolerance]`（prev→current 线段上过线点的归一化位置）
+     * - 不相交（t/u 超出容差范围）返回 null
      * - `denominator == 0`（严格平行，浮点等于 0 几乎不会发生）返回 null（保留 v1 防御性语义）
+     *
+     * **浮点边界容差**（P1-1 修订）：`t` / `u` 经浮点运算可能微越界（如 `-1e-16` /
+     * `1.0000001`），严格 `in 0.0..1.0` 会把本应相交的边界线段误判为不相交。改用
+     * `[-tolerance, 1 + tolerance]` 容差接受微越界，然后由 [detect] 的 `coerceIn(0.0, 1.0)`
+     * 做最终 clamp。`tolerance` 参数 default 为 [FLOAT_BOUNDARY_TOLERANCE]，测试可传
+     * 大 tolerance 验证容差机制。
      *
      * Visibility：`internal` 供本包 + `@VisibleForTesting` 测试直接调用（R1 Scenario 5
      * 直接断言本函数返回值契约）。生产代码仍只通过 `detect` 间接使用。
@@ -165,7 +171,8 @@ class GateCrossingDetector {
         cx: Double,
         cy: Double,
         dx: Double,
-        dy: Double
+        dy: Double,
+        tolerance: Double = FLOAT_BOUNDARY_TOLERANCE
     ): Double? {
         val abx = bx - ax
         val aby = by - ay
@@ -181,10 +188,23 @@ class GateCrossingDetector {
         val acy = cy - ay
         val t = ((acx * cdy) - (acy * cdx)) / denominator
         val u = ((acx * aby) - (acy * abx)) / denominator
-        return if (t in 0.0..1.0 && u in 0.0..1.0) t else null
+        // P1-1：浮点边界容差接受 t / u 微越界，由 detect 做最终 clamp
+        return if (
+            t >= -tolerance && t <= 1.0 + tolerance &&
+            u >= -tolerance && u <= 1.0 + tolerance
+        ) t else null
     }
 
     companion object {
+        /**
+         * 浮点边界容差常量（P1-1）：`segmentsIntersectMeters` 接受 `t / u` 在
+         * `[-FLOAT_BOUNDARY_TOLERANCE, 1 + FLOAT_BOUNDARY_TOLERANCE]` 内的微越界值，
+         * 然后由 [detect] 的 `coerceIn(0.0, 1.0)` 做最终 clamp。取值依据：
+         * - `1e-9` 对 IEEE 754 Double 机器 epsilon（~2.2e-16）留 7 个数量级余量
+         * - 对"显著不相交"的线段（`t > 1.5`）仍返回 null，不影响正常几何判定
+         */
+        internal const val FLOAT_BOUNDARY_TOLERANCE = 1e-9
+
         /**
          * 赤道附近 1° 纬度 ≈ 111320 米。精确值随纬度变化（110.57–111.69 km）。
          *

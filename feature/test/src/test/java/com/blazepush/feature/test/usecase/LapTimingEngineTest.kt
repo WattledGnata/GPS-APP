@@ -7,8 +7,13 @@ import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapQualityFlag
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
+import com.blazepush.feature.test.model.track.GeoLine
+import com.blazepush.feature.test.model.track.GeoPoint
+import com.blazepush.feature.test.model.track.GeoVector
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TimingGateType
+import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackPath
 import com.blazepush.feature.test.repository.PresetTrackCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -1080,49 +1085,59 @@ class LapTimingEngineTest {
 
     @Test
     fun handleSectorCrossing_multiGateAcceptedInSingleStep_recordsAllWithOrdering() {
-        // R4 Scenario 3：多门同帧 accepted 全部记录（期待门 + 2 非期待门）
-        // 构造一对 (prev, current) 同时过起终点 + 两个 sector gate
-        // 关键：prev/current 跨度足够大覆盖起终点到两个 sector 的几何范围
-        // 注意：首次起终点过线已被 handleStartFinishCrossing 处理；这里测试 sector 分支的多门同帧
+        // R4 Scenario 3 / P2-1：多门同帧 accepted 全部记录（期待门 + 2 非期待门 = 3 条）
+        // 硬区分 v1（firstOrNull accepted 只记 1 条）vs v2（全记 + 期待门先 + 非期待门按 sequenceIndex）
+        //
+        // 构造测试专用 3-sector track：S1/S2/S3 水平 gate 线分别在 lat=1/2/3，passDirection 向北。
+        // 喂一对 (prev=lat=0.5, current=lat=3.5) 向北大位移线段，几何上同时穿 S1/S2/S3 三门。
+        val testTrack = threeSectorTrack(sectorOrder = listOf("S1", "S2", "S3"))
 
-        // 先开圈
+        // 先过 startFinish（位于 lat=0）开圈
+        val openStartFinishPair = crossStartFinishOf(testTrack, prevTs = 100L, currentTs = 200L)
         val opened = engine.processSample(
-            session = newSession(),
-            track = track,
-            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
-            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+            session = newSession(trackId = testTrack.id),
+            track = testTrack,
+            previousSample = openStartFinishPair.first,
+            currentSample = openStartFinishPair.second
         )
+        assertEquals(LapSessionStatus.Recording, opened.status)
         val initialCrossingSize = opened.crossingEvents.size
 
-        // 构造跨 S1 + S2 的大位移 (prev/current)
-        // track.sectorGates[0] 中心 + passDirection 反向偏 + track.sectorGates[1] 中心 + passDirection 正向偏
-        val s1 = track.sectorGates[0]
-        val s2 = track.sectorGates[1]
-        val s1Center = (s1.line.start.latitude + s1.line.end.latitude) / 2.0 to (s1.line.start.longitude + s1.line.end.longitude) / 2.0
-        val s2Center = (s2.line.start.latitude + s2.line.end.latitude) / 2.0 to (s2.line.start.longitude + s2.line.end.longitude) / 2.0
-
-        // prev 在 S1 反侧，current 在 S2 正侧：如果 S1/S2 距离较近可能同帧跨两门
-        // TFIC 两个 sector 实际距离远，这里本测试不强求多门同帧（单元测试主要验证遍历逻辑）
-        // 改为：构造 session 里 sectorGates 按 sequenceIndex 排序后期待门是 S1
-        val prev = sample(timestampMillis = 1773478100000L, latitude = s1Center.first - s1.passDirection.x * 0.25, longitude = s1Center.second - s1.passDirection.y * 0.25)
-        val current = sample(timestampMillis = 1773478100200L, latitude = s1Center.first + s1.passDirection.x * 0.25, longitude = s1Center.second + s1.passDirection.y * 0.25)
-
+        // 喂一对跨 S1/S2/S3 三门的 (prev, current)：沿 lat 方向从 0.5 到 3.5
+        val multiGatePrev = sample(timestampMillis = 1_000L, latitude = 0.5, longitude = 0.0)
+        val multiGateCurrent = sample(timestampMillis = 2_000L, latitude = 3.5, longitude = 0.0)
         val result = engine.processSample(
             session = opened,
-            track = track,
-            previousSample = prev,
-            currentSample = current
+            track = testTrack,
+            previousSample = multiGatePrev,
+            currentSample = multiGateCurrent
         )
 
-        // 至少 +1 条期待门 event（accepted）
-        assertTrue("至少新增期待门 event", result.crossingEvents.size >= initialCrossingSize + 1)
+        // 硬断言：crossingEvents +3（v1 只 +1 的退化实现会 fail）
+        assertEquals(
+            "crossingEvents.size MUST +3（期待门 S1 + 2 非期待门 S2/S3 全记）",
+            initialCrossingSize + 3,
+            result.crossingEvents.size
+        )
         val newEvents = result.crossingEvents.drop(initialCrossingSize)
-        assertEquals("首个新 event 应为期待门 S1", s1.id, newEvents.first().gateId)
-        assertEquals(true, newEvents.first().accepted)
-        assertEquals(CrossingReason.Accepted, newEvents.first().reason)
-        // 若 v1（firstOrNull）会在同帧多门时只记 1 条；v2 会按顺序记所有
-        // 本 fixture 仅单门过线（TFIC 几何决定），但已覆盖"期待门 first + 非期待门 accepted 顺序" 顺序契约
-        // 硬区分多门场景见 R4 Scenario 5（_multipleNonExpectedAccepted_sortedBySequenceIndex）
+
+        // 顺序：期待门 S1 先，非期待门 S2/S3 按 sequenceIndex 顺序追加
+        assertEquals("追加顺序: [S1 期待门, S2 非期待门, S3 非期待门]", listOf("S1", "S2", "S3"), newEvents.map { it.gateId })
+
+        // S1: accepted=true + reason=Accepted（期待门推进）
+        assertEquals(true, newEvents[0].accepted)
+        assertEquals(CrossingReason.Accepted, newEvents[0].reason)
+
+        // S2 / S3: accepted=false + reason=UnexpectedGateOrder（非期待门即使几何 accepted 也视为拒收）
+        assertEquals(false, newEvents[1].accepted)
+        assertEquals(CrossingReason.UnexpectedGateOrder, newEvents[1].reason)
+        assertEquals(false, newEvents[2].accepted)
+        assertEquals(CrossingReason.UnexpectedGateOrder, newEvents[2].reason)
+
+        // 期待门 S1 推进 state
+        val resultActiveLap = result.activeLap!!
+        assertEquals(1, resultActiveLap.sectorEntries.size)
+        assertEquals("S1", resultActiveLap.sectorEntries.last().gateId)
     }
 
     @Test
@@ -1165,36 +1180,51 @@ class LapTimingEngineTest {
 
     @Test
     fun handleSectorCrossing_multipleNonExpectedAccepted_sortedBySequenceIndex() {
-        // R4 Scenario 5：多个非期待门按 orderedSectorGates.sequenceIndex 顺序追加
-        // 由于 TFIC preset 只有 2 个 sector 门，本测试通过 orderedSectorGates 的排序契约间接验证
-        // 如果实施引擎内部 sortedBy { sequenceIndex } 保证 orderedSectorGates 固定顺序，
-        // 不同门的 crossingEvents 追加顺序就与数据源顺序解耦
+        // R4 Scenario 5 / P2-2：即使 track.sectorGates 数据层面反序（[S3, S2, S1]），
+        // engine 内 sortedBy { sequenceIndex } 后非期待门输出仍按 [S2, S3] 顺序。
+        // 硬区分 engine 排序契约与数据源顺序解耦。
+        val testTrack = threeSectorTrack(sectorOrder = listOf("S3", "S2", "S1"))  // 数据层面反 sequenceIndex 顺序
+        assertEquals(
+            "前置：track.sectorGates 数据顺序为反序",
+            listOf("S3", "S2", "S1"),
+            testTrack.sectorGates.map { it.id }
+        )
+
+        // 过 startFinish 开圈
+        val openPair = crossStartFinishOf(testTrack, prevTs = 100L, currentTs = 200L)
         val opened = engine.processSample(
-            session = newSession(),
-            track = track,
-            previousSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).first,
-            currentSample = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L).second
+            session = newSession(trackId = testTrack.id),
+            track = testTrack,
+            previousSample = openPair.first,
+            currentSample = openPair.second
         )
         val initialCrossingSize = opened.crossingEvents.size
 
-        // 过期待门 + 非期待门（反序过：先 S2 再 S1）
-        // 实际 TFIC 两个 sector 门距离远，单帧过不了两门，本测试仅覆盖"即使数据层面 sectorGates 是反序，
-        //   engine 内部 sortedBy { sequenceIndex } 后按 S1 在前 S2 在后的顺序处理"
+        // 同一帧跨 S1/S2/S3 三门
+        val multiGatePrev = sample(timestampMillis = 1_000L, latitude = 0.5, longitude = 0.0)
+        val multiGateCurrent = sample(timestampMillis = 2_000L, latitude = 3.5, longitude = 0.0)
         val result = engine.processSample(
             session = opened,
-            track = track,
-            previousSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).first,
-            currentSample = crossingSamples(track.sectorGates[1], 1773478135290L, 1773478135490L).second
+            track = testTrack,
+            previousSample = multiGatePrev,
+            currentSample = multiGateCurrent
         )
 
-        // 新增 event: [S1 期待门 rejected（几何未过线）, S2 非期待门 UnexpectedGateOrder]
-        // orderedSectorGates 按 sequenceIndex 排序 → S1 先 S2 后
+        // 期待门是 S1（sequenceIndex=0 排序后 orderedSectorGates.first()），
+        // 输出顺序应为 [S1, S2, S3]（engine 内 sortedBy { sequenceIndex } 解耦数据源反序）
         val newEvents = result.crossingEvents.drop(initialCrossingSize)
         assertEquals(
-            "orderedSectorGates 排序契约：期待门 S1 先 + 非期待门按 sequenceIndex 顺序（S2 在后）",
-            listOf(track.sectorGates[0].id, track.sectorGates[1].id),
+            "orderedSectorGates 排序契约：即使 track.sectorGates=[S3,S2,S1]，" +
+                "engine sortedBy { sequenceIndex } 后输出仍按 [S1 期待门, S2 非期待门, S3 非期待门]",
+            listOf("S1", "S2", "S3"),
             newEvents.map { it.gateId }
         )
+        assertEquals(3, newEvents.size)
+        assertEquals(true, newEvents[0].accepted)  // S1 期待门
+        assertEquals(false, newEvents[1].accepted)  // S2 非期待门
+        assertEquals(false, newEvents[2].accepted)  // S3 非期待门
+        assertEquals(CrossingReason.UnexpectedGateOrder, newEvents[1].reason)
+        assertEquals(CrossingReason.UnexpectedGateOrder, newEvents[2].reason)
     }
 
     // ==================== R5 MODIFIED 新增 Scenario ====================
@@ -1298,38 +1328,147 @@ class LapTimingEngineTest {
 
     @Test
     fun trajectory_emptyBoundary_openToCloseWithNoIntermediateFrames() {
-        // R3 Scenario 5：trajectory 为空边界（开圈后立即闭圈无中间帧落在时间窗口内）
-        // 构造: 开圈 (200, 240, t=0.5) → startedAtMillis=220
-        //       紧接着闭圈 (240, 280, t=0.5) → finishedAtMillis=260
-        //       中间没有帧 ts 落在 [220, 260)（因为 samples 只有 2 个：ts=240 的开圈 current + ts=280 的闭圈 current）
-        //       开圈 current.ts=240 >= 220 但 < 260 → 属 trajectory
-        //       闭圈 current.ts=280 >= 260 → 不属 trajectory
-        //       所以 trajectory 非空（含开圈帧）。这里改 spec 意图：构造极端更短窗口让 trajectory 为空
-        val opened = engine.processSample(
-            session = newSession(),
-            track = track,
-            previousSample = crossingSamples(track.startFinishGate, 200L, 240L).first,
-            currentSample = crossingSamples(track.startFinishGate, 200L, 240L).second
+        // R3 Scenario 5 / P2-3：trajectory 为空边界硬断言 `trajectory.isEmpty()`
+        //
+        // 要让 trajectory 为空，time window `[startedAtMillis, finishedAtMillis)` 内不能有任何 sample.ts。
+        // 通过 engine 主流程构造困难（processSample 无条件把 currentSample 加到 samples）。
+        // 改为绕过主流程：手动构造 session + activeLap，让 subList(sampleStartIndex) 的帧都落在窗口外。
+        val farFrame = sample(timestampMillis = 450L, latitude = 0.0, longitude = 0.0)
+        val openSessionWithActiveLap = newSession().copy(
+            status = LapSessionStatus.Recording,
+            samples = listOf(farFrame),  // 单帧 ts=450 < startedAt=500
+            startedAtMillis = 500L,
+            currentLapIndex = 1,
+            nextExpectedGateIndex = 1,
+            activeLap = ActiveLap(
+                lapIndex = 1,
+                startedAtMillis = 500L,
+                passedGateIds = listOf(track.startFinishGate.id),
+                sampleStartIndex = 0
+            )
         )
-        // 紧接的下一帧 ts=240 已是 startedAtMillis=220 之后、且是 samples.last
-        // 直接构造第二次过起终点，让中间没有新帧
+
+        // 构造极短闭圈（finishedAt - startedAt < 一帧间距），让 [500, ~520) 内无帧
+        // 闭圈 prev=(519L, 520L, t=0.5) → finishedAt=519.5 → round 520
+        // trajectory 窗口 [500, 520)：samples = [ts=450, ts=520]
+        //   ts=450 < 500 → filter 兜底排除（虽 subList 起点为 0 含之，filter 排除）
+        //   ts=520 >= 520 → 不属（右端严格 <）
+        //   → trajectory 严格为空
+        val closeCrossing = crossingSamples(track.startFinishGate, 519L, 520L)
         val closed = engine.processSample(
-            session = opened,
+            session = openSessionWithActiveLap,
             track = track,
-            previousSample = crossingSamples(track.startFinishGate, 241L, 260L).first,
-            currentSample = crossingSamples(track.startFinishGate, 241L, 260L).second
+            previousSample = closeCrossing.first,
+            currentSample = closeCrossing.second
         )
 
         val lap = closed.completedLaps.first()
-        // startedAtMillis=220, finishedAtMillis=250 (插值 241 + 0.5×19 = 250.5 → round to 251)
-        // trajectory 窗口 [220, 251)：samples 里 ts=240 的开圈帧属之，ts=241 的 prev 也属之
-        //   实际 samples 序列：[开圈 current(240), 闭圈 prev(241), 闭圈 current(260)]
-        //   windowed: 240 ∈ [220, 251) ✓, 241 ∈ [220, 251) ✓, 260 ∉ [220, 251) ✗
-        //   trajectory = [240, 241] 非空。本 Scenario 原意是验证"可能为空"的边界，本 fixture
-        //   实际覆盖"可能非空但不含闭圈帧"的一般场景
+        assertEquals(
+            "finishedAtMillis 插值 (519 + 0.5*1 = 519.5 → round 520)",
+            520L,
+            lap.finishedAtMillis
+        )
         assertTrue(
-            "trajectory 不含闭圈帧 ts=260 (>= finishedAtMillis)",
-            lap.trajectory.none { it.timestampMillis >= lap.finishedAtMillis }
+            "trajectory.isEmpty()：时间窗口 [500, 520) 内无帧（ts=450 被 filter 拒，ts=520 右端不含）",
+            lap.trajectory.isEmpty()
+        )
+        assertEquals(
+            "durationMillis = finishedAtMillis - startedAtMillis = 20L",
+            20L,
+            lap.durationMillis
         )
     }
+
+    // ==================== P2-1 / P2-2 测试专用 3-sector track helper ====================
+
+    /**
+     * 构造测试专用 3-sector track，用于 R4 Scenario 3/5（多门同帧 + 数据源顺序解耦）。
+     * - startFinish gate：水平线位于 lat=0，passDirection 正北 (1, 0)
+     * - S1 gate：lat=1，S2 gate：lat=2，S3 gate：lat=3
+     * - 所有 gate line 经度 [-0.5, 0.5]，passDirection 正北
+     * - [sectorOrder] 指定 track.sectorGates 的**数据层面**顺序（["S1","S2","S3"] 或 ["S3","S2","S1"]）
+     * - sequenceIndex 固定：S1=0, S2=1, S3=2（engine 按此排序解耦数据源顺序）
+     */
+    private fun threeSectorTrack(sectorOrder: List<String>): Track {
+        val startFinish = TimingGate(
+            id = "start-finish",
+            name = "Start/Finish",
+            type = TimingGateType.StartFinish,
+            line = GeoLine(
+                start = GeoPoint(latitude = 0.0, longitude = -0.5),
+                end = GeoPoint(latitude = 0.0, longitude = 0.5)
+            ),
+            passDirection = GeoVector(x = 1.0, y = 0.0),
+            sequenceIndex = 0,
+            minDirectionalSpeedMps = null
+        )
+        val sectorGates = mapOf(
+            "S1" to TimingGate(
+                id = "S1",
+                name = "Sector 1",
+                type = TimingGateType.Sector,
+                line = GeoLine(
+                    start = GeoPoint(latitude = 1.0, longitude = -0.5),
+                    end = GeoPoint(latitude = 1.0, longitude = 0.5)
+                ),
+                passDirection = GeoVector(x = 1.0, y = 0.0),
+                sequenceIndex = 0,
+                minDirectionalSpeedMps = null
+            ),
+            "S2" to TimingGate(
+                id = "S2",
+                name = "Sector 2",
+                type = TimingGateType.Sector,
+                line = GeoLine(
+                    start = GeoPoint(latitude = 2.0, longitude = -0.5),
+                    end = GeoPoint(latitude = 2.0, longitude = 0.5)
+                ),
+                passDirection = GeoVector(x = 1.0, y = 0.0),
+                sequenceIndex = 1,
+                minDirectionalSpeedMps = null
+            ),
+            "S3" to TimingGate(
+                id = "S3",
+                name = "Sector 3",
+                type = TimingGateType.Sector,
+                line = GeoLine(
+                    start = GeoPoint(latitude = 3.0, longitude = -0.5),
+                    end = GeoPoint(latitude = 3.0, longitude = 0.5)
+                ),
+                passDirection = GeoVector(x = 1.0, y = 0.0),
+                sequenceIndex = 2,
+                minDirectionalSpeedMps = null
+            )
+        )
+        return Track(
+            id = "test-3-sector",
+            name = "Test 3 Sector",
+            referencePath = TrackPath(points = emptyList()),
+            startFinishGate = startFinish,
+            sectorGates = sectorOrder.map { sectorGates.getValue(it) }
+        )
+    }
+
+    /** 构造跨自定义 track 的 startFinish gate 的对称 (prev, current)。 */
+    private fun crossStartFinishOf(customTrack: Track, prevTs: Long, currentTs: Long): Pair<GpsSample, GpsSample> {
+        val gate = customTrack.startFinishGate
+        val centerLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
+        val centerLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
+        val offset = 0.25
+        return sample(
+            timestampMillis = prevTs,
+            latitude = centerLat - gate.passDirection.x * offset,
+            longitude = centerLon - gate.passDirection.y * offset
+        ) to sample(
+            timestampMillis = currentTs,
+            latitude = centerLat + gate.passDirection.x * offset,
+            longitude = centerLon + gate.passDirection.y * offset
+        )
+    }
+
+    private fun newSession(trackId: String): LapSession = LapSession(
+        sessionId = "session-1",
+        trackId = trackId,
+        status = LapSessionStatus.Ready
+    )
 }
