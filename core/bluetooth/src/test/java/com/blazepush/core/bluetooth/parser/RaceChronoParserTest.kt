@@ -622,13 +622,18 @@ class RaceChronoParserTest {
             data[1] = 0xC4.toByte()
             data[2] = 0x46.toByte()
 
-            val currentData = createTestData()
+            val currentData = createTestData()  // isTestReady=false 初始
 
             // When
             val result = parser.parseGpsTimeData(data, currentData)
 
-            // Then: 应标记为testReady
-            assertTrue("应标记为testReady", result.isTestReady)
+            // Then: A26 (refactor-parser-internal-state-cleanup R1)：时间包 MUST NOT
+            //       写 isTestReady 字段 —— 唯一写入源收敛为主包 satellites/hdop 判定。
+            //       v1 会把 false 翻成 true 触发 UI 闪烁；v2 保持输入的 false 值。
+            assertFalse(
+                "A26: 时间包 MUST NOT 把 isTestReady 从 false 翻成 true（v1 残留会命中此断言）",
+                result.isTestReady,
+            )
         }
     }
 
@@ -941,7 +946,10 @@ class RaceChronoParserTest {
 
     @Test
     fun parseGpsTimeData_successPathExplicitlyClearsErrorMessage_sourceAssertion() {
-        // parseGpsTimeData 成功路径 MUST 对两个分支都显式 errorMessage = null
+        // A26 (refactor-parser-internal-state-cleanup R1)：parseGpsTimeData
+        // 成功路径 MUST 合并为单一 copy 分支，仅显式 `errorMessage = null`；
+        // MUST NOT 写 isTestReady（唯一写入源收敛为主包 satellites/hdop 判定）。
+        // A25 契约：成功路径仍显式清 errorMessage，避免前帧失败残留级联。
         val source = java.io.File(
             "src/main/java/com/blazepush/core/bluetooth/parser/RaceChronoParser.kt"
         ).readText()
@@ -950,12 +958,25 @@ class RaceChronoParserTest {
         val fnEnd = source.indexOf("Error parsing GPS time data", fnStart)
         assertTrue("parseGpsTimeData catch 锚点必须在函数内", fnEnd > fnStart)
         val fnBody = source.substring(fnStart, fnEnd)
-        // 断言：函数成功路径（try 体内）出现至少两次 errorMessage = null（对应 if/else 两分支）
-        val occurrences = Regex("errorMessage = null").findAll(fnBody).count()
+
+        // A25 保留：函数体（成功路径 + 短包分支 errorMessage 均由 copy 显式赋值）
+        // MUST 至少出现 1 次 `errorMessage = null`，锁定成功路径清 error 行为。
+        val clearOccurrences = Regex("errorMessage = null").findAll(fnBody).count()
         assertTrue(
-            "parseGpsTimeData 成功路径的 if/else 两个 copy 分支 MUST 都显式 errorMessage = null " +
-                "（当前计数=$occurrences，应 ≥ 2）",
-            occurrences >= 2,
+            "A25 + A26：parseGpsTimeData 成功路径 MUST 显式 `errorMessage = null` " +
+                "（当前计数=$clearOccurrences，应 ≥ 1）",
+            clearOccurrences >= 1,
+        )
+
+        // A26 硬区分 v1：v1 源码在成功路径出现 `isTestReady = true` +
+        // `if (!currentData.isTestReady)` 分支写入，v2 MUST 不包含任一残留。
+        assertFalse(
+            "A26：parseGpsTimeData MUST NOT 包含 `isTestReady = true` 赋值（v1 残留）",
+            fnBody.contains("isTestReady = true"),
+        )
+        assertFalse(
+            "A26：parseGpsTimeData MUST NOT 包含 `if (!currentData.isTestReady)` 分支（v1 残留）",
+            fnBody.contains("if (!currentData.isTestReady)"),
         )
     }
 }

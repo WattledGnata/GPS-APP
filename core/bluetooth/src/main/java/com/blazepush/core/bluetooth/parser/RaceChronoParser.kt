@@ -106,13 +106,13 @@ class RaceChronoParser {
 
 //            Log.d(TAG, "GPS Time: $year-${month + 1}-${day + 1} $hour:xx (sync=$syncBits)")
 
-            // A25 契约闭合：时间包成功路径显式清 errorMessage，避免前帧失败残留让下游
+            // A26（refactor-parser-internal-state-cleanup R1）：时间包 MUST NOT 写
+            //       `isTestReady` —— 唯一写入源是主包 `parseGpsData` 的 `satellites >= 6
+            //       && hdop < 2.0` 判定。`protocolTimeReference` 已在上方完成时间包
+            //       真正职责；时间包到达本身不代表"定位质量满足测试就绪门槛"。
+            // A25 契约闭合：成功路径仍显式清 errorMessage，避免前帧失败残留让下游
             //               把"本帧 parse 成功"误解释成"最近一次 parse 失败"
-            if (!currentData.isTestReady) {
-                currentData.copy(isTestReady = true, errorMessage = null)
-            } else {
-                currentData.copy(errorMessage = null)
-            }
+            currentData.copy(errorMessage = null)
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing GPS time data", e)
             // A25：时间包解析异常失败信号通过 errorMessage 上抛
