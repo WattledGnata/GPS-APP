@@ -162,7 +162,7 @@ class GpsDataViewModel(
     /**
      * 重置统计数据
      *
-     * A28 裁剪：dataCount / dataCountStartTime 已随累计平均逻辑删除；
+     * A28 裁剪：旧累计平均状态已随 A28 删除；
      * 重置同时把 _dataQuality 回到 DataQuality.Empty，确保 DISCONNECTED 后 UI 立即回初始态
      */
     fun resetStats() {
