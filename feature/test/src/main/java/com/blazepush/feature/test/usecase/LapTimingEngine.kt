@@ -218,7 +218,8 @@ class LapTimingEngine(
         targetGate: TimingGate
     ): LapSession {
         val activeLap = session.activeLap ?: return session.copy(samples = updatedSamples)
-        val orderedSectorGates = track.sectorGates.sortedBy { it.sequenceIndex }
+        // A36：读 Track 的 orderedSectorGates 单点真理派生字段，不再局部 sortedBy
+        val orderedSectorGates = track.orderedSectorGates
 
         // R4：遍历所有 sector 门 detect（替代 v1 的 firstOrNull accepted）
         val allDetections = orderedSectorGates.map { gate ->
@@ -290,7 +291,8 @@ class LapTimingEngine(
     }
 
     private fun expectedGate(track: Track, nextExpectedGateIndex: Int): TimingGate? =
-        track.sectorGates.sortedBy { it.sequenceIndex }.getOrNull(nextExpectedGateIndex - 1)
+        // A36：读 Track 的 orderedSectorGates 单点真理派生字段，不再局部 sortedBy
+        track.orderedSectorGates.getOrNull(nextExpectedGateIndex - 1)
 
     private fun List<SectorEntry>.toSectorTimes(startedAtMillis: Long): List<Long> {
         var previousTimestamp = startedAtMillis

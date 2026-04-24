@@ -39,7 +39,8 @@ fun LapDebugExecutionScreen(
     isTimeSynced: Boolean,
     onStop: () -> Unit
 ) {
-    val orderedGates = listOf(track.startFinishGate) + track.sectorGates.sortedBy { it.sequenceIndex }
+    // A36：读 Track 的 orderedSectorGates 单点真理派生字段，与 engine 消费同一 sort 契约
+    val orderedGates = listOf(track.startFinishGate) + track.orderedSectorGates
     val nextGate = lapSession?.nextExpectedGateIndex?.let { index -> orderedGates.getOrNull(index) }
     val currentLap = (lapSession?.currentLapIndex ?: 0) + 1
     val trajectory = lapSession?.samples ?: emptyList()

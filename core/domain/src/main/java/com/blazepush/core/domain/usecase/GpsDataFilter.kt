@@ -99,7 +99,7 @@ class GpsDataFilter(
         val outputSpeed = if (speedWindow.size >= 3) speedWindow.median() else raw.speed
         val outputLat = if (latWindow.size >= 3) latWindow.median() else raw.latitude
         val outputLon = if (lonWindow.size >= 3) lonWindow.median() else raw.longitude
-        val outputBearing = if (bearingWindow.size >= 3) bearingWindow.circularMedian() else raw.bearing
+        val outputBearing = if (bearingWindow.size >= 3) bearingWindow.circularMean() else raw.bearing
 
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
@@ -214,9 +214,11 @@ class GpsDataFilter(
         if (dt <= 0 || dt > 0.2) return 1.0 to false
 
         // 计算位移 Δd（简化平面近似）
+        // A44：经度差通过 wrappedDeltaLon 处理 ±180° 绕回（antimeridian wrap），
+        //      确保跨经度 180° 时 deltaLonM 反映真实小位移而非绕地球一周的假差
         val latRad = Math.toRadians(current.latitude)
         val deltaLatM = abs(current.latitude - prevPos.first) * 111320.0
-        val deltaLonM = abs(current.longitude - prevPos.second) * 111320.0 * Math.cos(latRad)
+        val deltaLonM = abs(wrappedDeltaLon(current.longitude, prevPos.second)) * 111320.0 * Math.cos(latRad)
         val distanceM = Math.sqrt(deltaLatM * deltaLatM + deltaLonM * deltaLonM)
 
         // Δd 过小时跳过一致性检查（0.5m 远小于 GPS 噪声，规避被淹没）
@@ -253,6 +255,35 @@ class GpsDataFilter(
     }
 
     /**
+     * 经度差带 ±180° 绕回处理（antimeridian wrap）。
+     *
+     * 引入理由（openspec fix-lap-timing-campaign-c-tail-cleanup A44）：
+     * 当车辆跨越 180° 经度线时，`current.lon - prev.lon` 原始差会得到 ~±360° 的假
+     * 差（物理位移几米，几何差 ~40,000 km），让 [checkPositionVelocityConsistency]
+     * 误判 `isPositionAnomaly = true` 假阳性。
+     *
+     * 算法：
+     * - 原始差 `raw = currentLon - prevLon`
+     * - 若 `raw > 180`，减 360（车辆从 179°E 跨到 -179°E，原始差 +358°，修正为 -2°）
+     * - 若 `raw < -180`，加 360（反向跨越）
+     * - 否则返回原始差（非跨边界场景，语义等价）
+     *
+     * 返回值：**带符号**的 Δlon（度），下游取 `abs` 后投影到米。
+     *
+     * Non-goals（已在 proposal 显式声明）：
+     * - 不处理极地 `cos(lat) → 0` 退化（跨极赛道不在需求范围）
+     * - 不处理相邻两帧跨 180° 完整边界（物理上对应车速 > 2000 km/s，不现实）
+     */
+    private fun wrappedDeltaLon(currentLon: Double, prevLon: Double): Double {
+        val raw = currentLon - prevLon
+        return when {
+            raw > 180.0 -> raw - 360.0
+            raw < -180.0 -> raw + 360.0
+            else -> raw
+        }
+    }
+
+    /**
      * 根据速度确定一致性容差
      */
     private fun getConsistencyTolerance(speed: Double): Double {
@@ -277,12 +308,23 @@ class GpsDataFilter(
     }
 
     /**
-     * 扩展函数：计算循环中位数（用于航向角）
-     * 将角度转换为单位向量后求平均角，正确处理 0°=360° 的循环问题
-     * 场景：左转 350°→10°，窗口 [350°,10°,20°,30°,40°,50°,60°,70°,80°]
-     * 普通中位数 = 40°（错误），循环中位数 ≈ 20°（正确）
+     * 扩展函数：计算**循环均值**（单位向量求和 + atan2，用于航向角滤波）。
+     *
+     * **不是中位数**（openspec fix-lap-timing-campaign-c-tail-cleanup A43 命名纠偏，
+     * v1 原名误导"对离群鲁棒"，实际不具备鲁棒性）：
+     * - 实现是"单位向量相加 + atan2"，对**对称分布**的 bearing 样本准确收敛
+     * - 对**长尾分布**（偶尔 spike 的 bearing 噪声）会被拉向长尾，**不对离群鲁棒**
+     * - 想要鲁棒性的场景（bearing 偶尔 GPS 尖峰）应先用外层 anomaly 过滤（
+     *   `isPositionAnomaly` / `isAnomaly`）把离群样本排除，再喂进本函数；
+     *   不要误以为本函数自带鲁棒性
+     *
+     * 场景：bearing 跨 0°/360° 边界（355° → 5°）时，直接 median 会给出 `180°`
+     * 的错误答案；本函数用单位向量旋转几何确保跨边界正确性。
+     *
+     * 典型输入：左转 350°→10°，窗口 [350°,10°,20°,30°,40°,50°,60°,70°,80°]
+     * 普通中位数 = 40°（错误），循环均值 ≈ 20°（正确）。
      */
-    private fun List<Double>.circularMedian(): Double {
+    private fun List<Double>.circularMean(): Double {
         if (isEmpty()) return 0.0
         if (size == 1) return this[0]
 
@@ -294,7 +336,7 @@ class GpsDataFilter(
             sumCos += Math.cos(Math.toRadians(angle))
         }
 
-        // 平均向量的角度即为循环中位数
+        // 平均向量的角度即为循环均值
         val meanAngle = Math.toDegrees(Math.atan2(sumSin, sumCos))
 
         // 规范化到 [0, 360) 范围

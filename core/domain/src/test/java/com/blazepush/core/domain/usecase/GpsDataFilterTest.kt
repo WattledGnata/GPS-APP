@@ -388,7 +388,7 @@ class GpsDataFilterTest {
      * 关键：数据紧密围绕0°分布，普通排序会给出错误结果
      */
     @Test
-    fun GF09_bearingCrossZero_circularMedian() {
+    fun GF09_bearingCrossZero_circularMean() {
         // Given: 航向角真正跨0°（紧密围绕0°分布）
         val baseTimestamp = System.currentTimeMillis()
         val crossingData = listOf(358.0, 359.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0).mapIndexed { i, bearing ->
@@ -923,9 +923,9 @@ class GpsDataFilterTest {
     /**
      * GF20b: 航向角跨0°循环边界测试
      *
-     * 场景：航向跨越 0° 边界时，circularMedian() 应正确处理循环
+     * 场景：航向跨越 0° 边界时，circularMean() 应正确处理循环
      * 输入：航向窗口 [355°, 358°, 0°, 2°, 5°, 8°, 10°, 12°, 15°]
-     * 预期：circularMedian() ≈ 5°-8°（正确），普通中位数会得到 358°（错误）
+     * 预期：circularMean() ≈ 5°-8°（正确），普通中位数会得到 358°（错误）
      *
      * 关键：数据紧密围绕0°分布（355°-15°），真正的中心约5°
      * 普通排序 [0°,2°,5°,8°,10°,12°,15°,355°,358°] 中位数 = 10°
@@ -1470,6 +1470,98 @@ class GpsDataFilterTest {
                 "若 A14 失效，median 被 spikeLon 拉偏约 1e-4，实际偏离=" +
                 "${kotlin.math.abs(recovered.longitude - baseLon)}",
             kotlin.math.abs(recovered.longitude - baseLon) < 1e-5
+        )
+    }
+
+    // ==================== A44 antimeridian wrappedDeltaLon 回归（openspec C 三期）====================
+
+    @Test
+    fun checkConsistency_crossingAntimeridian_doesNotProduceFakeDistance() {
+        // R3 Scenario 1：跨 antimeridian 不产生假位移（物理自洽 40ms / 50km/h / 位移 ~0.56m）
+        // fixture 约束：经度差 ~0.000005°；dt <= 0.2s（不触发早退）；速度 50km/h 匹配位移
+        // 硬区分 v1（不处理 wrap）：会把 ~360° 经度差投影到 ~40,075 km，isPositionAnomaly=true 假阳性
+        val filter = GpsDataFilter()
+
+        // 第 1 帧：lat=0, lon=179.9999975, speed=50 —— 建立 previousPosition / previousRaw
+        val prev = GpsData(
+            timestamp = 1_000L,
+            speed = 50.0,
+            latitude = 0.0,
+            longitude = 179.9999975,
+            altitude = 100.0,
+            bearing = 0.0,
+            satelliteCount = 12,
+            hdop = 1.0,
+            vdop = 1.0,
+            frequency = 25.0,
+            isConnected = true,
+            isTestReady = true,
+            errorMessage = null,
+            fixQuality = 1,
+            isTimeSynced = true
+        )
+        filter.process(prev)
+
+        // 第 2 帧：跨 antimeridian 到 -179.9999975，dt=40ms
+        // v2 wrappedDeltaLon → 真实 0.000005° → ~0.56m → vImplied ≈ 50.1km/h（匹配 speed=50）
+        val currentAntimeridian = prev.copy(
+            timestamp = 1_040L,
+            longitude = -179.9999975
+        )
+        val result = filter.process(currentAntimeridian)
+
+        assertFalse(
+            "v2 wrappedDeltaLon 处理 ±180° 绕回后，跨 antimeridian 不误判 isPositionAnomaly；" +
+                "v1 不处理 wrap 会把 360° 经度差投影到 ~40,075km 导致 vImplied 爆表误判",
+            result.isPositionAnomaly
+        )
+        assertEquals(
+            "v2 consistencyFactor 接近 1.0（ratio≈0.02<<3 + 非高 HDOP + 无 bearing 剧变）；v1 会被拉到 0.3",
+            1.0,
+            result.consistencyFactor,
+            0.1
+        )
+    }
+
+    @Test
+    fun checkConsistency_nonAntimeridianNormalCase_unchanged() {
+        // R3 Scenario 2：非跨边界场景 wrappedDeltaLon 透传原始差（v1/v2 行为等价）
+        // TFIC 场景经度 104°E，prev/current 差 +0.000005°（~0.56m / 40ms 匹配 50km/h）
+        val filter = GpsDataFilter()
+
+        val prev = GpsData(
+            timestamp = 1_000L,
+            speed = 50.0,
+            latitude = 30.49,
+            longitude = 104.43,
+            altitude = 100.0,
+            bearing = 0.0,
+            satelliteCount = 12,
+            hdop = 1.0,
+            vdop = 1.0,
+            frequency = 25.0,
+            isConnected = true,
+            isTestReady = true,
+            errorMessage = null,
+            fixQuality = 1,
+            isTimeSynced = true
+        )
+        filter.process(prev)
+
+        // 第 2 帧：经度差 +0.000005°（wrappedDeltaLon 透传原始差）
+        val currentNormal = prev.copy(
+            timestamp = 1_040L,
+            longitude = 104.43 + 0.000005
+        )
+        val result = filter.process(currentNormal)
+
+        // 非跨边界场景 v1/v2 完全等价：wrappedDeltaLon 对 raw in [-180, 180] 透传
+        assertFalse("正常场景不应误判 isPositionAnomaly", result.isPositionAnomaly)
+        assertEquals(
+            "consistencyFactor ≈ 1.0（位移匹配速度，v1/v2 等价）",
+            1.0,
+            result.consistencyFactor,
+            0.1
         )
     }
 }
