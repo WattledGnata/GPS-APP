@@ -95,9 +95,12 @@ class EndToEndLapTimingContractTest {
         val session = pipeline.session
         assertEquals("should close exactly 1 lap", 1, session.completedLaps.size)
         val lap = session.completedLaps.first()
+        // R6 合成契约（openspec fix-lap-timing-closure-and-precision-contract）：
+        //   FakeClock + fake replay 零 jitter 场景下圈时误差 MUST < 5ms
+        //   v1 契约 `in 9_980..10_020` (±20ms 帧粒度) → v2 `abs - 10_000 < 5` (±5ms 插值毫秒级)
         assertTrue(
-            "durationMillis=${lap.durationMillis} must be in [9_980, 10_020]",
-            lap.durationMillis in 9_980..10_020
+            "durationMillis=${lap.durationMillis} should satisfy abs(d - 10_000) < 5 (R6 合成契约)",
+            kotlin.math.abs(lap.durationMillis - 10_000L) < 5L
         )
     }
 
