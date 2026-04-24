@@ -1,3 +1,12 @@
+// @IgnoreFormatCheck
+// 理由：本文件 40+ 条 legacy 违规（GF01~GF22 / A12~A14 使用下划线分段 method-name + class KDoc
+//       缺 @author/@description/@date + setup 无 multi-line comment + 1034/1037 `!!` 断言 +
+//       1567 trailing newline）是战役 D 回迁测试 + A12/A13/A14 新加时的 pre-kt-check 存量。
+//       本次战役 C 三期 P2 修订只动 GF09/GF20b 4 处方法字符串 `CircularMedian→CircularMean`
+//       和 7 处中文注释"循环中位数→循环均值"（A43 命名纠偏）。rename 38 个 GF##/A##
+//       legacy 方法 + 加 class KDoc tags + 去 `!!` 远超本次 P2 scope。
+//       参照 `core/bluetooth/src/test/java/com/blazepush/core/bluetooth/parser/RaceChronoParserTest.kt`
+//       同情形先例（战役 G R4 B 方案），评审方 2026-04-24 commit 阶段批准此 ignore。
 package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.GpsData
@@ -379,11 +388,11 @@ class GpsDataFilterTest {
     // ==================== 航向角循环边界测试 ====================
 
     /**
-     * GF09: 航向角循环边界（真正跨0°）应使用循环中位数
+     * GF09: 航向角循环边界（真正跨0°）应使用循环均值
      *
      * 场景：航向从 359° 经过 0° 到 1°
      * 输入：航向窗口 [358°, 359°, 0°, 1°, 2°, 3°, 4°, 5°, 6°]
-     * 预期：普通中位数 = 3°（连续域错误），循环中位数 ≈ 1-2°（正确）
+     * 预期：普通中位数 = 3°（连续域错误），循环均值 ≈ 1-2°（正确）
      *
      * 关键：数据紧密围绕0°分布，普通排序会给出错误结果
      */
@@ -403,9 +412,9 @@ class GpsDataFilterTest {
         // When
         val results = crossingData.map { filter.process(it) }
 
-        // Then: 循环中位数应接近 1-2°（正确），而非普通中位数 3°
+        // Then: 循环均值应接近 1-2°（正确），而非普通中位数 3°
         val outputBearing = results.last().bearing
-        // 循环中位数应 < 5°（在0°附近），而普通中位数是3°但排序后不在0°附近
+        // 循环均值应 < 5°（在0°附近），而普通中位数是3°但排序后不在0°附近
         assertTrue(
             "循环航向应接近0°附近（<5°），实际=$outputBearing°",
             outputBearing < 5.0
@@ -932,7 +941,7 @@ class GpsDataFilterTest {
      * 循环向量平均应给出约 5°（正确方向）
      */
     @Test
-    fun GF20b_bearingCircularMedian_crossesZero() {
+    fun GF20b_bearingCircularMean_crossesZero() {
         // Given: 航向角紧密围绕 0° 分布（跨0°）
         val baseTimestamp = System.currentTimeMillis()
         val crossingData = listOf(355.0, 358.0, 0.0, 2.0, 5.0, 8.0, 10.0, 12.0, 15.0).mapIndexed { i, bearing ->
@@ -947,11 +956,11 @@ class GpsDataFilterTest {
         // When
         val results = crossingData.map { filter.process(it) }
 
-        // Then: 循环中位数应接近真正的方向中心（约 5°-8°）
+        // Then: 循环均值应接近真正的方向中心（约 5°-8°）
         // 普通中位数排序后会得到中间值约 10°（错误）
-        // 循环中位数应 < 15°（在正确方向）
+        // 循环均值应 < 15°（在正确方向）
         val outputBearing = results.last().bearing
-        // 循环中位数应 < 15°（在0°附近），而不是接近355°-358°
+        // 循环均值应 < 15°（在0°附近），而不是接近355°-358°
         assertTrue(
             "循环航向应接近真正方向中心（<15°），实际=$outputBearing°",
             outputBearing < 15.0
