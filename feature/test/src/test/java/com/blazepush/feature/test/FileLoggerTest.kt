@@ -33,9 +33,11 @@ import org.mockito.Mockito.mock
 import java.io.File
 
 /**
- * 战役 F A18 + A39 FileLoggerTest：14 条 Scenario 覆盖
+ * 战役 F A18 + A39 FileLoggerTest：16 条 Scenario 覆盖
  *
- * R1 × 5（业务非阻塞 + IOException 吞 + DROP_OLDEST + graceful handoff + flushForTest 语义）
+ * R1 × 7（业务非阻塞 + IOException 吞 + DROP_OLDEST + graceful handoff +
+ *        flushForTest 语义 + ThreadLocal formatter 并发 smoke +
+ *        full-buffer Flush/Shutdown 降级契约）
  * R2 × 2（rotate 到 .1 / 两次 rotate 覆盖最老）
  * R3 × 3（默认 DEBUG verbose 不写 / setLevel VERBOSE 生效 / DEBUG 正常写）
  * R4 × 4（engine 源码 v()+%.3f / bridge 源码 v()+%.3f / DEBUG 高频零写 / 低频不变）
@@ -394,15 +396,20 @@ class FileLoggerTest {
 
     /**
      * P1 finding 1（2026-04-24 codex code-review）并发 smoke：
-     *   多协程并发 d() 不抛异常，且 flushForTest 后所有日志都落盘。
-     *   v1 `dateFormat: SimpleDateFormat` 单例在并发下概率性抛
-     *   ArrayIndexOutOfBoundsException / NumberFormatException；
-     *   v2 ThreadLocal<SimpleDateFormat> 每线程独享，0 异常。
+     *   多协程并发 d() 不抛异常。v1 `dateFormat: SimpleDateFormat` 单例
+     *   在并发下概率性抛 ArrayIndexOutOfBoundsException /
+     *   NumberFormatException；v2 ThreadLocal<SimpleDateFormat> 每线程独享，
+     *   0 异常。
+     *
+     *   Review v2 finding 1（2026-04-24）：总写入量 MUST 低于 channel capacity
+     *   (1024)，否则与 DROP_OLDEST 降级契约冲突（过载时最老 Line 允许丢）。
+     *   这里 16 × 32 = 512 条远低于 capacity，正常调度下不会触发 DROP_OLDEST，
+     *   可以断言抽样消息都落盘。测试目的是 ThreadLocal 线程安全，不是高压。
      */
     @Test
     fun d_calledConcurrentlyFromMultipleCoroutines_noThreadingExceptions() = runTest {
         val coroutineCount = 16
-        val callsPerCoroutine = 100
+        val callsPerCoroutine = 32   // 16 × 32 = 512 条 < channel capacity 1024
         // 用真实 IO dispatcher 跑并发，避免 runTest 的 TestDispatcher 串行化
         runBlocking(Dispatchers.IO) {
             val jobs: List<Deferred<Unit>> = (0 until coroutineCount).map { coIdx ->
@@ -418,10 +425,12 @@ class FileLoggerTest {
 
         val logFile = File(filesDir, "debug_log.txt")
         val content = logFile.readText()
-        // 抽样断言若干协程的若干消息都在（不做全量 N² 检查，避免测试慢）
-        listOf(0 to 0, 0 to 99, 7 to 42, 15 to 0, 15 to 99).forEach { (coIdx, i) ->
+        // 抽样断言若干协程的若干消息都在（不做全量 N² 检查，避免测试慢）。
+        // 采样点全部落在 0..31 范围内（与 callsPerCoroutine=32 对齐）
+        listOf(0 to 0, 0 to 31, 7 to 15, 15 to 0, 15 to 31).forEach { (coIdx, i) ->
             assertTrue(
-                "并发写入应无线程安全问题 / 消息丢失：concurrent-$coIdx-$i 应在文件里",
+                "并发写入应无线程安全问题：concurrent-$coIdx-$i 应在文件里" +
+                    "（写入量 512 < capacity 1024，DROP_OLDEST 不会触发）",
                 content.contains("concurrent-$coIdx-$i"),
             )
         }
