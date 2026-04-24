@@ -5,7 +5,9 @@ import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TrackSource
 import com.blazepush.feature.test.usecase.GateCrossingDetector
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,7 +50,7 @@ class ReplayAlignedTrackCatalogTest {
     }
 
     @Test
-    fun generatedStartFinishGate_acceptsReplayOpeningCrossingSamples() {
+    fun generatedStartFinishGate_acceptsReplayOpeningCrossingSamples() = runTest {
         val catalog = ReplayAlignedTrackCatalog(
             replayTrackSource = object : ReplayTrackSource {
                 override fun loadReplayJson(): String = replayJson
@@ -56,6 +58,9 @@ class ReplayAlignedTrackCatalogTest {
             },
             fallbackCatalog = PresetTrackCatalog()
         )
+        // A37 warm cache：冷 getTrack(TFIC) 走 fallback 不触 asset IO，
+        // 必须先 getAllTracks 把 cachedReplayTrack 填充后再 getTrack 才拿 replay-aligned 版
+        catalog.getAllTracks()
         val track = requireNotNull(catalog.getTrack("preset-tfic-lpcc"))
         val crossing = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L)
 
@@ -103,7 +108,7 @@ class ReplayAlignedTrackCatalogTest {
     }
 
     @Test
-    fun generatedTrack_reusesCorrectedTficGateGeometry() {
+    fun generatedTrack_reusesCorrectedTficGateGeometry() = runTest {
         val catalog = ReplayAlignedTrackCatalog(
             replayTrackSource = object : ReplayTrackSource {
                 override fun loadReplayJson(): String = replayJson
@@ -112,6 +117,8 @@ class ReplayAlignedTrackCatalogTest {
             fallbackCatalog = PresetTrackCatalog()
         )
 
+        // A37 warm cache（见 §5.2b）
+        catalog.getAllTracks()
         val track = requireNotNull(catalog.getTrack("preset-tfic-lpcc"))
 
         assertGateLine(
@@ -144,7 +151,7 @@ class ReplayAlignedTrackCatalogTest {
     }
 
     @Test
-    fun getTrack_buildsGeneratedTficTrackFromReplayAssets() {
+    fun getTrack_buildsGeneratedTficTrackFromReplayAssets() = runTest {
         val catalog = ReplayAlignedTrackCatalog(
             replayTrackSource = object : ReplayTrackSource {
                 override fun loadReplayJson(): String = replayJson
@@ -153,6 +160,8 @@ class ReplayAlignedTrackCatalogTest {
             fallbackCatalog = PresetTrackCatalog()
         )
 
+        // A37 warm cache（见 §5.2b）
+        catalog.getAllTracks()
         val track = requireNotNull(catalog.getTrack("preset-tfic-lpcc"))
 
         assertEquals(TrackSource.Generated, track.source)
@@ -165,7 +174,7 @@ class ReplayAlignedTrackCatalogTest {
     }
 
     @Test
-    fun getAllTracks_exposesReplayAlignedTrackToRuntimeSelection() {
+    fun getAllTracks_exposesReplayAlignedTrackToRuntimeSelection() = runTest {
         val catalog = ReplayAlignedTrackCatalog(
             replayTrackSource = object : ReplayTrackSource {
                 override fun loadReplayJson(): String = replayJson
@@ -178,6 +187,180 @@ class ReplayAlignedTrackCatalogTest {
 
         assertNotNull(track)
         assertEquals(TrackSource.Generated, track?.source)
+    }
+
+    // ==================== A37 新增测试（change fix-gps-stats-and-lazy-catalog-hot-start）====================
+
+    /**
+     * A37 spec R3 Scenario "源码包含 withContext(Dispatchers.IO)"：
+     * 锁死 IO 边界的实现位置，不依赖脆弱的线程名字面量断言。
+     */
+    @Test
+    fun getAllTracks_sourceContainsWithContextDispatchersIO() {
+        val source = java.io.File(
+            projectRoot(),
+            "feature/test/src/main/java/com/blazepush/feature/test/repository/ReplayAlignedTrackCatalog.kt",
+        ).readText()
+        assertTrue(
+            "ReplayAlignedTrackCatalog.getAllTracks 源码必须包含 withContext(Dispatchers.IO)（A37 IO 边界唯一防线）",
+            source.contains("withContext(Dispatchers.IO)"),
+        )
+    }
+
+    /**
+     * A37 spec R3 Scenario "首次调用 asset 读取切出调用方 / Main / Test 线程"：
+     * runtime 断言线程切换发生，不做线程名字面量匹配。
+     */
+    @Test
+    fun getAllTracks_doesNotBlockCallerThread_firstCallExecutesOffCallerThread() = runTest {
+        val callThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val fakeSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String {
+                callThread.compareAndSet(null, Thread.currentThread())
+                return replayJson
+            }
+            override fun loadTrackVbo(): String = replayVbo
+        }
+        val catalog = ReplayAlignedTrackCatalog(fakeSource, PresetTrackCatalog())
+
+        val callerThread = Thread.currentThread()
+        catalog.getAllTracks()
+
+        val captured = callThread.get()
+        assertNotNull("asset 读取应真实发生（fake.loadReplayJson 被调）", captured)
+        assertTrue(
+            "asset 读取应切出调用方线程（withContext(Dispatchers.IO) 生效），caller=${callerThread.name}, asset=${captured?.name}",
+            captured !== callerThread,
+        )
+    }
+
+    /**
+     * A37 spec R4 Scenario "冷缓存 getTrack(TFIC) 不触发 asset 读"：
+     * 核心契约——没有 getAllTracks 前提的 getTrack(TFIC) 必须 0 IO + fallback 降级。
+     */
+    @Test
+    fun getTrack_whenCacheCold_returnsFallbackWithoutAssetIo() {
+        var loadReplayCount = 0
+        var loadVboCount = 0
+        val fakeSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String {
+                loadReplayCount++
+                return replayJson
+            }
+            override fun loadTrackVbo(): String {
+                loadVboCount++
+                return replayVbo
+            }
+        }
+        val catalog = ReplayAlignedTrackCatalog(fakeSource, PresetTrackCatalog())
+
+        val track = catalog.getTrack("preset-tfic-lpcc")
+
+        assertNotNull("冷缓存应降级到 fallback，不返回 null", track)
+        assertEquals(
+            "冷 getTrack(TFIC) 应返回 PresetTrackCatalog 版（TrackSource.Preset），不是 replay-aligned",
+            TrackSource.Preset,
+            track?.source,
+        )
+        assertEquals("loadReplayJson 不应被调用（冷缓存不触 IO）", 0, loadReplayCount)
+        assertEquals("loadTrackVbo 不应被调用（冷缓存不触 IO）", 0, loadVboCount)
+    }
+
+    /**
+     * A37 spec R4 Scenario "热缓存 getTrack(TFIC) 返回 replay-aligned 版"。
+     */
+    @Test
+    fun getTrack_whenCacheWarm_returnsReplayAlignedTrack() = runTest {
+        var loadReplayCount = 0
+        val fakeSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String {
+                loadReplayCount++
+                return replayJson
+            }
+            override fun loadTrackVbo(): String = replayVbo
+        }
+        val catalog = ReplayAlignedTrackCatalog(fakeSource, PresetTrackCatalog())
+
+        // warm cache
+        catalog.getAllTracks()
+        val countAfterWarm = loadReplayCount
+
+        val track = catalog.getTrack("preset-tfic-lpcc")
+
+        assertEquals("热缓存命中应返回 replay-aligned 版", TrackSource.Generated, track?.source)
+        assertEquals("REAL_TRACK_REPLAY", track?.layoutName)
+        assertEquals(
+            "热 getTrack 不再触发 asset IO（仅首次 getAllTracks 触发一次）",
+            countAfterWarm,
+            loadReplayCount,
+        )
+    }
+
+    /**
+     * A37 spec R4 Scenario "冷缓存 getTrack(非 TFIC) 走 fallback 路径不读 asset"。
+     */
+    @Test
+    fun getTrack_whenNonTficAndCold_doesNotTouchReplayAsset() {
+        var loadReplayCount = 0
+        val fakeSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String {
+                loadReplayCount++
+                return replayJson
+            }
+            override fun loadTrackVbo(): String = replayVbo
+        }
+        val catalog = ReplayAlignedTrackCatalog(fakeSource, PresetTrackCatalog())
+
+        catalog.getTrack("some-other-track-id")
+
+        assertEquals("非 TFIC 路径不触 replay asset", 0, loadReplayCount)
+    }
+
+    /**
+     * A37 spec R3 Scenario "缓存命中 asset 不重复读"。
+     */
+    @Test
+    fun getAllTracks_cacheHit_doesNotRereadAssets() = runTest {
+        var loadReplayCount = 0
+        var loadVboCount = 0
+        val fakeSource = object : ReplayTrackSource {
+            override fun loadReplayJson(): String {
+                loadReplayCount++
+                return replayJson
+            }
+            override fun loadTrackVbo(): String {
+                loadVboCount++
+                return replayVbo
+            }
+        }
+        val catalog = ReplayAlignedTrackCatalog(fakeSource, PresetTrackCatalog())
+
+        catalog.getAllTracks()
+        val firstReplayCount = loadReplayCount
+        val firstVboCount = loadVboCount
+        catalog.getAllTracks()
+
+        assertEquals("缓存命中 loadReplayJson 不应再次调用", firstReplayCount, loadReplayCount)
+        assertEquals("缓存命中 loadTrackVbo 不应再次调用", firstVboCount, loadVboCount)
+    }
+
+    /**
+     * A37 spec R5 Scenario "类字段级 by lazy 被显式缓存替代"：源码断言。
+     */
+    @Test
+    fun replayAlignedTrackCatalog_sourceHasNoByLazy() {
+        val source = java.io.File(
+            projectRoot(),
+            "feature/test/src/main/java/com/blazepush/feature/test/repository/ReplayAlignedTrackCatalog.kt",
+        ).readText()
+        assertFalse(
+            "ReplayAlignedTrackCatalog 不应使用 by lazy（A37 改为显式 @Volatile + synchronized 双检锁）",
+            source.contains("by lazy"),
+        )
+        assertFalse(
+            "禁止使用 LazyThreadSafetyMode.NONE / lazy(NONE)（spec R6）",
+            source.contains("LazyThreadSafetyMode.NONE") || source.contains("lazy(NONE)"),
+        )
     }
 
     private fun assertNullMinDirectionalSpeed(track: com.blazepush.feature.test.model.track.Track) {

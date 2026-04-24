@@ -93,6 +93,7 @@ class TestSessionViewModelTrackLapTest {
         Dispatchers.setMain(dispatcher)
         try {
             val trackCatalog = runtimeTrackCatalog()
+            trackCatalog.getAllTracks()  // A37 warm cache：冷 getTrack(TFIC) 走 fallback 不触 IO
             val viewModel = createViewModel(trackCatalog)
             val track = requireNotNull(trackCatalog.getTrack(DEFAULT_TRACK_ID))
 
@@ -116,7 +117,9 @@ class TestSessionViewModelTrackLapTest {
     fun lapDebugMode_trackDebugSummaryIncludesRuntimeGeometryMetadata() = runTest {
         Dispatchers.setMain(dispatcher)
         try {
-            val viewModel = createViewModel(runtimeTrackCatalog())
+            val trackCatalog = runtimeTrackCatalog()
+            trackCatalog.getAllTracks()  // A37 warm cache
+            val viewModel = createViewModel(trackCatalog)
 
             viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
             dispatcher.scheduler.advanceUntilIdle()
@@ -143,6 +146,7 @@ class TestSessionViewModelTrackLapTest {
         Dispatchers.setMain(dispatcher)
         try {
             val trackCatalog = runtimeTrackCatalog()
+            trackCatalog.getAllTracks()  // A37 warm cache
             val viewModel = createViewModel(trackCatalog)
             val track = requireNotNull(trackCatalog.getTrack(DEFAULT_TRACK_ID))
 
@@ -168,6 +172,7 @@ class TestSessionViewModelTrackLapTest {
         Dispatchers.setMain(dispatcher)
         try {
             val trackCatalog = runtimeTrackCatalog()
+            trackCatalog.getAllTracks()  // A37 warm cache
             val viewModel = createViewModel(trackCatalog)
             val track = requireNotNull(trackCatalog.getTrack(DEFAULT_TRACK_ID))
 

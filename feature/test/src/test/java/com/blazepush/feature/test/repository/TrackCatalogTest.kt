@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.repository
 
 import com.blazepush.feature.test.model.track.TimingGateType
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,7 +11,7 @@ import org.junit.Test
 class TrackCatalogTest {
 
     @Test
-    fun getAllTracks_exposesOnlyTficLpccPreset() {
+    fun getAllTracks_exposesOnlyTficLpccPreset() = runTest {
         val catalog = PresetTrackCatalog()
 
         val ids = catalog.getAllTracks().map { it.id }

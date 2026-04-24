@@ -72,7 +72,8 @@ internal val presetTracks: List<Track> = listOf(
 )
 
 class PresetTrackCatalog : TrackCatalog {
-    override fun getAllTracks(): List<Track> = presetTracks
+    // A37：内存直返，suspend 不强制 withContext(Dispatchers.IO)
+    override suspend fun getAllTracks(): List<Track> = presetTracks
 
     override fun getTrack(trackId: String): Track? = presetTracks.firstOrNull { it.id == trackId }
 }

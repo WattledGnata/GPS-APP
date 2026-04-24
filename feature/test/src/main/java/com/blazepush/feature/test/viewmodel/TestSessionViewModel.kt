@@ -77,7 +77,10 @@ class TestSessionViewModel(
     private val _currentMode = MutableStateFlow(TestMode.Acceleration)
     val currentMode: StateFlow<TestMode> = _currentMode.asStateFlow()
 
-    private val _availableTracks = MutableStateFlow(trackCatalog.getAllTracks())
+    // A37 change fix-gps-stats-and-lazy-catalog-hot-start：
+    // 构造期给空列表避免同步读 catalog 阻塞 Main；viewModelScope.launch 内异步加载（见 init block）。
+    // launch 不指定 Dispatchers.IO —— IO 边界唯一防线在 ReplayAlignedTrackCatalog 实现侧。
+    private val _availableTracks = MutableStateFlow<List<Track>>(emptyList())
     val availableTracks: StateFlow<List<Track>> = _availableTracks.asStateFlow()
 
     private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
@@ -117,6 +120,11 @@ class TestSessionViewModel(
     private var consecutiveTriggerCount = 0
 
     init {
+        // A37：异步加载 availableTracks，不指定 Dispatchers.IO（catalog 实现自负 IO 边界）
+        viewModelScope.launch {
+            _availableTracks.value = trackCatalog.getAllTracks()
+        }
+
         viewModelScope.launch {
             bleDeviceManager.connectionState.collect { state ->
                 _connectionState.value = state

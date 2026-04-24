@@ -6,6 +6,8 @@ import com.blazepush.feature.test.model.track.TrackPath
 import com.blazepush.feature.test.model.track.TrackSource
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val TFIC_TRACK_ID = "preset-tfic-lpcc"
 private const val REPLAY_JSON_ASSET_PATH = "replay/tianfu_track_replay_5hz.json"
@@ -31,24 +33,50 @@ class ReplayAlignedTrackCatalog(
     private val fallbackCatalog: TrackCatalog = PresetTrackCatalog()
 ) : TrackCatalog {
 
-    private val replayAlignedTrack: Track? by lazy {
-        runCatching {
-            buildReplayAlignedTrack(
-                replayJson = replayTrackSource.loadReplayJson(),
-                vbo = replayTrackSource.loadTrackVbo()
-            )
-        }.getOrNull()
-    }
+    // A37：显式缓存替代原惰性属性（design D5），避免 SYNCHRONIZED 惰性在 IO 池线程竞争
+    @Volatile
+    private var cachedReplayTrack: Track? = null
 
-    override fun getAllTracks(): List<Track> {
+    @Volatile
+    private var cacheInitialized = false
+
+    // A37：顶层 withContext(Dispatchers.IO) 是 IO 边界的唯一防线（spec R3）
+    override suspend fun getAllTracks(): List<Track> = withContext(Dispatchers.IO) {
+        ensureReplayTrackLoaded()
         val fallbackTracks = fallbackCatalog.getAllTracks().filterNot { it.id == TFIC_TRACK_ID }
-        val replayTrack = replayAlignedTrack ?: fallbackCatalog.getTrack(TFIC_TRACK_ID)
-        return if (replayTrack != null) fallbackTracks + replayTrack else fallbackTracks
+        val replayTrack = cachedReplayTrack ?: fallbackCatalog.getTrack(TFIC_TRACK_ID)
+        if (replayTrack != null) fallbackTracks + replayTrack else fallbackTracks
     }
 
+    /**
+     * getTrack 保持同步。冷缓存（未调过 getAllTracks）时降级 fallback，不触发 asset IO。
+     * spec R4：冷 getTrack(TFIC) 返回 preset fallback 版；热缓存命中返回 replay-aligned 版。
+     */
     override fun getTrack(trackId: String): Track? {
         if (trackId != TFIC_TRACK_ID) return fallbackCatalog.getTrack(trackId)
-        return replayAlignedTrack ?: fallbackCatalog.getTrack(trackId)
+        return if (cacheInitialized) {
+            cachedReplayTrack ?: fallbackCatalog.getTrack(trackId)
+        } else {
+            fallbackCatalog.getTrack(trackId)
+        }
+    }
+
+    /**
+     * 双检锁：只有 getAllTracks 能触发 replay asset 加载；
+     * 首次访问 + 后续 getAllTracks 调用都走此函数，加载仅发生一次。
+     */
+    private fun ensureReplayTrackLoaded() {
+        if (cacheInitialized) return
+        synchronized(this) {
+            if (cacheInitialized) return
+            cachedReplayTrack = runCatching {
+                buildReplayAlignedTrack(
+                    replayJson = replayTrackSource.loadReplayJson(),
+                    vbo = replayTrackSource.loadTrackVbo()
+                )
+            }.getOrNull()
+            cacheInitialized = true
+        }
     }
 
     private fun buildReplayAlignedTrack(replayJson: String, vbo: String): Track {

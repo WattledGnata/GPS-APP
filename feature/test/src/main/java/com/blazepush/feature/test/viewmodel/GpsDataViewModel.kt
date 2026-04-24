@@ -60,8 +60,6 @@ class GpsDataViewModel(
 
     // 数据统计
     private var lastDataTime = 0L
-    private var dataCount = 0
-    private var dataCountStartTime = 0L
 
     init {
         // 监控GPS数据并计算质量
@@ -74,18 +72,28 @@ class GpsDataViewModel(
                 updateDataStats(data)
             }
         }
+
+        // A28 新增：DISCONNECTED → resetStats（design D1 / spec R3）。
+        // connectionState 已是 StateFlow，operator fusion 自带 distinctUntilChanged 语义，
+        // 这里不显式调 .distinctUntilChanged()（显式调用会触发 Kotlin 编译期 warning-as-error）。
+        // spec R3 "distinctUntilChanged 防重复 reset" 契约由 StateFlow 语义直接满足。
+        viewModelScope.launch {
+            connectionState
+                .filter { it == ConnectionState.DISCONNECTED }
+                .collect { resetStats() }
+        }
     }
 
     /**
      * 更新数据统计和质量评估
+     *
+     * A28 重写（change fix-gps-stats-and-lazy-catalog-hot-start）：
+     * - frequency 直接透传 data.frequency（parser 1 秒滑窗结果），不再累计平均
+     * - packetLoss 调用纯函数 computePacketLossRate 从 data.frequency 反推期望采样周期，
+     *   不再硬编码 10Hz 假设
      */
     private fun updateDataStats(data: GpsData) {
         val now = System.currentTimeMillis()
-
-        // 初始化统计起点
-        if (dataCountStartTime == 0L) {
-            dataCountStartTime = now
-        }
 
         // 计算数据年龄
         val dataAge = if (data.timestamp > 0) {
@@ -95,18 +103,11 @@ class GpsDataViewModel(
         }
         lastDataTime = now
 
-        // 计算频率
-        dataCount++
-        val elapsedSeconds = (now - dataCountStartTime) / 1000.0
-        val frequency = if (elapsedSeconds > 0) dataCount / elapsedSeconds else 0.0
+        // A28 frequency：透传 parser 1 秒滑窗结果
+        val frequency = data.frequency
 
-        // 简化的丢包率计算（基于数据间隔）
-        val expectedInterval = 100L // 期望100ms间隔
-        val packetLossRate = if (dataAge > expectedInterval * 2) {
-            ((dataAge - expectedInterval) / expectedInterval.toDouble()).coerceIn(0.0, 100.0)
-        } else {
-            0.0
-        }
+        // A28 packetLoss：纯函数计算（测试确定性）
+        val packetLossRate = computePacketLossRate(dataAge = dataAge, frequency = data.frequency)
 
         // 构建统计信息
         val stats = DataStats(
@@ -160,11 +161,13 @@ class GpsDataViewModel(
 
     /**
      * 重置统计数据
+     *
+     * A28 裁剪：dataCount / dataCountStartTime 已随累计平均逻辑删除；
+     * 重置同时把 _dataQuality 回到 DataQuality.Empty，确保 DISCONNECTED 后 UI 立即回初始态
      */
     fun resetStats() {
-        dataCount = 0
-        dataCountStartTime = 0L
         lastDataTime = 0L
+        _dataQuality.value = DataQuality.Empty
         dataSmoothing.reset()
     }
 
@@ -174,5 +177,26 @@ class GpsDataViewModel(
     override fun onCleared() {
         super.onCleared()
         bleDeviceManager.cleanup()
+    }
+
+    companion object {
+        /**
+         * A28 纯函数：根据数据年龄 + parser 滑窗 frequency 计算丢包率。
+         *
+         * 从 data.frequency 反推期望采样周期（1000 / frequency），适配 10Hz / 25Hz / 50Hz 设备；
+         * frequency ≤ 0 为暖启动 / 丢连，回退 0 避免 NaN / 除零 / 冷启动误告警；
+         * 2x 阈值门槛保留（与 v1 容忍度一致），短暂抖动不触发。
+         *
+         * VisibleForTesting：单元测试直接对纯函数做精确断言，不经 System.currentTimeMillis() 路径。
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun computePacketLossRate(dataAge: Long, frequency: Double): Double {
+            val expectedSampleInterval = if (frequency > 0.0) 1000.0 / frequency else 0.0
+            return if (expectedSampleInterval > 0.0 && dataAge > expectedSampleInterval * 2) {
+                ((dataAge - expectedSampleInterval) / expectedSampleInterval).coerceIn(0.0, 100.0)
+            } else {
+                0.0
+            }
+        }
     }
 }
