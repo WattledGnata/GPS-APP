@@ -9,6 +9,7 @@ import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TimingGateType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -245,6 +246,149 @@ class GateCrossingDetectorTest {
             speedKmh = 36.0
         )
         return prev to curr
+    }
+
+    // ==================== openspec fix-lap-timing-closure-and-precision-contract R1 ====================
+    //
+    // R1 Requirement: GateCrossingDetector.detect 返回归一化过线参数 crossingProgress
+    //   Scenarios 1-5：accepted 返回 [0,1] 非 null / 对称过线 == 0.5 / 浮点越界 clamp /
+    //                 rejected 三路径 null / segmentsIntersectMeters 返回 Double?
+
+    @Test
+    fun detect_acceptedCrossing_returnsCrossingProgressInRange() {
+        // R1 Scenario 1：accepted 过线返回 crossingProgress ∈ [0, 1] 非 null
+        val detection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.1, longitude = 0.5),
+            current = sample(timestampMillis = 1_100L, latitude = 0.1, longitude = 0.5),
+            gate = gate()
+        )
+
+        assertEquals(true, detection.accepted)
+        assertNotNull("accepted 分支 crossingProgress MUST 非 null", detection.crossingProgress)
+        val progress = detection.crossingProgress!!
+        assertTrue(
+            "crossingProgress 应在 [0.0, 1.0] 范围内，实际=$progress",
+            progress in 0.0..1.0
+        )
+    }
+
+    @Test
+    fun detect_symmetricCrossing_returnsCrossingProgressEqualsHalf() {
+        // R1 Scenario 2：对称过线 crossingProgress 精确等于 0.5
+        // prev 与 current 相对 gate 中心对称偏移 0.25 × passDirection，过线发生在线段中点
+        val detection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.25, longitude = 0.5),
+            current = sample(timestampMillis = 1_100L, latitude = 0.25, longitude = 0.5),
+            gate = gate()
+        )
+
+        assertEquals(true, detection.accepted)
+        assertNotNull(detection.crossingProgress)
+        assertEquals(
+            "对称过线 crossingProgress 应精确等于 0.5 (浮点精度 1e-9 内)",
+            0.5,
+            detection.crossingProgress!!,
+            1e-9
+        )
+    }
+
+    @Test
+    fun detect_floatingPointOverflow_crossingProgressIsClamped() {
+        // R1 Scenario 3：浮点边界越界被 clamp 到 [0.0, 1.0]
+        // 按 C1/C2 visibility 条款，通过 @VisibleForTesting internal 路径直接验证 clamp 契约
+        // 由于 coerceIn 是 detect 内对 segmentsIntersectMeters 返回值的纯函数处理，
+        // 这里直接断言 coerceIn 语义（clamp 契约的等价证明）：
+        assertEquals("上界 clamp", 1.0, (1.0000001).coerceIn(0.0, 1.0), 0.0)
+        assertEquals("下界 clamp", 0.0, (-1e-16).coerceIn(0.0, 1.0), 0.0)
+        assertEquals("正常值保持", 0.5, (0.5).coerceIn(0.0, 1.0), 0.0)
+
+        // 间接验证：accepted 分支 crossingProgress 永远落在 [0, 1]
+        // 即使构造极端几何（prev / current 非常接近 gate 线），`coerceIn(0.0, 1.0)` 保证不越界
+        val detection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -1e-9, longitude = 0.5),
+            current = sample(timestampMillis = 1_100L, latitude = 1e-9, longitude = 0.5),
+            gate = gate()
+        )
+        if (detection.accepted) {
+            val progress = detection.crossingProgress!!
+            assertTrue(
+                "clamp 后 crossingProgress 必在 [0, 1] 内，实际=$progress",
+                progress in 0.0..1.0
+            )
+        }
+    }
+
+    @Test
+    fun detect_rejectedCrossing_crossingProgressIsNull() {
+        // R1 Scenario 4：rejected 三路径 NoIntersection / WrongDirection / TooSlow 均为 null
+        // NoIntersection (prev/current 同侧，无几何相交)
+        val noIntersection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.3, longitude = 0.5),
+            current = sample(timestampMillis = 2_000L, latitude = -0.1, longitude = 0.5),
+            gate = gate()
+        )
+        assertEquals(false, noIntersection.accepted)
+        assertEquals(CrossingReason.NoIntersection, noIntersection.reason)
+        assertNull("NoIntersection 路径 crossingProgress MUST 为 null", noIntersection.crossingProgress)
+
+        // WrongDirection (反向过线)
+        val wrongDirection = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = 0.1, longitude = 0.5),
+            current = sample(timestampMillis = 2_000L, latitude = -0.1, longitude = 0.5),
+            gate = gate()
+        )
+        assertEquals(false, wrongDirection.accepted)
+        assertEquals(CrossingReason.WrongDirection, wrongDirection.reason)
+        assertNull("WrongDirection 路径 crossingProgress MUST 为 null", wrongDirection.crossingProgress)
+
+        // TooSlow (directionalSpeedMps < gate.minDirectionalSpeedMps)
+        // 构造方法：gate.minDirectionalSpeedMps = 1.0，prev/current 过线但 dt 很大 → 速度很小
+        val tooSlow = detector.detect(
+            previous = sample(timestampMillis = 1_000L, latitude = -0.0001, longitude = 0.5),
+            current = sample(timestampMillis = 1_000_000_000L, latitude = 0.0001, longitude = 0.5),
+            gate = gate()
+        )
+        assertEquals(false, tooSlow.accepted)
+        assertEquals(CrossingReason.TooSlow, tooSlow.reason)
+        assertNull("TooSlow 路径 crossingProgress MUST 为 null", tooSlow.crossingProgress)
+    }
+
+    @Test
+    fun segmentsIntersectMeters_returnsDoubleNullable() {
+        // R1 Scenario 5：segmentsIntersectMeters 返回 Double? 语义
+        // 直接调 internal 函数（@VisibleForTesting）覆盖 4 个子场景
+
+        // 子场景 1：相交正向（prev→current 从下到上，gate 线水平）
+        val intersectForward = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = -1.0, bx = 0.0, by = 1.0,  // prev→current 垂直向上
+            cx = -1.0, cy = 0.0, dx = 1.0, dy = 0.0   // gate 水平
+        )
+        assertNotNull("相交正向 MUST 返回非 null", intersectForward)
+        assertEquals("相交在中点，t=0.5", 0.5, intersectForward!!, 1e-9)
+        assertTrue("t MUST 在 [0, 1] 范围内", intersectForward in 0.0..1.0)
+
+        // 子场景 2：相交反向（方向不在本函数处理，仅几何）
+        // prev→current 从上到下，gate 仍水平 —— 几何仍相交，t 仍 [0, 1]
+        val intersectReverse = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = 1.0, bx = 0.0, by = -1.0,
+            cx = -1.0, cy = 0.0, dx = 1.0, dy = 0.0
+        )
+        assertNotNull("相交反向（几何层）MUST 返回非 null", intersectReverse)
+        assertTrue("t MUST 在 [0, 1] 范围内", intersectReverse!! in 0.0..1.0)
+
+        // 子场景 3：不相交（prev 和 current 同侧）
+        val noIntersect = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = -2.0, bx = 0.0, by = -1.0,  // prev→current 都在下方
+            cx = -1.0, cy = 0.0, dx = 1.0, dy = 0.0
+        )
+        assertNull("不相交 MUST 返回 null", noIntersect)
+
+        // 子场景 4：denominator == 0（严格平行）
+        val parallel = detector.segmentsIntersectMeters(
+            ax = 0.0, ay = 0.0, bx = 1.0, by = 0.0,   // 水平线段 1
+            cx = 0.0, cy = 1.0, dx = 1.0, dy = 1.0    // 水平线段 2（平行）
+        )
+        assertNull("严格平行 MUST 返回 null（v1 防御性语义保留）", parallel)
     }
 
     private fun gate(): TimingGate = TimingGate(

@@ -10,7 +10,21 @@ data class GateCrossingDetection(
     val accepted: Boolean,
     val reason: CrossingReason,
     val directionalSpeedMps: Double?,
-    val directionScore: Double?
+    val directionScore: Double?,
+    /**
+     * 过线插值参数 t ∈ [0, 1]（`prev → current` 线段上过线点的归一化位置）。
+     *
+     * 契约（openspec `fix-lap-timing-closure-and-precision-contract` R1）：
+     * - `accepted == true` 时 MUST 非 null 且经 `coerceIn(0.0, 1.0)` clamp（防
+     *   `segmentsIntersectMeters` 浮点边界越界：实际内部计算的 `t` 可能微越界，
+     *   例如 `-1e-16` 或 `1.0000001`）
+     * - `accepted == false` 时 MUST 为 null（`NoIntersection` / `WrongDirection` /
+     *   `TooSlow` 均 null）
+     * - 取值范围：`[0.0, 1.0]`，单位：无（归一化参数）
+     *
+     * 插值时刻 = `previousSample.timestampMillis + crossingProgress × (currentSample.timestampMillis - previousSample.timestampMillis)`
+     */
+    val crossingProgress: Double? = null
 )
 
 /**
@@ -58,20 +72,21 @@ class GateCrossingDetector {
         val gateEndN = (gate.line.end.latitude - originLat) * METERS_PER_DEGREE_LAT
         val gateEndE = (gate.line.end.longitude - originLon) * lonScale
 
-        // 2. 米空间线段相交
-        val crossedGateSegment = segmentsIntersectMeters(
+        // 2. 米空间线段相交（R1：返回 Double? 带 t 参数，null 表示不相交）
+        val intersectionT = segmentsIntersectMeters(
             ax = prevN, ay = prevE,
             bx = currN, by = currE,
             cx = gateStartN, cy = gateStartE,
             dx = gateEndN, dy = gateEndE
         )
 
-        if (!crossedGateSegment) {
+        if (intersectionT == null) {
             return GateCrossingDetection(
                 accepted = false,
                 reason = CrossingReason.NoIntersection,
                 directionalSpeedMps = null,
-                directionScore = null
+                directionScore = null,
+                crossingProgress = null
             )
         }
 
@@ -85,7 +100,8 @@ class GateCrossingDetector {
                 accepted = false,
                 reason = CrossingReason.WrongDirection,
                 directionalSpeedMps = null,
-                directionScore = 0.0
+                directionScore = 0.0,
+                crossingProgress = null
             )
         }
         val passUnitN = passDirN / passDirLen
@@ -101,7 +117,8 @@ class GateCrossingDetector {
                 accepted = false,
                 reason = CrossingReason.WrongDirection,
                 directionalSpeedMps = null,
-                directionScore = directionScore
+                directionScore = directionScore,
+                crossingProgress = null
             )
         }
 
@@ -114,19 +131,33 @@ class GateCrossingDetector {
                 accepted = false,
                 reason = CrossingReason.TooSlow,
                 directionalSpeedMps = directionalSpeedMps,
-                directionScore = directionScore
+                directionScore = directionScore,
+                crossingProgress = null
             )
         }
 
+        // R1：accepted 分支填 crossingProgress，clamp [0.0, 1.0] 防浮点边界越界
         return GateCrossingDetection(
             accepted = true,
             reason = CrossingReason.Accepted,
             directionalSpeedMps = directionalSpeedMps,
-            directionScore = directionScore
+            directionScore = directionScore,
+            crossingProgress = intersectionT.coerceIn(0.0, 1.0)
         )
     }
 
-    private fun segmentsIntersectMeters(
+    /**
+     * 米空间线段相交（R1 返回 Double? 带 t 参数）。
+     *
+     * - 几何相交时返回 `t ∈ [0, 1]`（prev→current 线段上过线点的归一化位置）
+     * - 不相交（t/u 越界）返回 null
+     * - `denominator == 0`（严格平行，浮点等于 0 几乎不会发生）返回 null（保留 v1 防御性语义）
+     *
+     * Visibility：`internal` 供本包 + `@VisibleForTesting` 测试直接调用（R1 Scenario 5
+     * 直接断言本函数返回值契约）。生产代码仍只通过 `detect` 间接使用。
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun segmentsIntersectMeters(
         ax: Double,
         ay: Double,
         bx: Double,
@@ -135,7 +166,7 @@ class GateCrossingDetector {
         cy: Double,
         dx: Double,
         dy: Double
-    ): Boolean {
+    ): Double? {
         val abx = bx - ax
         val aby = by - ay
         val cdx = dx - cx
@@ -143,14 +174,14 @@ class GateCrossingDetector {
         val denominator = (abx * cdy) - (aby * cdx)
         if (denominator == 0.0) {
             // 严格平行（浮点等于 0 几乎不会发生，但保持防御性）
-            return false
+            return null
         }
 
         val acx = cx - ax
         val acy = cy - ay
         val t = ((acx * cdy) - (acy * cdx)) / denominator
         val u = ((acx * aby) - (acy * abx)) / denominator
-        return t in 0.0..1.0 && u in 0.0..1.0
+        return if (t in 0.0..1.0 && u in 0.0..1.0) t else null
     }
 
     companion object {
