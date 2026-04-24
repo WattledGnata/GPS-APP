@@ -1,3 +1,9 @@
+// @IgnoreFormatCheck
+// 理由：本文件 40+ 条 legacy 测试（RP01~RP40）使用下划线分段 `method-name` +
+//       无 class comment / public fun comment —— 战役 D 已经沿用此风格回迁测试。
+//       本战役 G R4 只在文件末尾追加 5 条新测试遵循相同风格。rename 40+ 方法 +
+//       给所有 legacy 测试补注释远超 R4 scope。评审方 2026-04-24 commit 阶段
+//       B 方案批准此 ignore。
 package com.blazepush.core.bluetooth.parser
 
 import android.util.Log
@@ -752,5 +758,121 @@ class RaceChronoParserTest {
         data[19] = (vdop * 10.0).toInt().toByte()
 
         return data
+    }
+
+    // ---------- 战役 G R4（A25 isConnected 语义收敛） ----------
+
+    @Test
+    fun parseGpsData_shortPacket_setsErrorMessageShortPacket() = runWithMockedLog {
+        val shortData = ByteArray(10)  // < 20 字节
+        val result = parser.parseGpsData(shortData, createTestData(), shouldLog = false)
+
+        assertEquals(
+            "短包 MUST 设 errorMessage=\"short-packet\"，让下游 BluetoothDataSource " +
+                "不把 isConnected 强置为 true（A25 语义收敛）",
+            "short-packet",
+            result.errorMessage,
+        )
+    }
+
+    @Test
+    fun parseGpsData_catchBlockSetsErrorMessageParseError_sourceAssertion() {
+        // parse 内部抛异常在 JVM 单测环境难以自然触发（parser 主要是位运算），
+        // 改用源码结构断言锁定 catch 分支包含 errorMessage = "parse-error:
+        // —— 未来若有人误改 catch 分支吞异常不打标记，本断言立即 fail。
+        //
+        // parseGpsData 内部有多个内嵌 catch（frequency 计算 / distance 计算），
+        // 最外层 catch 的特征 log 是 "Error parsing GPS data"，用它作为锚点
+        // 精确定位 A25 修复的目标 catch
+        val source = java.io.File(
+            "src/main/java/com/blazepush/core/bluetooth/parser/RaceChronoParser.kt"
+        ).readText()
+        val logAnchor = source.indexOf("Log.e(TAG, \"Error parsing GPS data\"")
+        assertTrue(
+            "parseGpsData 最外层 catch 的 log \"Error parsing GPS data\" 必须存在",
+            logAnchor > 0,
+        )
+        val catchBody = source.substring(logAnchor, (logAnchor + 300).coerceAtMost(source.length))
+        assertTrue(
+            "catch 分支 MUST 返回 currentData.copy(errorMessage = \"parse-error: ...\")，" +
+                "将解析异常信号上抛给 BluetoothDataSource",
+            catchBody.contains("errorMessage = \"parse-error:"),
+        )
+    }
+
+    // ---------- 第五轮 review：GPS_TIME 路径对称修补 ----------
+
+    @Test
+    fun parseGpsTimeData_shortPacket_setsErrorMessageShortPacket() = runWithMockedLog {
+        val shortData = ByteArray(2)  // < 3 字节
+        val result = parser.parseGpsTimeData(shortData, createTestData())
+
+        assertEquals(
+            "GPS_TIME 短包 MUST 设 errorMessage=\"short-packet\"，与 GPS_MAIN 路径对称 " +
+                "—— 第五轮 review 挖出：原本此路径 return currentData 不写 errorMessage，" +
+                "下游 BluetoothDataSource 会把它当成功 parse 误置 isConnected=true",
+            "short-packet",
+            result.errorMessage,
+        )
+    }
+
+    @Test
+    fun parseGpsTimeData_catchBlockSetsErrorMessageParseError_sourceAssertion() {
+        // 用 parseGpsTimeData 特征 log "Error parsing GPS time data" 精确定位 catch 分支
+        val source = java.io.File(
+            "src/main/java/com/blazepush/core/bluetooth/parser/RaceChronoParser.kt"
+        ).readText()
+        val logAnchor = source.indexOf("Log.e(TAG, \"Error parsing GPS time data\"")
+        assertTrue(
+            "parseGpsTimeData 的 catch 特征 log \"Error parsing GPS time data\" 必须存在",
+            logAnchor > 0,
+        )
+        val catchBody = source.substring(logAnchor, (logAnchor + 300).coerceAtMost(source.length))
+        assertTrue(
+            "parseGpsTimeData catch 分支 MUST 返回 currentData.copy(errorMessage = \"parse-error: ...\") " +
+                "与 parseGpsData 对称（两路 parse 函数契约对齐）",
+            catchBody.contains("errorMessage = \"parse-error:"),
+        )
+    }
+
+    @Test
+    fun parseGpsData_successPathExplicitlyClearsErrorMessage_sourceAssertion() {
+        // 契约闭合：parser 成功路径 MUST 显式 errorMessage = null 切断级联
+        // 源码锚点：parseGpsData 的主成功 copy（isTimeSynced = syncedNow）附近
+        val source = java.io.File(
+            "src/main/java/com/blazepush/core/bluetooth/parser/RaceChronoParser.kt"
+        ).readText()
+        val copyAnchor = source.indexOf("isTimeSynced = syncedNow")
+        assertTrue("parseGpsData 成功路径 copy 锚点必须存在", copyAnchor > 0)
+        // copy 块从锚点开始往前/往后扩展，errorMessage = null 应在同一 copy call 内
+        val copyBlock = source.substring(
+            (copyAnchor - 600).coerceAtLeast(0),
+            (copyAnchor + 200).coerceAtMost(source.length),
+        )
+        assertTrue(
+            "parseGpsData 成功路径 copy MUST 显式 errorMessage = null，避免前帧 errorMessage " +
+                "被 carry 导致 '短包后第一帧成功无法恢复 isConnected=true' 级联故障",
+            copyBlock.contains("errorMessage = null"),
+        )
+    }
+
+    @Test
+    fun parseGpsTimeData_successPathExplicitlyClearsErrorMessage_sourceAssertion() {
+        // parseGpsTimeData 成功路径 MUST 对两个分支都显式 errorMessage = null
+        val source = java.io.File(
+            "src/main/java/com/blazepush/core/bluetooth/parser/RaceChronoParser.kt"
+        ).readText()
+        val fnStart = source.indexOf("fun parseGpsTimeData(")
+        assertTrue("parseGpsTimeData 必须定义", fnStart > 0)
+        val fnEnd = source.indexOf("Error parsing GPS time data", fnStart)
+        assertTrue("parseGpsTimeData catch 锚点必须在函数内", fnEnd > fnStart)
+        val fnBody = source.substring(fnStart, fnEnd)
+        // 断言：函数成功路径（try 体内）出现至少两次 errorMessage = null（对应 if/else 两分支）
+        val occurrences = Regex("errorMessage = null").findAll(fnBody).count()
+        assertTrue(
+            "parseGpsTimeData 成功路径的 if/else 两个 copy 分支 MUST 都显式 errorMessage = null " +
+                "（当前计数=$occurrences，应 ≥ 2）",
+            occurrences >= 2,
+        )
     }
 }

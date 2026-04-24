@@ -1,3 +1,9 @@
+// @IgnoreFormatCheck
+// 理由：本文件含 legacy 格式违规（class comment / `reference!!` 非空断言 /
+//       import-order / trailing newline）。`reference!!` 的非空断言是战役 A 时钟源
+//       修复保留的契约——与 `syncedNow` 守卫同源；rename 掉会改判断语义。其他
+//       legacy 违规 rename 扩散过大，超出战役 G R4 scope。评审方 2026-04-24
+//       commit 阶段 B 方案批准此 ignore。
 package com.blazepush.core.bluetooth.parser
 
 import android.location.Location
@@ -70,7 +76,9 @@ class RaceChronoParser {
     fun parseGpsTimeData(data: ByteArray, currentData: GpsData): GpsData {
         if (data.size < 3) {
             Log.e(TAG, "Invalid GPS time data size: ${data.size}, expected 3")
-            return currentData
+            // A25：时间包短包失败信号通过 errorMessage 字段上抛给 BluetoothDataSource，
+            //      与主包路径对称 —— 让下游失败分支显式置 isConnected=false
+            return currentData.copy(errorMessage = "short-packet")
         }
 
         return try {
@@ -98,14 +106,17 @@ class RaceChronoParser {
 
 //            Log.d(TAG, "GPS Time: $year-${month + 1}-${day + 1} $hour:xx (sync=$syncBits)")
 
+            // A25 契约闭合：时间包成功路径显式清 errorMessage，避免前帧失败残留让下游
+            //               把"本帧 parse 成功"误解释成"最近一次 parse 失败"
             if (!currentData.isTestReady) {
-                currentData.copy(isTestReady = true)
+                currentData.copy(isTestReady = true, errorMessage = null)
             } else {
-                currentData
+                currentData.copy(errorMessage = null)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing GPS time data", e)
-            currentData
+            // A25：时间包解析异常失败信号通过 errorMessage 上抛
+            currentData.copy(errorMessage = "parse-error: ${e.message}")
         }
     }
 
@@ -137,9 +148,9 @@ class RaceChronoParser {
         var currentData = inputData
 
         if (data.size < 20) {
-            // 注释掉高频错误日志，25Hz数据会刷屏
-            // Log.e(TAG, "Invalid GPS main data size: ${data.size}, expected 20")
-            return currentData
+            // A25：短包失败信号通过 errorMessage 字段上抛给 BluetoothDataSource，
+            //      让其不把 isConnected 强置为 true（语义收敛到 "GATT 连上 + parse 成功"）
+            return currentData.copy(errorMessage = "short-packet")
         }
 
         try {
@@ -270,6 +281,9 @@ class RaceChronoParser {
             }
 
             // Update Current Data
+            // A25 契约闭合：主包成功路径显式清 errorMessage，避免前帧失败残留（例如
+            //               上一帧短包设的 "short-packet"）被带过来让下游把本帧
+            //               parse 成功误走失败分支置 isConnected=false。
             currentData = currentData.copy(
                 timestamp = protocolTimestamp,
                 speed = speedKmh,
@@ -283,7 +297,8 @@ class RaceChronoParser {
                 frequency = gpsFrequency,
                 isTestReady = satellites >= 6 && hdop < 2.0,
                 fixQuality = fixQuality,
-                isTimeSynced = syncedNow
+                isTimeSynced = syncedNow,
+                errorMessage = null
             )
 
             if (shouldLog) {
@@ -301,7 +316,8 @@ class RaceChronoParser {
 
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing GPS data", e)
-            return currentData
+            // A25：解析异常失败信号通过 errorMessage 字段上抛给 BluetoothDataSource
+            return currentData.copy(errorMessage = "parse-error: ${e.message}")
         }
     }
 }
