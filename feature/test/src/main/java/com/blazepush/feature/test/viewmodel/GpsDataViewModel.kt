@@ -11,7 +11,6 @@ import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.DataStats
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
-import com.blazepush.core.domain.usecase.DataSmoothing
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -25,7 +24,6 @@ class GpsDataViewModel(
     private val gpsDataRepository: GpsDataRepository,
     private val bleDeviceManager: BleDeviceManager,
     private val dataQualityEvaluator: DataQualityEvaluator,
-    private val dataSmoothing: DataSmoothing
 ) : ViewModel() {
 
     // GPS数据流（直接使用repository的数据）
@@ -168,7 +166,6 @@ class GpsDataViewModel(
     fun resetStats() {
         lastDataTime = 0L
         _dataQuality.value = DataQuality.Empty
-        dataSmoothing.reset()
     }
 
     /**

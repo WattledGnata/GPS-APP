@@ -12,7 +12,6 @@ import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
-import com.blazepush.core.domain.usecase.DataSmoothing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +56,6 @@ class GpsDataViewModelTest {
             gpsDataRepository = repo,
             bleDeviceManager = mock(BleDeviceManager::class.java),
             dataQualityEvaluator = DataQualityEvaluator(),
-            dataSmoothing = mock(DataSmoothing::class.java),
         )
     }
 

@@ -10,11 +10,8 @@ import com.blazepush.core.data.local.file.TestDataFileStorage
 import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.data.repository.CarModelRepository
 import com.blazepush.core.data.repository.TestResultRepository
-import com.blazepush.core.domain.usecase.AnomalyDetector
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
-import com.blazepush.core.domain.usecase.DataInterpolator
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
-import com.blazepush.core.domain.usecase.DataSmoothing
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
 import com.blazepush.feature.test.repository.AssetReplayTrackSource
@@ -28,6 +25,7 @@ import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestHistoryViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import org.koin.android.error.MissingAndroidContextException
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.dsl.module
@@ -80,19 +78,39 @@ val domainModule = module {
     factory { SmartTestLauncher() }
     factory { GpsDataFilter() }
     factory { DataQualityEvaluator() }
-    factory { AnomalyDetector() }
-    factory { DataSmoothing() }
-    factory { DataInterpolator() }
     factory { GateCrossingDetector() }
     factory { LapTimingEngine(get()) }
     single<ReplayTrackSource> { AssetReplayTrackSource(androidContext()) }
-    // JVM 单测（如 `DomainModuleKoinTest`）无法提供 `androidContext()`，`get<ReplayTrackSource>()`
-    // 会抛 `MissingAndroidContextException`；此时降级到 `PresetTrackCatalog()`，让
-    // `TrackCatalog` 绑定在纯 JVM 环境下依然可解析，真机环境的 replay 对齐不受影响。
+    // change fix-di-fallback-and-anomaly-island-cleanup（A17）：
+    // single<TrackCatalog> 通过 cause chain 检查决定是否降级。Koin 把 androidContext()
+    // 在 JVM 缺 Context 时抛的 org.koin.android.error.MissingAndroidContextException 包成
+    // InstanceCreationException 透传给本 provider 的 caller —— 直接 catch 自带类型不命中，
+    // 必须遍历 e.cause 链查标记类型。命中（JVM 单测合法 fallback）降级到 PresetTrackCatalog；
+    // 不命中（IOException / JsonSyntaxException / asset 损坏等真机异常）throw e 上抛
+    // 让崩溃上报可见。
     single<TrackCatalog> {
-        runCatching { ReplayAlignedTrackCatalog(get(), PresetTrackCatalog()) }
-            .getOrElse { PresetTrackCatalog() }
+        try {
+            ReplayAlignedTrackCatalog(get(), PresetTrackCatalog())
+        } catch (e: Throwable) {
+            if (e.findInCauseChain<MissingAndroidContextException>() != null) {
+                PresetTrackCatalog()
+            } else {
+                throw e
+            }
+        }
     }
+}
+
+/**
+ * A17：cause chain 遍历工具 —— 配合 Koin 包装的 InstanceCreationException 找标记类型。
+ */
+private inline fun <reified T : Throwable> Throwable.findInCauseChain(): T? {
+    var current: Throwable? = this
+    while (current != null) {
+        if (current is T) return current as T
+        current = current.cause
+    }
+    return null
 }
 
 /**
@@ -100,7 +118,7 @@ val domainModule = module {
  */
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
-    single { GpsDataViewModel(get(), get(), get(), get()) }
+    single { GpsDataViewModel(get(), get(), get()) }
     viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
