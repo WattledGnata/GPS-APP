@@ -1545,29 +1545,58 @@ class LapTimingEngineTest {
         assertEquals(1, closed.completedLaps.size)
     }
 
-    /** 路径 (d) no target gate 携带累距（用 0-sector 自定义 track 触发） */
+    /**
+     * 路径 (d) no target gate 携带累距（**Review v1 P1 修补**：原假测试实际走 sector
+     * rejected 分支，未真正覆盖 no-target gate 路径，重写为真正触发 expectedGate(...)
+     * 返回 null 的场景）。
+     *
+     * 触发条件：active lap 已穿完所有 sector gate 但未闭圈，`nextExpectedGateIndex
+     * - 1 >= track.sectorGates.size`，`expectedGate(...).getOrNull` 返回 null →
+     * `processSample` line 98-99 直接 `session.copy(samples, activeLap =
+     * activeLapWithDistance)` 早退（路径 d），完全绕过 handleSectorCrossing。
+     */
     @Test
-    fun processSample_noTargetGate_carriesDistanceForward() {
-        // 开圈使用主 track（含 sector），第一次过 start-finish accepted
+    fun processSample_whenNextExpectedGateIndexExceedsSectorCount_routesThroughNoTargetGatePath() {
+        // 开圈使用主 track（含 2 sector），第一次过 start-finish accepted
         val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
         val opened = engine.processSample(newSession(), track, prev, current)
-        val baselineDistance = opened.activeLap!!.distanceMetersSinceStart  // = 0.0
+        assertNotNull(opened.activeLap)
 
-        // 喂一帧远离任何 sector gate 的位置（detector 对所有 gate 都不会 accept），
-        // 但 sector gate 仍存在 → 走 handleSectorCrossing rejected 路径而非 no-target；
-        // no-target 路径必须 nextExpectedGateIndex 超出 sectorGates.size 才能触发，
-        // 那是闭圈 + 已穿所有 sector 后的状态，构造太复杂；
-        // 改用 sector rejected 路径覆盖（路径 e）已含 distance carry 验证；
-        // 此测试用相邻帧 haversine 增量验证 d/e/f 共享的"携带累距"语义骨架。
-        val far = sample(timestampMillis = 1_400L, latitude = 30.49 + 0.001, longitude = 104.43 + 0.001)
-        val advanced = engine.processSample(opened, track, current, far)
+        // 手动构造 active lap 已穿完所有 sector 但未闭圈的状态：
+        // nextExpectedGateIndex = sectorGates.size + 1 让 expectedGate 返回 null（触发路径 d）
+        val sectorCount = track.sectorGates.size
+        val sessionAtNoTarget = opened.copy(
+            nextExpectedGateIndex = sectorCount + 1,  // expectedGate(track, N) where N-1 >= size → null
+            activeLap = opened.activeLap!!.copy(
+                distanceMetersSinceStart = 100.0,  // 预填 baseline distance
+                passedGateIds = listOf(track.startFinishGate.id) + track.sectorGates.map { it.id },
+            ),
+        )
+        val baselineDistance = sessionAtNoTarget.activeLap!!.distanceMetersSinceStart  // = 100.0
+        val baselineCrossingEvents = sessionAtNoTarget.crossingEvents.size
 
-        // distance 必有增量
+        // 喂一帧普通 sample，必走路径 (d)：no target gate → 早退于 line 98-99
+        val nextSample = sample(timestampMillis = 1_400L, latitude = 30.491, longitude = 104.431)
+        val advanced = engine.processSample(sessionAtNoTarget, track, current, nextSample)
+
+        // 路径 (d) 行为契约：
+        // 1. activeLap 携带累距（distance 增量 = haversine(current, nextSample) > 0）
         assertNotNull(advanced.activeLap)
         assertTrue(
-            "no target gate / sector rejected 路径都应携带 distance 增量；实测 ${advanced.activeLap!!.distanceMetersSinceStart}",
+            "路径 (d) no target gate 必须携带 activeLapWithDistance 累距；" +
+                "baseline=$baselineDistance new=${advanced.activeLap!!.distanceMetersSinceStart}",
             advanced.activeLap!!.distanceMetersSinceStart > baselineDistance,
         )
+        // 2. 未走 handleSectorCrossing：不新增 crossingEvent（detector 对 sector gate 未 detect）
+        assertEquals(
+            "路径 (d) 应早退于 line 98-99，不进入 handleSectorCrossing → crossingEvents 数量不变",
+            baselineCrossingEvents,
+            advanced.crossingEvents.size,
+        )
+        // 3. 未推进 nextExpectedGateIndex（sector accepted 才推进）
+        assertEquals(sectorCount + 1, advanced.nextExpectedGateIndex)
+        // 4. samples 已 append currentSample
+        assertEquals(sessionAtNoTarget.samples.size + 1, advanced.samples.size)
     }
 
     /** 路径 (e) sector rejected 携带累距 */
