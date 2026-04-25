@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blazepush.feature.test.model.LapRunConfig
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
-import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.Track
@@ -228,49 +227,13 @@ internal fun rememberStartFinishTimingCardState(
             ?.let { formatElapsedMillis(latestAcceptedCrossing.timestampMillis - it.timestampMillis) }
             ?: "--",
         currentLapElapsedLabel = formatElapsedMillis(currentLapElapsedMillis),
+        // A22 change fix-active-lap-distance-accumulator：UI 改读 engine 字段，不再自算 haversine
         currentLapDistanceLabel = formatDistanceMeters(
-            calculateDistanceSince(lapSession?.samples.orEmpty(), latestAcceptedCrossing.timestampMillis)
+            lapSession?.activeLap?.distanceMetersSinceStart ?: 0.0
         ),
         lastStartFinishTimeLabel = formatTimeOfDay(latestAcceptedCrossing.timestampMillis),
         statusLabel = baselineStatusLabel
     )
-}
-
-private fun calculateDistanceSince(samples: List<GpsSample>, crossingTimestampMillis: Long): Double {
-    val samplesSinceCrossing = samples.filter { it.timestampMillis >= crossingTimestampMillis }
-    if (samplesSinceCrossing.size < 2) return 0.0
-
-    var totalMeters = 0.0
-    for (index in 1 until samplesSinceCrossing.size) {
-        val previous = samplesSinceCrossing[index - 1]
-        val current = samplesSinceCrossing[index]
-        totalMeters += haversineDistanceMeters(
-            previous.latitude,
-            previous.longitude,
-            current.latitude,
-            current.longitude
-        )
-    }
-    return totalMeters
-}
-
-private fun haversineDistanceMeters(
-    startLatitude: Double,
-    startLongitude: Double,
-    endLatitude: Double,
-    endLongitude: Double
-): Double {
-    val earthRadiusMeters = 6_371_000.0
-    val latitudeDelta = Math.toRadians(endLatitude - startLatitude)
-    val longitudeDelta = Math.toRadians(endLongitude - startLongitude)
-    val startLatitudeRadians = Math.toRadians(startLatitude)
-    val endLatitudeRadians = Math.toRadians(endLatitude)
-
-    val a = kotlin.math.sin(latitudeDelta / 2).let { it * it } +
-        kotlin.math.cos(startLatitudeRadians) * kotlin.math.cos(endLatitudeRadians) *
-        kotlin.math.sin(longitudeDelta / 2).let { it * it }
-    val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
-    return earthRadiusMeters * c
 }
 
 private fun formatDistanceMeters(distanceMeters: Double): String =

@@ -74,6 +74,27 @@ class LapTimingEngine(
         }
 
         val updatedSamples = session.samples + currentSample
+
+        // A22 change fix-active-lap-distance-accumulator：相邻 samples 流的 haversine 增量。
+        // 增量来源 MUST 是 session.samples.lastOrNull() 与 currentSample（samples 流口径），
+        // 与 UI 旧 samples.zipWithNext() 同源；不复用 detector 用的 previousSample 参数
+        // （虽然此处通常指向同一 GpsSample，但语义来源应明示从 samples 流走，
+        // future 若 previousSample 因 ts 守卫等改变，distance 仍跟 samples 流，无需协同改）。
+        val activeLapWithDistance: ActiveLap? = session.activeLap?.let { current ->
+            val prev = session.samples.lastOrNull()
+            if (prev != null) {
+                current.copy(
+                    distanceMetersSinceStart = current.distanceMetersSinceStart +
+                        haversineDistanceMeters(
+                            prev.latitude, prev.longitude,
+                            currentSample.latitude, currentSample.longitude,
+                        ),
+                )
+            } else {
+                current  // 理论不发生：activeLap 存在 → 开圈帧已入 samples（sampleStartIndex 守卫）
+            }
+        }
+
         val startFinishDetection = detector.detect(previous = previousSample, current = currentSample, gate = track.startFinishGate)
         // A18 + A39 战役 F R4：25Hz 高频 detector 日志降级为 VERBOSE + 坐标 %.3f
         // 精度 (~100m) —— 默认 DEBUG 级别下不写盘，彻底消除每秒 25 次 I/O；
@@ -95,7 +116,9 @@ class LapTimingEngine(
             )
         }
 
-        val targetGate = expectedGate(track, session.nextExpectedGateIndex) ?: return session.copy(samples = updatedSamples)
+        // A22 路径 (d) no target gate：携带 activeLapWithDistance 累距
+        val targetGate = expectedGate(track, session.nextExpectedGateIndex)
+            ?: return session.copy(samples = updatedSamples, activeLap = activeLapWithDistance)
 
         return handleSectorCrossing(
             session = session,
@@ -103,7 +126,8 @@ class LapTimingEngine(
             previousSample = previousSample,
             currentSample = currentSample,
             updatedSamples = updatedSamples,
-            targetGate = targetGate
+            targetGate = targetGate,
+            activeLapWithDistance = activeLapWithDistance,  // A22 集中构造后传入
         )
     }
 
@@ -143,8 +167,9 @@ class LapTimingEngine(
                     lapIndex = 1,
                     startedAtMillis = crossingMillis,
                     passedGateIds = listOf(track.startFinishGate.id),
-                    sampleStartIndex = updatedSamples.lastIndex
-                )
+                    sampleStartIndex = updatedSamples.lastIndex,
+                    distanceMetersSinceStart = 0.0,  // A22 路径 (b) 首次开圈
+                ),
             )
         }
 
@@ -200,8 +225,9 @@ class LapTimingEngine(
                 lapIndex = nextLapIndex,
                 startedAtMillis = crossingMillis,
                 passedGateIds = listOf(track.startFinishGate.id),
-                sampleStartIndex = updatedSamples.lastIndex
-            )
+                sampleStartIndex = updatedSamples.lastIndex,
+                distanceMetersSinceStart = 0.0,  // A22 路径 (c) 闭圈后新 lap 重置
+            ),
         )
     }
 
@@ -228,7 +254,8 @@ class LapTimingEngine(
         previousSample: GpsSample,
         currentSample: GpsSample,
         updatedSamples: List<GpsSample>,
-        targetGate: TimingGate
+        targetGate: TimingGate,
+        activeLapWithDistance: ActiveLap?,  // A22 change fix-active-lap-distance-accumulator
     ): LapSession {
         val activeLap = session.activeLap ?: return session.copy(samples = updatedSamples)
         // A36：读 Track 的 orderedSectorGates 单点真理派生字段，不再局部 sortedBy
@@ -284,22 +311,30 @@ class LapTimingEngine(
         val updatedEvents = session.crossingEvents + allNewEvents
 
         // 期待门 rejected：state 保持不变，仅记 event（R4 B5 两档分支契约）
+        // A22 路径 (e)：携带 activeLapWithDistance 累距
         if (!expectedGateDetection.accepted) {
-            return session.copy(samples = updatedSamples, crossingEvents = updatedEvents)
+            return session.copy(
+                samples = updatedSamples,
+                crossingEvents = updatedEvents,
+                activeLap = activeLapWithDistance,
+            )
         }
 
         // 期待门 accepted：推进 nextExpectedGateIndex + SectorEntry + passedGateIds
+        // A22 路径 (f)：从 activeLapWithDistance!!.copy(...) 派生（不走本地 activeLap.copy）
+        // !! 安全：进入此分支前 line 233 `session.activeLap ?: return` 已守卫，
+        //       session.activeLap != null 保证 activeLapWithDistance != null
         return session.copy(
             samples = updatedSamples,
             nextExpectedGateIndex = session.nextExpectedGateIndex + 1,
             crossingEvents = updatedEvents,
-            activeLap = activeLap.copy(
-                passedGateIds = activeLap.passedGateIds + targetGate.id,
-                sectorEntries = activeLap.sectorEntries + SectorEntry(
+            activeLap = activeLapWithDistance!!.copy(
+                passedGateIds = activeLapWithDistance.passedGateIds + targetGate.id,
+                sectorEntries = activeLapWithDistance.sectorEntries + SectorEntry(
                     gateId = targetGate.id,
-                    crossedAtMillis = expectedCrossingMillis
-                )
-            )
+                    crossedAtMillis = expectedCrossingMillis,
+                ),
+            ),
         )
     }
 

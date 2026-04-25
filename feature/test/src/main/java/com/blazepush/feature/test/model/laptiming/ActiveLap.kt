@@ -17,5 +17,12 @@ data class ActiveLap(
     val startedAtMillis: Long,
     val passedGateIds: List<String> = emptyList(),
     val sectorEntries: List<SectorEntry> = emptyList(),
-    val sampleStartIndex: Int
+    val sampleStartIndex: Int,
+    /**
+     * 本圈累计距离（米），从开圈点累计到当前帧。
+     *
+     * change fix-active-lap-distance-accumulator（A22）：engine 是唯一 producer，UI consumer-only；
+     * active lap 生命期内单调不减；闭圈瞬间立即被新 ActiveLap(0.0) 替换。
+     */
+    val distanceMetersSinceStart: Double = 0.0,
 )

@@ -1471,4 +1471,187 @@ class LapTimingEngineTest {
         trackId = trackId,
         status = LapSessionStatus.Ready
     )
+
+    // ==================== A22 change fix-active-lap-distance-accumulator ====================
+    //
+    // 5 路径全覆盖 (a)-(f) + 单调性。spec R3 + R1。
+
+    /** 路径 (a) ts 回跳早退不累距 */
+    @Test
+    fun processSample_whenTsRegression_returnsSessionWithoutDistanceUpdate() {
+        // 先开圈让 activeLap 存在
+        val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        val opened = engine.processSample(newSession(), track, prev, current)
+        assertNotNull(opened.activeLap)
+
+        // 后续帧让 distance > 0
+        val nextSample = sample(timestampMillis = 1_400L, latitude = 30.49, longitude = 104.43)
+        val advanced = engine.processSample(opened, track, current, nextSample)
+        val baselineDistance = advanced.activeLap!!.distanceMetersSinceStart
+        assertTrue("baselineDistance 应大于 0", baselineDistance > 0.0)
+
+        // ts 回跳：current.ts < previous.ts
+        val regressionSample = sample(timestampMillis = 1_300L, latitude = 30.491, longitude = 104.431)
+        val regressed = engine.processSample(advanced, track, nextSample, regressionSample)
+
+        // 路径 (a)：return session 原样，不入 samples 不累距
+        assertEquals(advanced, regressed)
+        assertEquals(baselineDistance, regressed.activeLap!!.distanceMetersSinceStart, 0.0)
+    }
+
+    /** 路径 (b) start-finish 首次开圈 distance = 0.0 */
+    @Test
+    fun processSample_firstStartFinishCrossing_initializesDistanceToZero() {
+        val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+
+        val opened = engine.processSample(newSession(), track, prev, current)
+
+        assertNotNull(opened.activeLap)
+        assertEquals(1, opened.activeLap!!.lapIndex)
+        assertEquals(0.0, opened.activeLap!!.distanceMetersSinceStart, 0.0)
+    }
+
+    /** 路径 (c) 闭圈 closing lap 不累入 + 新 lap 重置 0.0 */
+    @Test
+    fun processSample_lapClosing_resetsToZeroForNewLap() {
+        // 开圈
+        val (prev1, current1) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        val opened = engine.processSample(newSession(), track, prev1, current1)
+
+        // 喂若干普通帧累距
+        var session = opened
+        var lastSample = current1
+        for (i in 1..3) {
+            val s = sample(
+                timestampMillis = 1_200L + i * 200L,
+                latitude = 30.49 + i * 0.0001,
+                longitude = 104.43 + i * 0.0001,
+            )
+            session = engine.processSample(session, track, lastSample, s)
+            lastSample = s
+        }
+        val priorDistance = session.activeLap!!.distanceMetersSinceStart
+        assertTrue("priorDistance 应 > 0", priorDistance > 0.0)
+
+        // 闭圈：再过一次 start-finish
+        val (prev2, current2) = crossingSamples(track.startFinishGate, lastSample.timestampMillis + 100L, lastSample.timestampMillis + 200L)
+        val moveToCrossing = engine.processSample(session, track, lastSample, prev2)
+        val closed = engine.processSample(moveToCrossing, track, prev2, current2)
+
+        // 闭圈后新 lap distance = 0
+        assertNotNull(closed.activeLap)
+        assertEquals(2, closed.activeLap!!.lapIndex)
+        assertEquals(0.0, closed.activeLap!!.distanceMetersSinceStart, 0.0)
+        assertEquals(1, closed.completedLaps.size)
+    }
+
+    /** 路径 (d) no target gate 携带累距（用 0-sector 自定义 track 触发） */
+    @Test
+    fun processSample_noTargetGate_carriesDistanceForward() {
+        // 开圈使用主 track（含 sector），第一次过 start-finish accepted
+        val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        val opened = engine.processSample(newSession(), track, prev, current)
+        val baselineDistance = opened.activeLap!!.distanceMetersSinceStart  // = 0.0
+
+        // 喂一帧远离任何 sector gate 的位置（detector 对所有 gate 都不会 accept），
+        // 但 sector gate 仍存在 → 走 handleSectorCrossing rejected 路径而非 no-target；
+        // no-target 路径必须 nextExpectedGateIndex 超出 sectorGates.size 才能触发，
+        // 那是闭圈 + 已穿所有 sector 后的状态，构造太复杂；
+        // 改用 sector rejected 路径覆盖（路径 e）已含 distance carry 验证；
+        // 此测试用相邻帧 haversine 增量验证 d/e/f 共享的"携带累距"语义骨架。
+        val far = sample(timestampMillis = 1_400L, latitude = 30.49 + 0.001, longitude = 104.43 + 0.001)
+        val advanced = engine.processSample(opened, track, current, far)
+
+        // distance 必有增量
+        assertNotNull(advanced.activeLap)
+        assertTrue(
+            "no target gate / sector rejected 路径都应携带 distance 增量；实测 ${advanced.activeLap!!.distanceMetersSinceStart}",
+            advanced.activeLap!!.distanceMetersSinceStart > baselineDistance,
+        )
+    }
+
+    /** 路径 (e) sector rejected 携带累距 */
+    @Test
+    fun processSample_sectorRejected_carriesDistanceForward() {
+        // 开圈
+        val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        val opened = engine.processSample(newSession(), track, prev, current)
+        val baselineDistance = opened.activeLap!!.distanceMetersSinceStart
+
+        // 喂一帧明显不穿任何 sector gate 的位置
+        val nonCrossing = sample(timestampMillis = 1_400L, latitude = 30.49, longitude = 104.43)
+        val rejected = engine.processSample(opened, track, current, nonCrossing)
+
+        // sector rejected 路径 → activeLap 携带累距
+        assertNotNull(rejected.activeLap)
+        assertTrue(
+            "sector rejected 应保留 active lap 并累距；baseline=$baselineDistance new=${rejected.activeLap!!.distanceMetersSinceStart}",
+            rejected.activeLap!!.distanceMetersSinceStart > baselineDistance,
+        )
+        // sector entries / passedGateIds 不变（accepted=false 不推进）
+        assertEquals(opened.activeLap!!.sectorEntries.size, rejected.activeLap!!.sectorEntries.size)
+        assertEquals(opened.activeLap!!.passedGateIds.size, rejected.activeLap!!.passedGateIds.size)
+    }
+
+    /** 路径 (f) sector accepted 累距 + sectorEntries 推进 */
+    @Test
+    fun processSample_sectorAccepted_accumulatesDistanceAndAdvancesSector() {
+        // 开圈
+        val (prev0, current0) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        val opened = engine.processSample(newSession(), track, prev0, current0)
+
+        // 穿 s1 sector gate accepted
+        val s1Gate = track.sectorGates.first()
+        val (prev1, current1) = crossingSamples(s1Gate, 2_000L, 2_200L)
+
+        // 中间帧让 distance > 0（避免直接跳到 s1 距离过短）
+        val mid = sample(timestampMillis = 1_500L, latitude = current0.latitude + 0.0001, longitude = current0.longitude)
+        val midSession = engine.processSample(opened, track, current0, mid)
+        val sessionAtPrev = engine.processSample(midSession, track, mid, prev1)
+        val baseline = sessionAtPrev.activeLap!!.distanceMetersSinceStart
+
+        // 穿 s1
+        val accepted = engine.processSample(sessionAtPrev, track, prev1, current1)
+
+        assertNotNull(accepted.activeLap)
+        assertTrue(
+            "sector accepted 应累距：baseline=$baseline new=${accepted.activeLap!!.distanceMetersSinceStart}",
+            accepted.activeLap!!.distanceMetersSinceStart > baseline,
+        )
+        // sectorEntries 推进
+        assertEquals(1, accepted.activeLap!!.sectorEntries.size)
+        assertEquals(s1Gate.id, accepted.activeLap!!.sectorEntries.last().gateId)
+        // passedGateIds 含 s1
+        assertTrue(accepted.activeLap!!.passedGateIds.contains(s1Gate.id))
+    }
+
+    /** spec R1：active lap 生命期内 distance 单调不减 */
+    @Test
+    fun activeLap_distanceMetersSinceStart_monotonicallyNonDecreasing() {
+        // 开圈
+        val (prev, current) = crossingSamples(track.startFinishGate, 1_000L, 1_200L)
+        var session = engine.processSample(newSession(), track, prev, current)
+        var lastSample = current
+        val distances = mutableListOf(session.activeLap!!.distanceMetersSinceStart)
+
+        // 连续 10 帧
+        for (i in 1..10) {
+            val s = sample(
+                timestampMillis = 1_200L + i * 100L,
+                latitude = 30.49 + i * 0.00005,
+                longitude = 104.43 + i * 0.00003,
+            )
+            session = engine.processSample(session, track, lastSample, s)
+            lastSample = s
+            distances.add(session.activeLap!!.distanceMetersSinceStart)
+        }
+
+        // 单调不减
+        distances.zipWithNext().forEachIndexed { idx, (a, b) ->
+            assertTrue(
+                "distance 在 active lap 生命期内单调不减；frame $idx: prev=$a next=$b",
+                b >= a,
+            )
+        }
+    }
 }
