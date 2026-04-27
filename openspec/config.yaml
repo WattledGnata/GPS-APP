@@ -1,0 +1,53 @@
+schema: spec-driven
+
+# 项目上下文 — 供 OpenSpec 在生成 proposal / spec 时参考
+context: |
+  领域：赛道 GPS 圈速与加减速测试 Android app（双端：接收端 gps-app + 发射端 simulator）。
+
+  技术栈：
+  - Kotlin + Gradle 多模块（`core/bluetooth`、`core/domain`、`core/data`、`feature/test`、`simulator`、`app`）
+  - Jetpack Compose + Material3（所有 LapDebug*/TestExecution 页面都是 Compose）
+  - Koin 依赖注入（见 `core/.../di/` 与 `feature/test/.../di/AppModule.kt`）
+  - Coroutines + StateFlow 作为主数据流
+  - JUnit4 单元测试（`*Test.kt`），部分测试依赖 Robolectric/Android Context 的需显式隔离
+  - Gson / 项目本地 JSON（replay 资源位于 `feature/test/src/main/assets/replay/`）
+
+  数据链路：
+  - 发射端 simulator 实现 RaceChrono BLE profile（ESP32 兼容），两个特征值：
+    - 主包 `00000003-0000-1000-8000-00805f9b34fb`（20 字节）
+    - 时间包 `00000004-0000-1000-8000-00805f9b34fb`（3 字节）
+  - 接收端 `BluetoothDataSource` 是全局唯一 `_dataFlow`，`RaceChronoParser` 做协议解析
+  - GPS 过滤走 `core/domain/.../GpsDataFilter`（中位数 + 位置-速度一致性检验）
+  - 加减速测试消费 `FilteredGpsData`；圈速消费原始 `GpsData`，刻意绕开 filter
+  - 圈速几何：`TimingGate` × gate line 相交 + 方向向量点积，`LapTimingEngine.processSample` 是纯函数
+  - 预置赛道：TFIC LPCC（`PresetTrackCatalog`），坐标契约由 `TrackCatalogTest` 锁死
+
+  约定与边界：
+  - 所有 user-facing 回复与新文档默认使用简体中文；代码/协议字段/标识符保持原文
+  - RaceChrono BLE 协议为公共协议，字段与编码**不得修改**
+  - master 已弃用，`develop` 为可发布分支；长期维护 `release+版本号` 停靠点
+  - 分支命名 `feature_ctg_YYYYMMDD_<topic>`（当前活跃：`feature_ctg_20260405_laptime_mainline`）
+  - 默认真机：华为 `8KE0219522008434`；默认模拟测试设备：`DP011011255100142`
+  - 提交用 Conventional Commits；`push` 必须逐次显式确认，不得自动 push
+  - 避免污染现有代码：新能力优先隔离到独立模块，不硬塞进现有数据流
+  - 圈速记录类功能：优先验证方案、数据结构、判定逻辑，再进入代码实现
+
+  已归档的外部参考：
+  - `docs/RaceChrono_BLE_Protocol.md`（协议权威）
+  - `docs/superpowers/plans/*.md`、`docs/superpowers/specs/*.md`（历史 superpowers 流程资料，只读参考，不新增）
+  - `docs/superpowers/reviews/*.md`（现状 review，链路/裂缝盘点，创建新 proposal 时优先引用）
+
+rules:
+  proposal:
+    - Why / What / Impact 必须清晰分节；Impact 要列出受影响的模块路径
+    - 涉及公共协议的改动要明确标注"协议兼容性"一节
+    - 涉及发射端 × 接收端双端改动的 proposal，必须分别列双端任务
+  tasks:
+    - 单个任务粒度控制在 2 小时以内；大任务先拆再写
+    - 高风险/不可逆动作（push、删除、rebase main）单独列一行并显式标注需用户确认
+    - 涉及测试的任务必须同时落地"新增/修改哪条测试"
+  spec:
+    - Requirement 语句必须含 MUST / SHALL / SHOULD
+    - 每个 Requirement 至少一个 Scenario；涉及时间/时钟/协议编码的 Requirement 至少包含一个异常场景
+    - Delta 分区标题使用英文 ADDED / MODIFIED / REMOVED
+    - Gherkin 关键字使用英文 WHEN / THEN / AND / GIVEN

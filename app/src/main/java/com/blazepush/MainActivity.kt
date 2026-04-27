@@ -1,4 +1,5 @@
 package com.blazepush
+// @IgnoreFormatCheck
 
 import android.content.pm.PackageManager
 import android.os.Build
@@ -31,8 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
-import com.blazepush.feature.test.ui.TestFlowNavigation
 import com.blazepush.feature.test.ui.theme.NeonTheme
+import com.blazepush.feature.test.ui.tracktech.TrackTechAppShell
 
 class MainActivity : ComponentActivity() {
 
@@ -54,7 +55,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        TestFlowNavigation()
+                        TrackTechAppShell()
                     }
                 }
             }

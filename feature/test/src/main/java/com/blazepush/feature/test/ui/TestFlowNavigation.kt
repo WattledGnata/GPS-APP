@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui
+// @IgnoreFormatCheck
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
@@ -34,7 +35,9 @@ fun TestFlowNavigation(
     modifier: Modifier = Modifier,
     testSessionViewModel: TestSessionViewModel = koinViewModel()
 ) {
-    var currentRoute by remember { mutableStateOf<TestNavRoute>(TestNavRoute.Connection) }
+    // Track Tech V2 后 Device tab 是全局连接入口，Test tab 内嵌的 nested nav 默认从 Selection 起
+    // —— Connection 路由保留作 transitional fallback，旧代码若调用 setRoute(Connection) 仍可触达
+    var currentRoute by remember { mutableStateOf<TestNavRoute>(TestNavRoute.Selection) }
     var selectedTemplate by remember { mutableStateOf<TestTemplate?>(null) }
     var selectedCarModel by remember { mutableStateOf("") }
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()

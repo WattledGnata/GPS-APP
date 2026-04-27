@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.material3)
     implementation("androidx.compose.foundation:foundation:1.5.0")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.runtime.livedata)
 
     implementation("androidx.navigation:navigation-compose:2.7.7")

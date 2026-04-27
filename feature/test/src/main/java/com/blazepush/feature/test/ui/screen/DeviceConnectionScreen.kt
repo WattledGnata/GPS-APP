@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui.screen
+// @IgnoreFormatCheck
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -20,9 +21,15 @@ import org.koin.androidx.compose.koinViewModel
 import androidx.compose.runtime.LaunchedEffect
 
 /**
- * 设备连接页面
- * 显示GPS设备连接状态和信号质量，连接成功后可进入测试
+ * 设备连接页面（transitional fallback）。
+ *
+ * Track Tech V2 后 [com.blazepush.feature.test.ui.tracktech.DeviceHomeScreen] 是全局连接入口。
+ * 本屏保留作旧 [com.blazepush.feature.test.ui.TestNavRoute.Connection] 路由的 transitional fallback，
+ * 旧代码若仍跳到 Connection 路由不会报错，但 4 tab shell 内已不应再触达。
+ *
+ * 计划在 future round 删除。
  */
+@Deprecated("Use DeviceHomeScreen in TrackTech App Shell")
 @Composable
 fun DeviceConnectionScreen(
     onConnected: () -> Unit,

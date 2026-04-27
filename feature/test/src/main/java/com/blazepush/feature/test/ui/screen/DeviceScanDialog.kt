@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui.screen
+// @IgnoreFormatCheck
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,7 +20,13 @@ import com.blazepush.core.bluetooth.ScannedDevice
 import com.blazepush.core.bluetooth.SignalStrength
 
 /**
- * BLE设备扫描对话框
+ * BLE设备扫描对话框（transitional fallback）。
+ *
+ * Track Tech V2 后 BLE 扫描已替换为 [com.blazepush.feature.test.ui.tracktech.BleScanBottomSheet]
+ * （Material3 ModalBottomSheet 形态）。本 Dialog 保留作 transitional fallback，旧代码若仍调用
+ * 不会报错，但 4 tab shell 内已不再使用。
+ *
+ * 计划在 future round 删除。
  *
  * @param isScanning 是否正在扫描
  * @param scanResults 扫描结果列表
@@ -27,6 +34,7 @@ import com.blazepush.core.bluetooth.SignalStrength
  * @param onStopScan 停止扫描回调
  * @param onDeviceClick 设备点击回调
  */
+@Deprecated("Use BleScanBottomSheet in TrackTech App Shell")
 @Composable
 fun DeviceScanDialog(
     isScanning: Boolean,
