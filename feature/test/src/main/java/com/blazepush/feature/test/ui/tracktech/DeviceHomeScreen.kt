@@ -181,9 +181,7 @@ fun DeviceHomeScreen(
                 leadingIcon = Icons.Filled.GpsFixed,
                 title = "GPS DETAILS",
                 subtitle = "$qualityLabel · ${gpsData.satelliteCount} sats · ${frequencyHz}Hz",
-                onClick = {
-                    Toast.makeText(context, "GPS Details · coming in next round", Toast.LENGTH_SHORT).show()
-                },
+                onClick = { navController.navigate("gps_details") },
             )
             TrackTechRow(
                 leadingIcon = Icons.Filled.HealthAndSafety,
@@ -272,14 +270,18 @@ private fun QuickStatusRow(
         MetricTile(
             label = "BLE",
             value = when (connectionState) {
-                ConnectionState.CONNECTED -> "Connected"
+                ConnectionState.CONNECTED -> "ON"
+                ConnectionState.CONNECTING -> "…"
+                else -> "—"
+            },
+            unit = null,
+            status = when (connectionState) {
+                ConnectionState.CONNECTED -> connectedName ?: "Connected"
                 ConnectionState.CONNECTING -> "Connecting"
                 else -> "Idle"
             },
-            unit = null,
-            status = connectedName,
             accentColor = TrackTechColors.Cyan,
-            valueSize = MetricSize.Small,
+            valueSize = MetricSize.Medium,
             modifier = Modifier.weight(1f),
         )
         MetricTile(

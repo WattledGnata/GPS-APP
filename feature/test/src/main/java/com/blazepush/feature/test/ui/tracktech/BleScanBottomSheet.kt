@@ -38,7 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -51,13 +50,13 @@ enum class ScanSheetState { Scanning, Found, Empty, Connecting, Failed }
 private enum class DeviceLabel(val label: String, val color: Color) {
     Recommended("Recommended", TrackTechColors.Purple),
     External("External GPS", TrackTechColors.Cyan),
-    Unsupported("Unsupported", TrackTechColors.TextMuted),
+    Unknown("Unknown", TrackTechColors.TextSecondary),
 }
 
 private fun classifyDevice(name: String): DeviceLabel = when {
     name.contains("RaceChrono", ignoreCase = true) -> DeviceLabel.Recommended
     name.contains("GPS", ignoreCase = true) -> DeviceLabel.External
-    else -> DeviceLabel.Unsupported
+    else -> DeviceLabel.Unknown
 }
 
 internal fun rssiToBars(rssi: Int): Int = when {
@@ -262,7 +261,6 @@ private fun DeviceRow(
     onClick: () -> Unit,
 ) {
     val label = classifyDevice(device.name)
-    val unsupported = label == DeviceLabel.Unsupported
     val borderColor = if (selected) TrackTechColors.Purple else TrackTechColors.BorderAlpha60
     val shape = CutCornerPanelShape(cutSize = 8.dp, cutCorners = cutCornersAll)
 
@@ -272,8 +270,7 @@ private fun DeviceRow(
             .clip(shape)
             .background(TrackTechColors.SurfaceDark, shape)
             .border(1.dp, borderColor, shape)
-            .alpha(if (unsupported) 0.55f else 1f)
-            .clickable(enabled = !unsupported, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Row(
