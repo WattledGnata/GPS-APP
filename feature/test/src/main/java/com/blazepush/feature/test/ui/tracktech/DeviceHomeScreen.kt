@@ -95,10 +95,10 @@ fun DeviceHomeScreen(
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
+    val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
     val context = LocalContext.current
 
     var showSheet by remember { mutableStateOf(false) }
-    var lastConnectedName by remember { mutableStateOf<String?>(null) }
 
     // 监听 cross-tab gating 触发的自动展开 sheet 事件
     LaunchedEffect(Unit) {
@@ -154,19 +154,18 @@ fun DeviceHomeScreen(
             satelliteCount = gpsData.satelliteCount,
             frequencyHz = frequencyHz,
             qualityLabel = qualityLabel,
-            connectedName = lastConnectedName,
+            connectedName = connectedDeviceName,
         )
 
         ConnectedDeviceCard(
             connectionState = connectionState,
             isTestReady = gpsData.isTestReady,
-            deviceName = lastConnectedName ?: "RaceChrono GPS",
+            deviceName = connectedDeviceName ?: "No device",
             onScanClick = {
                 showSheet = true
                 gpsViewModel.startScan()
             },
             onDisconnectClick = {
-                lastConnectedName = null
                 gpsViewModel.disconnect()
             },
         )

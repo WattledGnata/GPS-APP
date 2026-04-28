@@ -56,6 +56,10 @@ class GpsDataViewModel(
     private val _dataQuality = MutableStateFlow(DataQuality.Empty)
     val dataQuality: StateFlow<DataQuality> = _dataQuality.asStateFlow()
 
+    // 已连接设备名（connectDevice 时写入，DISCONNECTED 时清零）
+    private val _connectedDeviceName = MutableStateFlow<String?>(null)
+    val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
+
     // 数据统计
     private var lastDataTime = 0L
 
@@ -78,7 +82,10 @@ class GpsDataViewModel(
         viewModelScope.launch {
             connectionState
                 .filter { it == ConnectionState.DISCONNECTED }
-                .collect { resetStats() }
+                .collect {
+                    resetStats()
+                    _connectedDeviceName.value = null
+                }
         }
     }
 
@@ -153,6 +160,7 @@ class GpsDataViewModel(
      * 连接扫描到的BLE设备
      */
     fun connectDevice(device: ScannedDevice) {
+        _connectedDeviceName.value = device.name
         bleDeviceManager.connect(device.address)
     }
 
