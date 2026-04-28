@@ -83,7 +83,7 @@ class RaceChronoParser {
             val hour = remainder2 % 24
             val year = 2000 + yearOffset
 
-            val calendar = java.util.Calendar.getInstance().apply {
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
                 clear()
                 set(year, month, day + 1, hour, 0, 0)
             }

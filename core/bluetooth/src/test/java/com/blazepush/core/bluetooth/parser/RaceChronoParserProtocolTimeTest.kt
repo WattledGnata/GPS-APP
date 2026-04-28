@@ -149,7 +149,7 @@ class RaceChronoParserProtocolTimeTest {
     )
 
     private fun createGpsTimeData(timestampMillis: Long, syncBits: Int = 0): ByteArray {
-        val calendar = Calendar.getInstance().apply {
+        val calendar = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             timeInMillis = timestampMillis
         }
         val yearOffset = (calendar.get(Calendar.YEAR) - 2000).coerceAtLeast(0)
