@@ -1,7 +1,6 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,13 +27,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
+import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
 @Composable
@@ -43,6 +44,7 @@ fun TestHomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
+    val sessionViewModel = koinViewModel<TestSessionViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
@@ -50,7 +52,6 @@ fun TestHomeScreen(
     val readiness = remember(connectionState, gpsData, dataQuality) {
         TabGatingPolicy.computeTabReadiness(connectionState, gpsData, dataQuality)
     }
-    val context = LocalContext.current
 
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT ||
         dataQuality.overall == QualityLevel.GOOD
@@ -120,19 +121,9 @@ fun TestHomeScreen(
                 leadingIcon = Icons.Filled.Speed,
                 onClick = {
                     if (readiness.canEnterTestFlow) {
-                        // 进入 Test tab 内嵌的 TestFlowNavigation 选择屏 —— 当前 shell 用同 tab 渲染，
-                        // 用户实际选择测试模板会进 LapDebug / TestExecution 路径
-                        Toast.makeText(
-                            context,
-                            "Entering 0-100 test flow",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        sessionViewModel.enterSmartLaunch(TestTemplate.Acceleration0To100, "Car")
+                        navController.navigate("test_execution")
                     } else {
-                        Toast.makeText(
-                            context,
-                            "Connect a GPS device first",
-                            Toast.LENGTH_SHORT,
-                        ).show()
                         navController.navigateToTab("device")
                         if (connectionState == ConnectionState.DISCONNECTED) {
                             TrackTechEventBus.requestShowScanSheet()
@@ -146,17 +137,9 @@ fun TestHomeScreen(
                 leadingIcon = Icons.Outlined.DoNotDisturbOn,
                 onClick = {
                     if (readiness.canEnterTestFlow) {
-                        Toast.makeText(
-                            context,
-                            "Entering 100-0 test flow",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        sessionViewModel.enterSmartLaunch(TestTemplate.Braking100To0, "Car")
+                        navController.navigate("test_execution")
                     } else {
-                        Toast.makeText(
-                            context,
-                            "Connect a GPS device first",
-                            Toast.LENGTH_SHORT,
-                        ).show()
                         navController.navigateToTab("device")
                         if (connectionState == ConnectionState.DISCONNECTED) {
                             TrackTechEventBus.requestShowScanSheet()

@@ -55,6 +55,7 @@ fun TrackTechAppShell() {
                 composable("records") { RecordsHomeScreen(navController = navController) }
                 composable("device") { DeviceHomeScreen(navController = navController) }
                 composable("gps_details") { GpsDetailsScreen(navController = navController) }
+                composable("test_execution") { TrackTechTestExecutionScreen(navController = navController) }
             }
         }
     }
