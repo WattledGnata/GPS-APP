@@ -93,16 +93,11 @@ class GpsDataViewModel(
     private fun updateDataStats(data: GpsData) {
         val now = System.currentTimeMillis()
 
-        // 计算数据年龄
-        // isTimeSynced=true：timestamp 是 Unix epoch ms（RaceChrono 协议已对齐），直接差值即可。
-        // isTimeSynced=false：timestamp 是 sentinel 或 time-of-day ms，不可用于差值；
-        //   改用 lastDataTime（上次收包的本地时刻）计算包间隔。
-        // lastDataTime=0（首包或 resetStats 后）：视为刚收到，dataAge=0，避免天文数字。
-        val dataAge = when {
-            data.isTimeSynced && data.timestamp > 0 -> now - data.timestamp
-            lastDataTime > 0L -> now - lastDataTime
-            else -> 0L
-        }
+        // dataAge = "上次包到现在多久了"，用本地 System.currentTimeMillis 差值。
+        // 不使用协议 timestamp：parseGpsTimeData 用 Calendar.getInstance()（本地时区）
+        // 把 GPS UTC 时间映射到本地时区，中国 UTC+8 时差 8 小时，直接 now-timestamp
+        // 会得到天文数字，永远触发 DATA_FRESH 失败。
+        val dataAge = if (lastDataTime > 0L) now - lastDataTime else 0L
         lastDataTime = now
 
         // A28 frequency：透传 parser 1 秒滑窗结果
