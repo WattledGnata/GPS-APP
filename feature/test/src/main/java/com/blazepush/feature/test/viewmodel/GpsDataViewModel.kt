@@ -94,12 +94,14 @@ class GpsDataViewModel(
         val now = System.currentTimeMillis()
 
         // 计算数据年龄
-        // 只有 isTimeSynced=true 时 timestamp 才是 Unix epoch ms，可以做差；
-        // ESP32/NMEA 设备未同步时 timestamp 是 time-of-day ms，直接相减会产生天文数字。
-        val dataAge = if (data.isTimeSynced && data.timestamp > 0) {
-            now - data.timestamp
-        } else {
-            now - lastDataTime
+        // isTimeSynced=true：timestamp 是 Unix epoch ms（RaceChrono 协议已对齐），直接差值即可。
+        // isTimeSynced=false：timestamp 是 sentinel 或 time-of-day ms，不可用于差值；
+        //   改用 lastDataTime（上次收包的本地时刻）计算包间隔。
+        // lastDataTime=0（首包或 resetStats 后）：视为刚收到，dataAge=0，避免天文数字。
+        val dataAge = when {
+            data.isTimeSynced && data.timestamp > 0 -> now - data.timestamp
+            lastDataTime > 0L -> now - lastDataTime
+            else -> 0L
         }
         lastDataTime = now
 

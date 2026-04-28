@@ -69,9 +69,11 @@ fun GpsDetailsScreen(
         dataQuality = dataQuality,
     )
     val isReady = tabReadiness.canEnterTestFlow
-    val bleOk = connectionState == ConnectionState.CONNECTED
-    val gpsOk = gpsData.satelliteCount >= 6 && gpsData.hdop > 0.0 && gpsData.hdop < 2.0
-    val qualityOk = dataQuality.overall == QualityLevel.GOOD || dataQuality.overall == QualityLevel.EXCELLENT
+    // 4 badges 与 TabGatingPolicy 4 条件一一对应，unmetConditions 驱动
+    val bleOk = !tabReadiness.unmetConditions.contains(TabReadinessCondition.BLE_CONNECTED)
+    val freshOk = !tabReadiness.unmetConditions.contains(TabReadinessCondition.DATA_FRESH)
+    val satsOk = !tabReadiness.unmetConditions.contains(TabReadinessCondition.SATELLITES_SUFFICIENT)
+    val hdopOk = !tabReadiness.unmetConditions.contains(TabReadinessCondition.HDOP_GOOD)
 
     Column(
         modifier = modifier
@@ -88,8 +90,9 @@ fun GpsDetailsScreen(
         ReadinessHeroBanner(
             isReady = isReady,
             bleOk = bleOk,
-            gpsOk = gpsOk,
-            qualityOk = qualityOk,
+            freshOk = freshOk,
+            satsOk = satsOk,
+            hdopOk = hdopOk,
         )
 
         DetailsSection(title = "SIGNAL")
@@ -171,8 +174,9 @@ private fun ReadinessBadge(isReady: Boolean) {
 private fun ReadinessHeroBanner(
     isReady: Boolean,
     bleOk: Boolean,
-    gpsOk: Boolean,
-    qualityOk: Boolean,
+    freshOk: Boolean,
+    satsOk: Boolean,
+    hdopOk: Boolean,
 ) {
     val accent = if (isReady) TrackTechColors.Green else TrackTechColors.Red
     val heroTitle = if (isReady) "READY TO TEST" else "NOT READY"
@@ -226,9 +230,11 @@ private fun ReadinessHeroBanner(
                 ) {
                     CheckBadge(label = "BLE", ok = bleOk)
                     CheckDivider()
-                    CheckBadge(label = "GPS", ok = gpsOk)
+                    CheckBadge(label = "FRESH", ok = freshOk)
                     CheckDivider()
-                    CheckBadge(label = "QUALITY", ok = qualityOk)
+                    CheckBadge(label = "SATS", ok = satsOk)
+                    CheckDivider()
+                    CheckBadge(label = "HDOP", ok = hdopOk)
                 }
             }
         }
