@@ -381,8 +381,18 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
 private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
     val freshMs = dataQuality.dataAge
     val isFresh = freshMs < 1000L
-    val droppedStr = "%.0f".format(dataQuality.packetLoss * 100).let {
-        if (it == "0") "0" else it
+    // packetLoss 已经是 0-100 的百分比，直接格式化，不再乘 100
+    val packetLossPct = dataQuality.packetLoss
+    val droppedStr = "%.1f".format(packetLossPct)
+    val freshDisplayStr = when {
+        freshMs <= 999L -> freshMs.toString()
+        freshMs <= 9999L -> "${freshMs / 1000}.${(freshMs % 1000) / 100}s"
+        else -> "—"
+    }
+    val freshDisplayUnit: String? = when {
+        freshMs <= 999L -> "ms"
+        freshMs <= 9999L -> null
+        else -> null
     }
     val lastPacketStr = when {
         freshMs < 1000L -> "Now"
@@ -407,8 +417,8 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
             )
             DetailMetricTile(
                 label = "FRESH",
-                value = freshMs.toString(),
-                unit = "ms",
+                value = freshDisplayStr,
+                unit = freshDisplayUnit,
                 status = null,
                 dotColor = if (isFresh) TrackTechColors.Green else TrackTechColors.Red,
                 modifier = Modifier.weight(1f),
@@ -418,9 +428,9 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
             DetailMetricTile(
                 label = "DROPPED",
                 value = droppedStr,
-                unit = null,
+                unit = "%",
                 status = null,
-                dotColor = if (dataQuality.packetLoss < 0.05) TrackTechColors.Green else TrackTechColors.Red,
+                dotColor = if (packetLossPct < 5.0) TrackTechColors.Green else TrackTechColors.Red,
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(

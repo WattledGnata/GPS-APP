@@ -94,7 +94,9 @@ class GpsDataViewModel(
         val now = System.currentTimeMillis()
 
         // 计算数据年龄
-        val dataAge = if (data.timestamp > 0) {
+        // 只有 isTimeSynced=true 时 timestamp 才是 Unix epoch ms，可以做差；
+        // ESP32/NMEA 设备未同步时 timestamp 是 time-of-day ms，直接相减会产生天文数字。
+        val dataAge = if (data.isTimeSynced && data.timestamp > 0) {
             now - data.timestamp
         } else {
             now - lastDataTime
