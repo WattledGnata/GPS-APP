@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -143,6 +144,8 @@ fun DeviceHomeScreen(
                 text = "Device",
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Icon(
                 imageVector = Icons.Filled.Settings,
@@ -239,6 +242,8 @@ private fun ReadinessHero(hero: HeroState) {
                     text = hero.title,
                     style = TrackTechTypography.RacingTitleMedium,
                     color = hero.accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -246,12 +251,16 @@ private fun ReadinessHero(hero: HeroState) {
                 text = hero.subtitle,
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = hero.statusLine,
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -295,6 +304,7 @@ private fun QuickStatusRow(
             status = if (satelliteCount >= 6) "Ready" else "Low",
             accentColor = TrackTechColors.Cyan,
             valueSize = MetricSize.Medium,
+            valueKind = MetricKind.Mechanical,
             modifier = Modifier.weight(1f),
         )
         MetricTile(
@@ -304,6 +314,7 @@ private fun QuickStatusRow(
             status = if (frequencyHz >= 10) "Good" else "Slow",
             accentColor = TrackTechColors.Cyan,
             valueSize = MetricSize.Medium,
+            valueKind = MetricKind.Mechanical,
             modifier = Modifier.weight(1f),
         )
     }
@@ -338,12 +349,16 @@ private fun ConnectedDeviceCard(
                 text = "CONNECTED DEVICE",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(8.dp))
             Text(
                 text = if (isConnected) deviceName else "Not connected",
                 style = TrackTechTypography.RacingTitleMedium,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -358,6 +373,8 @@ private fun ConnectedDeviceCard(
                     text = statusText,
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(14.dp))
@@ -383,6 +400,8 @@ private fun ConnectedDeviceCard(
                         text = "SCAN",
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Purple,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Spacer(Modifier.weight(1f))
@@ -401,6 +420,8 @@ private fun ConnectedDeviceCard(
                         text = "DISCONNECT",
                         style = TrackTechTypography.UiTextLabel,
                         color = if (isConnected) TrackTechColors.Red else TrackTechColors.TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -116,6 +117,8 @@ private fun TrackTechBottomNavItem(
                 text = tab.label,
                 style = TrackTechTypography.UiTextSmall,
                 color = if (selected) TrackTechColors.TextPrimary else TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

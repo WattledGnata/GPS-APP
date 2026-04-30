@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -26,6 +27,7 @@ fun MetricTile(
     status: String? = null,
     accentColor: Color = TrackTechColors.Cyan,
     valueSize: MetricSize = MetricSize.Medium,
+    valueKind: MetricKind = MetricKind.Score,
 ) {
     CutCornerPanel(
         modifier = modifier.fillMaxWidth(),
@@ -38,12 +40,15 @@ fun MetricTile(
                 text = label,
                 style = TrackTechTypography.UiTextLabel,
                 color = accentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(6.dp))
             MetricNumber(
                 value = value,
                 unit = unit,
                 size = valueSize,
+                kind = valueKind,
                 valueColor = TrackTechColors.TextPrimary,
                 unitColor = TrackTechColors.TextSecondary,
             )
@@ -53,6 +58,8 @@ fun MetricTile(
                     text = status,
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

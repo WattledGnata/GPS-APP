@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,6 +100,8 @@ private fun RecordsTitleRow(context: Context) {
             text = "Records",
             style = TrackTechTypography.RacingTitleLarge,
             color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Icon(
             imageVector = Icons.Filled.FilterAlt,
@@ -169,6 +172,8 @@ private fun PerformanceView(context: Context) {
             text = "RECENT RUNS",
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         placeholderRecentRuns.forEach { run ->
             val (leadingIcon, title, subtitle) = recentRunRowContent(run)
@@ -220,11 +225,15 @@ private fun SpeedCurveStub() {
                     text = "SPEED CURVE",
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.Cyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = "(0-100 km/h)",
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -353,11 +362,15 @@ private fun SpeedCurveBubble(modifier: Modifier) {
                 text = "100 km/h",
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = "4.21 s",
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -434,6 +447,8 @@ private fun LapsView(context: Context) {
             text = "SESSION HISTORY",
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         placeholderLapSessions.forEach { session ->
             TrackTechRow(
@@ -469,12 +484,16 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
                         text = "CURRENT TRACK RECORD",
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Purple,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = track.trackName,
                         style = TrackTechTypography.RacingTitleMedium,
                         color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Column {
@@ -482,16 +501,22 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
                         text = "BEST LAP",
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Cyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = track.bestLapTime,
-                        style = TrackTechTypography.MetricMedium,
+                        style = TrackTechTypography.ScoreMedium,
                         color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = track.bestLapDate,
                         style = TrackTechTypography.UiTextSmall,
                         color = TrackTechColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -601,6 +626,8 @@ private fun SegmentedControl(
                     text = opt,
                     style = TrackTechTypography.UiTextLabel,
                     color = if (isSelected) TrackTechColors.TextPrimary else TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

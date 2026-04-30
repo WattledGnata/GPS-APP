@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -350,6 +351,7 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
                 unit = null,
                 status = if (satsOk) "Good" else "Low",
                 dotColor = if (satsOk) TrackTechColors.Green else TrackTechColors.Red,
+                valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
@@ -358,6 +360,7 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
                 unit = null,
                 status = if (hdopOk) "Good" else "Poor",
                 dotColor = if (hdopOk) TrackTechColors.Green else TrackTechColors.Red,
+                valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -390,14 +393,15 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
     // packetLoss 已经是 0-100 的百分比，直接格式化，不再乘 100
     val packetLossPct = dataQuality.packetLoss
     val droppedStr = "%.1f".format(packetLossPct)
+    // D9: 字母 s / ms 拆到 unit，避免 Mechanical (DSEG7) 渲染字母变形
     val freshDisplayStr = when {
         freshMs <= 999L -> freshMs.toString()
-        freshMs <= 9999L -> "${freshMs / 1000}.${(freshMs % 1000) / 100}s"
+        freshMs <= 9999L -> "%.1f".format(freshMs / 1000.0)
         else -> "—"
     }
     val freshDisplayUnit: String? = when {
         freshMs <= 999L -> "ms"
-        freshMs <= 9999L -> null
+        freshMs <= 9999L -> "s"
         else -> null
     }
     val lastPacketStr = when {
@@ -419,6 +423,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 unit = "Hz",
                 status = null,
                 dotColor = if (frequencyHz >= 10) TrackTechColors.Green else TrackTechColors.Red,
+                valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
@@ -427,6 +432,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 unit = freshDisplayUnit,
                 status = null,
                 dotColor = if (isFresh) TrackTechColors.Green else TrackTechColors.Red,
+                valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -437,6 +443,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 unit = "%",
                 status = null,
                 dotColor = if (packetLossPct < 5.0) TrackTechColors.Green else TrackTechColors.Red,
+                valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
@@ -610,6 +617,7 @@ private fun DetailMetricTile(
     dotColor: Color,
     modifier: Modifier = Modifier,
     valueColor: Color = TrackTechColors.TextPrimary,
+    valueKind: MetricKind = MetricKind.Score,
 ) {
     CutCornerPanel(
         modifier = modifier.fillMaxWidth(),
@@ -623,13 +631,20 @@ private fun DetailMetricTile(
                 text = label,
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = value,
-                    style = TrackTechTypography.MetricMedium,
+                    style = when (valueKind) {
+                        MetricKind.Mechanical -> TrackTechTypography.MechanicalMedium
+                        MetricKind.Score -> TrackTechTypography.ScoreMedium
+                    },
                     color = valueColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (!unit.isNullOrEmpty()) {
                     Spacer(Modifier.width(4.dp))
@@ -638,6 +653,8 @@ private fun DetailMetricTile(
                         style = TrackTechTypography.UiTextSmall,
                         color = TrackTechColors.TextSecondary,
                         modifier = Modifier.padding(bottom = 5.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -654,6 +671,8 @@ private fun DetailMetricTile(
                         text = status,
                         style = TrackTechTypography.UiTextSmall,
                         color = TrackTechColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

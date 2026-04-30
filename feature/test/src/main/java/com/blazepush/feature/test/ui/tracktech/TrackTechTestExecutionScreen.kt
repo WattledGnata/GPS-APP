@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -124,6 +125,8 @@ fun TrackTechTestExecutionScreen(
             color = TrackTechColors.Purple,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(4.dp))
         BigSpeedDisplay(speed = speed)
@@ -137,6 +140,8 @@ fun TrackTechTestExecutionScreen(
             color = TrackTechColors.Purple,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(4.dp))
         ElapsedTimeDisplay(elapsedSeconds = elapsedSeconds)
@@ -304,11 +309,15 @@ private fun TestTypeHeader(currentMode: TestMode) {
                     text = speedLabel,
                     style = TrackTechTypography.RacingTitleMedium,
                     color = TrackTechColors.Purple,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = typeLabel,
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -381,17 +390,23 @@ private fun PhaseBanner(
                 text = phaseTag,
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple.copy(alpha = 0.85f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = phaseTitle,
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = phaseSub,
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -407,14 +422,18 @@ private fun BigSpeedDisplay(speed: Double) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = "%.1f".format(speed),
-                    style = TrackTechTypography.MetricHero,
+                    style = TrackTechTypography.MechanicalHero,
                     color = TrackTechColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Text(
                 text = "km/h",
                 style = TrackTechTypography.UiTextBody,
                 color = TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -429,8 +448,10 @@ private fun ElapsedTimeDisplay(elapsedSeconds: Double) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = "%.2f".format(elapsedSeconds),
-                style = TrackTechTypography.MetricMedium,
+                style = TrackTechTypography.ScoreMedium,
                 color = TrackTechColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.width(4.dp))
             Text(
@@ -438,6 +459,8 @@ private fun ElapsedTimeDisplay(elapsedSeconds: Double) {
                 style = TrackTechTypography.UiTextBody,
                 color = TrackTechColors.TextMuted,
                 modifier = Modifier.padding(bottom = 4.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -510,23 +533,31 @@ private fun ProgressPanel(
                 text = "0",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "$displayPct%",
                     style = TrackTechTypography.RacingTitleMedium,
                     color = TrackTechColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = targetLabel,
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Text(
                 text = "100",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -600,6 +631,8 @@ private fun CancelOrDoneButton(
             text = label,
             style = TrackTechTypography.UiTextLabel,
             color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

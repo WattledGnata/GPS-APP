@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -86,6 +87,8 @@ fun TestHomeScreen(
                 text = "Drive Test",
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.HelpOutline,
@@ -114,6 +117,8 @@ fun TestHomeScreen(
                 text = "PERFORMANCE TEST",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             PrimaryActionPanel(
                 title = "0-100",
@@ -159,6 +164,8 @@ fun TestHomeScreen(
                 text = "LATEST RESULT",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -204,6 +211,8 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
                 text = "SPEED",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(8.dp))
             Box {
@@ -211,6 +220,7 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
                     value = speed.toString(),
                     unit = "km/h",
                     size = MetricSize.Hero,
+                    kind = MetricKind.Mechanical,
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -219,12 +229,16 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
                     text = "STATUS",
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = if (isReady) "READY" else "STANDBY",
                     style = TrackTechTypography.UiTextLabel,
                     color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

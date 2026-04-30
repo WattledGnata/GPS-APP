@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -90,6 +91,8 @@ fun LapsHomeScreen(
                 text = "Laps",
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.HelpOutline,
@@ -161,6 +164,8 @@ fun LapsHomeScreen(
                 text = "RECENT BEST",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             MetricTile(
                 label = currentTrackName.uppercase(),
@@ -181,6 +186,8 @@ fun LapsHomeScreen(
                 text = "NEARBY TRACKS",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             listOf("Shanghai Tianma", "TFIC LPCC", "Coming soon").forEach { name ->
                 TrackTechRow(
@@ -213,12 +220,16 @@ private fun CurrentTrackPanel(trackName: String) {
                 text = "CURRENT TRACK",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(8.dp))
             Text(
                 text = trackName,
                 style = TrackTechTypography.RacingTitleMedium,
                 color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(12.dp))
             Box(
@@ -232,6 +243,8 @@ private fun CurrentTrackPanel(trackName: String) {
                     text = "TRACK PREVIEW · PLACEHOLDER",
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
