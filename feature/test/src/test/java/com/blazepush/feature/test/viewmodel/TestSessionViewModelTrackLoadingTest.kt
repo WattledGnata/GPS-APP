@@ -6,6 +6,7 @@
 package com.blazepush.feature.test.viewmodel
 
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
@@ -159,6 +160,7 @@ class TestSessionViewModelTrackLoadingTest {
             gpsDataFilter = GpsDataFilter(),
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
+            telemetryRepository = mock(TelemetryRepository::class.java),
         )
     }
 

@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.viewmodel
 
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
@@ -36,6 +37,14 @@ import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
 import java.io.File
 
+/**
+ * TestSessionViewModel 圈速 / 加减速测试相关单元测试。
+ * 覆盖 lap session 全链路（startSession / writeSample / writeCrossing / endSession）+ replay catalog + bridgeGpsToLapTiming。
+ *
+ * @author CC
+ * @description TestSessionViewModel lap-mode unit tests
+ * @date 2026-04-30
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TestSessionViewModelTrackLapTest {
 
@@ -49,6 +58,9 @@ class TestSessionViewModelTrackLapTest {
     private var gpsFlow = MutableStateFlow(emptyGpsSample())
     private var connectionState = MutableStateFlow(ConnectionState.CONNECTED)
 
+    /**
+     * 选择 lap debug 模式后 lapRunConfig 应反映给定 trackId。
+     */
     @Test
     fun selectingLapDebugModeWithTrack_storesLapRunConfig() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -68,6 +80,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * TFIC 预设 trackId 进入 lap debug 选择流程后 ViewModel 状态正确。
+     */
     @Test
     fun selectingLapDebugModeWithTficPreset_entersLapDebugSelectionFlow() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -88,6 +103,9 @@ class TestSessionViewModelTrackLapTest {
     }
 
 
+    /**
+     * 运行时 replay catalog 使用 generated track geometry。
+     */
     @Test
     fun lapDebugMode_runtimeReplayCatalogUsesGeneratedTrackGeometry() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -113,6 +131,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * track debug summary 包含 runtime geometry metadata。
+     */
     @Test
     fun lapDebugMode_trackDebugSummaryIncludesRuntimeGeometryMetadata() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -127,7 +148,7 @@ class TestSessionViewModelTrackLapTest {
             val summary = viewModel.currentLapTrackDebugSummary()
 
             assertFalse(summary.isNullOrBlank())
-            assertTrue(summary!!.contains("trackId=preset-tfic-lpcc"))
+            assertTrue(requireNotNull(summary).contains("trackId=preset-tfic-lpcc"))
             assertTrue(summary.contains("source=Generated"))
             assertTrue(summary.contains("layoutName=REAL_TRACK_REPLAY"))
             assertTrue(summary.contains("startFinish="))
@@ -141,6 +162,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * replay 对齐的 track catalog 产生 accepted start/finish 过线事件。
+     */
     @Test
     fun lapDebugMode_replayAlignedTrackCatalogProducesAcceptedStartFinishCrossing() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -167,6 +191,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * 第二次 start/finish 过线即使 sector 链不完整也应闭合 lap。
+     */
     @Test
     fun lapDebugMode_secondStartFinishClosesLapEvenWhenSectorChainIsIncomplete() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -194,6 +221,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * lap debug 把 TFIC GPS sample 桥接进 lap session，stop 后状态保留。
+     */
     @Test
     fun lapDebugMode_bridgesTficGpsSamplesIntoLapSessionAndRetainsStateAfterStop() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -238,6 +268,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * 重新进入 lap debug 创建全新 ready session，不带前次 sample 或 crossing。
+     */
     @Test
     fun lapDebugMode_reentryCreatesFreshReadySessionWithoutPreviousSamplesOrCrossings() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -325,7 +358,8 @@ class TestSessionViewModelTrackLapTest {
             smartTestLauncher = mock(com.blazepush.core.domain.usecase.SmartTestLauncher::class.java),
             gpsDataFilter = gpsDataFilter,
             trackCatalog = trackCatalog,
-            lapTimingEngine = LapTimingEngine()
+            lapTimingEngine = LapTimingEngine(),
+            telemetryRepository = mock(TelemetryRepository::class.java),
         )
     }
 
@@ -402,6 +436,9 @@ class TestSessionViewModelTrackLapTest {
 
     // ==================== v2 (fix-laptime-clock-source-integrity) ====================
 
+    /**
+     * bridgeGpsToLapTiming 时间未同步时跳过该帧并重置 prev。
+     */
     @Test
     fun bridgeGpsToLapTiming_skipsFrameWhenTimeNotSynced_andResetsPrev() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -465,6 +502,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * preTrigger buffer 拒绝未同步的 GPS 帧。
+     */
     @Test
     fun preTriggerBuffer_rejectsUnsyncedFrames() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -506,6 +546,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * Preparing 阶段未同步帧不触发 startTest。
+     */
     @Test
     fun processFilteredData_preparingPhase_doesNotTriggerWhenUnsynced() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -541,6 +584,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * Running 阶段忽略未同步帧（不污染 dataPoints）。
+     */
     @Test
     fun processFilteredData_runningPhase_ignoresUnsyncedFrames() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -626,6 +672,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * launchStatus 的 lastDataAge 用 elapsedRealtime 而非 GPS 时间戳。
+     */
     @Test
     fun launchStatus_lastDataAgeUsesElapsedRealtime_notGpsTimestamp() = runTest {
         Dispatchers.setMain(dispatcher)
@@ -673,6 +722,9 @@ class TestSessionViewModelTrackLapTest {
     //   - bridge 段 3（正常推进）调 engine → session.samples += currentSample
     //   构造"回跳后紧跟一帧 ts 在 回跳帧 / 前帧 之间"的场景可硬区分 lastLapGpsSample 是否被污染。
 
+    /**
+     * 首帧 lap GPS sample 后 lastLapGpsSample 应更新供下一帧用。
+     */
     @Test
     fun bridgeGpsToLapTiming_firstSample_updatesLastLapGpsSampleForNextFrame() = runTest {
         // R4 Scenario 1：首样本 MUST 赋 lastLapGpsSample，下一帧才能进入 engine
@@ -722,6 +774,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * bridgeGpsToLapTiming 丢弃时间戳回退的 sample。
+     */
     @Test
     fun bridgeGpsToLapTiming_dropsSamplesWithRegressingTimestamp() = runTest {
         // R4 Scenario 2：ts 回跳帧 MUST 被 bridge 段 2 整帧丢弃
@@ -759,6 +814,9 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    /**
+     * 回退 sample 被丢弃后，下一个前进 sample 应基于上一帧处理。
+     */
     @Test
     fun bridgeGpsToLapTiming_afterRegressionDropped_nextForwardSampleIsProcessedAgainstPreviousFrame() = runTest {
         // R4 Scenario 3：回跳帧被丢弃后，lastLapGpsSample MUST 保持为回跳之前的帧
@@ -814,5 +872,35 @@ class TestSessionViewModelTrackLapTest {
         } finally {
             Dispatchers.resetMain()
         }
+    }
+
+    // ---- lapIndexForCrossing 语义单元测试 ----
+
+    @Test
+    fun `lapIndexForCrossing - opening first lap uses new index not zero`() {
+        // prev=0 意味着尚无圈速，首次过线后 updated=1（第一圈开始）
+        val result = TestSessionViewModel.lapIndexForCrossing(previousLapIndex = 0, updatedLapIndex = 1)
+        assertEquals("开圈事件应使用新 index 1，而不是 0", 1, result)
+    }
+
+    @Test
+    fun `lapIndexForCrossing - closing lap uses old index not drifted`() {
+        // prev=1（圈1进行中），过线闭圈后 updated=2（圈2开始）
+        // 该过线事件属于正在结束的圈1，应写 index=1
+        val result = TestSessionViewModel.lapIndexForCrossing(previousLapIndex = 1, updatedLapIndex = 2)
+        assertEquals("闭圈事件不能漂移到下一圈，应使用旧 index 1", 1, result)
+    }
+
+    @Test
+    fun `lapIndexForCrossing - sector crossing uses current lap index`() {
+        // sector 过线不改变 currentLapIndex（prev==updated）
+        val result = TestSessionViewModel.lapIndexForCrossing(previousLapIndex = 2, updatedLapIndex = 2)
+        assertEquals("sector 事件应使用当前圈 index 2", 2, result)
+    }
+
+    @Test
+    fun `lapIndexForCrossing - closing lap 3 uses index 3`() {
+        val result = TestSessionViewModel.lapIndexForCrossing(previousLapIndex = 3, updatedLapIndex = 4)
+        assertEquals("闭圈事件不漂移，仍为 3", 3, result)
     }
 }

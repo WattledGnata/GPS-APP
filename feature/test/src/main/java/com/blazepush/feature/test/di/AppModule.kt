@@ -6,9 +6,9 @@ import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
 import com.blazepush.core.data.local.AppDatabase
-import com.blazepush.core.data.local.file.TestDataFileStorage
 import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.data.repository.CarModelRepository
+import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
@@ -48,6 +48,8 @@ val databaseModule = module {
     single { get<AppDatabase>().carModelDao() }
     single { get<AppDatabase>().bluetoothDeviceDao() }
     single { get<AppDatabase>().speedSegmentDao() }
+    single { get<AppDatabase>().telemetrySessionDao() }
+    single { get<AppDatabase>().crossingEventDao() }
 }
 
 /**
@@ -64,10 +66,10 @@ val bluetoothModule = module {
  */
 val repositoryModule = module {
     single { GpsDataRepository(get()) }
-    single { TestResultRepository(get(), get(), get()) }
+    single { TestResultRepository(get(), get()) }
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
-    single { TestDataFileStorage(androidContext()) }
+    single { TelemetryRepository(androidContext(), get(), get()) }
 }
 
 /**
@@ -119,7 +121,7 @@ private inline fun <reified T : Throwable> Throwable.findInCauseChain(): T? {
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
     single { GpsDataViewModel(get(), get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
 

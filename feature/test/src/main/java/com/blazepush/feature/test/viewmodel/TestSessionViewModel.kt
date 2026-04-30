@@ -15,9 +15,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TelemetryCrossingEvent
+import com.blazepush.core.domain.model.TelemetrySample
+import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.model.TestSession
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
@@ -58,7 +62,8 @@ class TestSessionViewModel(
     private val smartTestLauncher: SmartTestLauncher = SmartTestLauncher(),
     private val gpsDataFilter: GpsDataFilter = GpsDataFilter(),
     private val trackCatalog: TrackCatalog,
-    private val lapTimingEngine: LapTimingEngine
+    private val lapTimingEngine: LapTimingEngine,
+    private val telemetryRepository: TelemetryRepository,
 ) : ViewModel() {
 
     companion object {
@@ -69,6 +74,13 @@ class TestSessionViewModel(
         private const val TRIGGER_CONFIRMATION_COUNT = 5
         private const val STANDSTILL_SPEED_THRESHOLD = 3.0
         private const val STANDSTILL_CONFIRMATION_COUNT = 3
+
+        /**
+         * 开圈（prev==0 → updated>0）用新 index；闭圈和 sector 用旧 index。
+         * 避免 start/finish 闭圈后 currentLapIndex 已推进导致事件错位到下一圈。
+         */
+        internal fun lapIndexForCrossing(previousLapIndex: Int, updatedLapIndex: Int): Int =
+            if (previousLapIndex == 0 && updatedLapIndex > 0) updatedLapIndex else previousLapIndex
     }
 
     private val _testState = MutableStateFlow<TestState>(TestState.Idle)
@@ -94,6 +106,13 @@ class TestSessionViewModel(
 
     private var lastLapGpsSample: GpsSample? = null
     private var isLapRecording = false
+
+    private var activeTestSessionId: String? = null
+    private var activeTestStartTs: Long? = null
+
+    private var activeLapSessionId: String? = null
+    private var activeLapStartSystemTs: Long? = null
+    private var lastWrittenCrossingCount: Int = 0
 
     private val _launchStatus = MutableStateFlow(
         SmartTestLauncher.LaunchStatus(
@@ -173,6 +192,10 @@ class TestSessionViewModel(
         _latestLapRecords.value = emptyList()
         lastLapGpsSample = null
         isLapRecording = true
+        lastWrittenCrossingCount = 0
+        // session 懒启动：锚点在此记录，writer 在第一帧到达段3时 inline 创建
+        activeLapStartSystemTs = System.currentTimeMillis()
+        activeLapSessionId = null
 
         FileLogger.d(TAG, "lapDebugTrackSummary: ${buildTrackDebugSummary(track)}")
     }
@@ -181,6 +204,7 @@ class TestSessionViewModel(
         isLapRecording = false
         _lapSession.value = _lapSession.value?.copy(status = LapSessionStatus.Finished)
         lastLapGpsSample = null
+        endActiveLapSession()
     }
 
     fun exitLapDebugMode() {
@@ -190,6 +214,15 @@ class TestSessionViewModel(
         _lapRunConfig.value = null
         _lapSession.value = null
         _currentMode.value = TestMode.Acceleration
+        endActiveLapSession()
+    }
+
+    private fun endActiveLapSession() {
+        val sessionId = activeLapSessionId ?: return
+        activeLapSessionId = null
+        activeLapStartSystemTs = null
+        lastWrittenCrossingCount = 0
+        viewModelScope.launch { telemetryRepository.endSession(sessionId) }
     }
 
     fun skipCountdown() {
@@ -229,7 +262,7 @@ class TestSessionViewModel(
         }
     }
 
-    private fun processFilteredData(filteredData: FilteredGpsData) {
+    private suspend fun processFilteredData(filteredData: FilteredGpsData) {
         when (val state = _testState.value) {
             is TestState.Preparing -> {
                 // Requirement 3.5 (a)：未同步帧不触发测试转 Running
@@ -247,6 +280,18 @@ class TestSessionViewModel(
                 // 会溢出污染 0-100 用时等结果计算。Preparing / Running 两分支必须对称守卫。
                 if (!filteredData.raw.isTimeSynced) return
                 state.session.addFilteredDataPoint(filteredData)
+                val anchorTs = activeTestStartTs
+                if (anchorTs != null) {
+                    telemetryRepository.writeSample(
+                        TelemetrySample(
+                            tsDeltaMs = filteredData.timestamp - anchorTs,
+                            lat = filteredData.latitude,
+                            lon = filteredData.longitude,
+                            speedKmh = filteredData.speed,
+                            bearingDeg = filteredData.bearing,
+                        )
+                    )
+                }
                 if (state.session.template.shouldEnd(filteredData.raw)) {
                     finishTest(state.session)
                 }
@@ -301,7 +346,7 @@ class TestSessionViewModel(
         }
     }
 
-    private fun startTest(template: TestTemplate, carModel: String, filteredData: FilteredGpsData) {
+    private suspend fun startTest(template: TestTemplate, carModel: String, filteredData: FilteredGpsData) {
         consecutiveTriggerCount = 0
         val lockedPreTriggerBuffer = preTriggerBuffer.toList()
 
@@ -315,6 +360,23 @@ class TestSessionViewModel(
         session.markStarted(filteredData, lockedPreTriggerBuffer)
 
         _testState.value = TestState.Running(session)
+
+        // startSession 在此处 inline 完成，保证下一帧进入 Running 时 writer 已就绪
+        val anchorTs = lockedPreTriggerBuffer.firstOrNull()?.timestamp ?: filteredData.timestamp
+        activeTestStartTs = anchorTs
+        val sessionId = telemetryRepository.startSession(TelemetrySessionType.PERFORMANCE_TEST)
+        activeTestSessionId = sessionId
+        for (frame in lockedPreTriggerBuffer) {
+            telemetryRepository.writeSample(
+                TelemetrySample(
+                    tsDeltaMs = frame.timestamp - anchorTs,
+                    lat = frame.latitude,
+                    lon = frame.longitude,
+                    speedKmh = frame.speed,
+                    bearingDeg = frame.bearing,
+                )
+            )
+        }
 
         FileLogger.d(TAG, "startTest: session.startTime=${session.startTime}, triggerTime=${session.triggerTime}")
         FileLogger.d(TAG, "startTest: dataPoints.size=${session.dataPoints.size}")
@@ -332,7 +394,7 @@ class TestSessionViewModel(
         return buildTrackDebugSummary(track)
     }
 
-    private fun bridgeGpsToLapTiming(gpsData: GpsData) {
+    private suspend fun bridgeGpsToLapTiming(gpsData: GpsData) {
         val config = _lapRunConfig.value ?: return
         if (_currentMode.value != TestMode.LapDebug || !isLapRecording) return
 
@@ -385,6 +447,25 @@ class TestSessionViewModel(
 
         // 段 3：正常推进
         lastLapGpsSample = currentSample
+
+        // 8.2：GPS 样本写入二进制文件
+        // activeLapStartSystemTs != null 表示 lap 模式已激活；session 在首帧懒启动，保证 writer 就绪
+        val lapAnchorTs = activeLapStartSystemTs
+        if (lapAnchorTs != null) {
+            if (activeLapSessionId == null) {
+                activeLapSessionId = telemetryRepository.startSession(TelemetrySessionType.LAP_SESSION)
+            }
+            telemetryRepository.writeSample(
+                TelemetrySample(
+                    tsDeltaMs = gpsData.timestamp - lapAnchorTs,
+                    lat = gpsData.latitude,
+                    lon = gpsData.longitude,
+                    speedKmh = gpsData.speed,
+                    bearingDeg = gpsData.bearing,
+                )
+            )
+        }
+
         val updatedSession = lapTimingEngine.processSample(
             session = currentSession,
             track = track,
@@ -403,6 +484,45 @@ class TestSessionViewModel(
 
         _lapSession.value = updatedSession
         _latestLapRecords.value = updatedSession.completedLaps
+
+        // 4.2：检测圈速完成，5 秒后触发 settle flush
+        if (updatedSession.completedLaps.size > currentSession.completedLaps.size) {
+            viewModelScope.launch {
+                delay(5_000L)
+                telemetryRepository.flush()
+            }
+        }
+
+        // 8.3：检测新过线事件并写入 Room（事务保障）
+        // lapIndex 用 currentSession（processSample 前）的值，避免闭圈后 index 已推进导致错位
+        val newCrossings = updatedSession.crossingEvents
+        val prevCount = lastWrittenCrossingCount
+        if (newCrossings.size > prevCount) {
+            val lapSessionId = activeLapSessionId
+            if (lapSessionId != null) {
+                val lapIndexAtCrossing = lapIndexForCrossing(
+                    previousLapIndex = currentSession.currentLapIndex,
+                    updatedLapIndex = updatedSession.currentLapIndex,
+                )
+                val toWrite = newCrossings.subList(prevCount, newCrossings.size)
+                lastWrittenCrossingCount = newCrossings.size
+                toWrite.forEach { crossing ->
+                    telemetryRepository.writeCrossing(
+                        TelemetryCrossingEvent(
+                            sessionId = lapSessionId,
+                            lapIndex = lapIndexAtCrossing,
+                            crossingTimestampMs = crossing.timestampMillis,
+                            speedKmh = crossing.directionalSpeedMps?.let { it * 3.6 } ?: 0.0,
+                            gateId = crossing.gateId,
+                            gateType = crossing.gateType.name,
+                            accepted = crossing.accepted,
+                            reason = crossing.reason.name,
+                            directionScore = crossing.directionScore,
+                        )
+                    )
+                }
+            }
+        }
     }
 
     private fun createLapSession(trackId: String): LapSession {
@@ -468,8 +588,19 @@ class TestSessionViewModel(
         isFinishing = true
 
         viewModelScope.launch {
-            val dataFilePath = "pending"
-            val result = calculateResultUseCase(session, dataFilePath)
+            val sessionId = activeTestSessionId
+            if (sessionId != null) {
+                telemetryRepository.endSession(sessionId)
+                activeTestSessionId = null
+            }
+            activeTestStartTs = null
+
+            val binaryFilePath = if (sessionId != null) {
+                telemetryRepository.getSession(sessionId)?.binaryFilePath ?: ""
+            } else {
+                ""
+            }
+            val result = calculateResultUseCase(session, binaryFilePath)
             testResultRepository.saveResult(result)
             _testState.value = TestState.Completed(result)
         }

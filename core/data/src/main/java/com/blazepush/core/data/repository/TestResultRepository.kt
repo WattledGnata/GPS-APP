@@ -4,29 +4,28 @@ import com.blazepush.core.data.local.dao.SpeedSegmentDao
 import com.blazepush.core.data.local.dao.TestRecordDao
 import com.blazepush.core.data.local.entity.SpeedSegmentEntity
 import com.blazepush.core.data.local.entity.TestRecordEntity
-import com.blazepush.core.data.local.file.TestDataFileStorage
 import com.blazepush.core.domain.model.SpeedSegment
 import com.blazepush.core.domain.model.TestResult
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 
 /**
- * 测试结果仓库
- * 元数据存数据库，原始数据点存文件
+ * 加减速测试记录持久化（A56 后已不再用 JSON dataFilePath，改走 binary file path）。
+ *
+ * @author CC
+ * @description test result Room persistence
+ * @date 2026-04-30
  */
 class TestResultRepository(
     private val testRecordDao: TestRecordDao,
     private val speedSegmentDao: SpeedSegmentDao,
-    private val fileStorage: TestDataFileStorage
 ) {
     val testResultsFlow: Flow<List<TestRecordEntity>> =
         testRecordDao.getAllTestRecordsFlow()
 
+    /**
+     * 保存测试结果 + 速度分段；dataFilePath 现指向 binary chunk file。
+     */
     suspend fun saveResult(result: TestResult) {
-        // 1. 保存原始数据点到文件
-        val filePath = fileStorage.saveDataPoints(result.id, result.dataPoints)
-
-        // 2. 保存元数据到数据库
         val entity = TestRecordEntity(
             id = result.id,
             testTemplateId = result.template.id,
@@ -40,11 +39,10 @@ class TestResultRepository(
             totalDistance = result.totalDistance,
             avgAcceleration = result.avgAcceleration,
             maxAcceleration = result.maxAcceleration,
-            dataFilePath = filePath
+            dataFilePath = result.dataFilePath,
         )
         testRecordDao.insertTestRecord(entity)
 
-        // 3. 保存分段数据到数据库
         val segmentEntities = result.segments.map { seg ->
             SpeedSegmentEntity(
                 testRecordId = result.id,
@@ -57,14 +55,26 @@ class TestResultRepository(
         speedSegmentDao.insertSegments(segmentEntities)
     }
 
+    /**
+     * 按 testId 拉所有速度分段并转换为 domain model。
+     */
     suspend fun getSegments(testId: String): List<SpeedSegment> {
         return speedSegmentDao.getSegmentsByTestIdSync(testId).map {
             SpeedSegment(it.startSpeed, it.endSpeed, it.time, it.distance)
         }
     }
 
+    /**
+     * 删除测试记录，并清理对应 binary 文件（安全边界限定 /telemetry/ 目录内）。
+     */
     suspend fun deleteResult(entity: TestRecordEntity) {
-        fileStorage.deleteDataFile(entity.dataFilePath)
         testRecordDao.deleteTestRecord(entity)
+        if (entity.dataFilePath.isNotEmpty()) {
+            val file = java.io.File(entity.dataFilePath)
+            // 安全边界：只删除 app telemetry 目录内的文件，防止路径穿越
+            if (file.canonicalPath.contains("/telemetry/")) {
+                file.delete()
+            }
+        }
     }
 }
