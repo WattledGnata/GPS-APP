@@ -3,6 +3,8 @@ package com.blazepush.feature.test.ui.tracktech
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,18 +21,12 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.runtime.remember
 
 data class TrackTechTabItem(
     val route: String,
@@ -47,13 +43,11 @@ val DefaultTrackTechTabs = listOf(
 
 @Composable
 fun TrackTechBottomNav(
-    navController: NavController,
+    currentPage: Int,
+    onTabSelected: (Int) -> Unit,
     tabs: List<TrackTechTabItem> = DefaultTrackTechTabs,
     modifier: Modifier = Modifier,
 ) {
-    val backStack by navController.currentBackStackEntryAsState()
-    val currentRoute = backStack?.destination?.route
-
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -63,20 +57,14 @@ fun TrackTechBottomNav(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        tabs.forEach { tab ->
-            val selected = currentRoute == tab.route
+        tabs.forEachIndexed { index, tab ->
+            val selected = currentPage == index
             TrackTechBottomNavItem(
                 tab = tab,
                 selected = selected,
                 onClick = {
-                    if (currentRoute != tab.route) {
-                        navController.navigate(tab.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+                    if (currentPage != index) {
+                        onTabSelected(index)
                     }
                 },
                 modifier = Modifier.weight(1f),

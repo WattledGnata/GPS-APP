@@ -29,7 +29,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.model.TestTemplate
@@ -41,10 +40,11 @@ import org.koin.compose.koinInject
 @Composable
 fun TestHomeScreen(
     navController: NavController,
+    onTabSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
-    val sessionViewModel = koinViewModel<TestSessionViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
@@ -98,7 +98,7 @@ fun TestHomeScreen(
         TrackTechStatusStrip(
             items = statusItems,
             onClick = {
-                navController.navigateToTab("device")
+                onTabSelected(TabIndex.Device)
             },
         )
 
@@ -124,7 +124,7 @@ fun TestHomeScreen(
                         sessionViewModel.enterSmartLaunch(TestTemplate.Acceleration0To100, "Car")
                         navController.navigate("test_execution")
                     } else {
-                        navController.navigateToTab("device")
+                        onTabSelected(TabIndex.Device)
                         if (connectionState == ConnectionState.DISCONNECTED) {
                             TrackTechEventBus.requestShowScanSheet()
                         }
@@ -140,7 +140,7 @@ fun TestHomeScreen(
                         sessionViewModel.enterSmartLaunch(TestTemplate.Braking100To0, "Car")
                         navController.navigate("test_execution")
                     } else {
-                        navController.navigateToTab("device")
+                        onTabSelected(TabIndex.Device)
                         if (connectionState == ConnectionState.DISCONNECTED) {
                             TrackTechEventBus.requestShowScanSheet()
                         }
@@ -231,12 +231,3 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
     }
 }
 
-internal fun NavController.navigateToTab(route: String) {
-    if (currentDestination?.route == route) return
-    navigate(route) {
-        val startId = graph.findStartDestination().id
-        popUpTo(startId) { saveState = true }
-        launchSingleTop = true
-        restoreState = true
-    }
-}

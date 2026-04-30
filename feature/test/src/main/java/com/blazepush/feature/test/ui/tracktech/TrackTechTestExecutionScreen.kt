@@ -53,9 +53,9 @@ import org.koin.compose.koinInject
 fun TrackTechTestExecutionScreen(
     navController: NavController,
     modifier: Modifier = Modifier,
+    sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
-    val sessionViewModel = koinViewModel<TestSessionViewModel>()
 
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()

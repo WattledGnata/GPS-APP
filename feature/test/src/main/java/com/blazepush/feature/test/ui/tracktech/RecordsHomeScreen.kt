@@ -37,6 +37,7 @@ import androidx.navigation.NavController
 @Composable
 fun RecordsHomeScreen(
     @Suppress("UNUSED_PARAMETER") navController: NavController,
+    @Suppress("UNUSED_PARAMETER") onTabSelected: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current

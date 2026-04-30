@@ -88,8 +88,11 @@ private fun deriveHeroState(
 
 @Composable
 fun DeviceHomeScreen(
-    @Suppress("UNUSED_PARAMETER") navController: NavController,
+    navController: NavController,
+    @Suppress("UNUSED_PARAMETER") onTabSelected: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
+    pendingShowScanSheet: Boolean = false,
+    onPendingShowScanSheetConsumed: () -> Unit = {},
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
@@ -100,11 +103,13 @@ fun DeviceHomeScreen(
 
     var showSheet by remember { mutableStateOf(false) }
 
-    // 监听 cross-tab gating 触发的自动展开 sheet 事件
-    LaunchedEffect(Unit) {
-        TrackTechEventBus.showScanSheetEvent.collect {
+    // Pager 架构下 Device page 未组合时 SharedFlow(replay=0) 事件会丢失，
+    // 改由 Shell 持有 pending state，本页组合后消费并 reset。
+    LaunchedEffect(pendingShowScanSheet) {
+        if (pendingShowScanSheet) {
             showSheet = true
             gpsViewModel.startScan()
+            onPendingShowScanSheetConsumed()
         }
     }
 

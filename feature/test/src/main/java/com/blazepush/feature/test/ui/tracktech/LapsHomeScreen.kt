@@ -40,6 +40,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun LapsHomeScreen(
     navController: NavController,
+    onTabSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
     testSessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
@@ -100,7 +101,7 @@ fun LapsHomeScreen(
 
         TrackTechStatusStrip(
             items = statusItems,
-            onClick = { navController.navigateToTab("device") },
+            onClick = { onTabSelected(TabIndex.Device) },
         )
 
         CurrentTrackPanel(trackName = currentTrackName)
@@ -128,7 +129,7 @@ fun LapsHomeScreen(
                             "Connect a GPS device first",
                             Toast.LENGTH_SHORT,
                         ).show()
-                        navController.navigateToTab("device")
+                        onTabSelected(TabIndex.Device)
                         if (connectionState == ConnectionState.DISCONNECTED) {
                             TrackTechEventBus.requestShowScanSheet()
                         }
