@@ -19,15 +19,19 @@ import kotlin.math.abs
 /**
  * 速度曲线图
  * 显示测试过程中速度随时间的变化
+ *
+ * @param wrapInCard 默认 true 保持向下兼容（现有调用方零改动），渲染 Material `Card { Column {...} }`；
+ * 当 V2 详情页等外层已用 `CutCornerPanel` 时传 false，避免双层卡。stroke / grid / axis 颜色不动。
  */
 @Composable
 fun SpeedChart(
     dataPoints: List<GpsDataPoint>,
     modifier: Modifier = Modifier,
-    lineColor: Color = Color(0xFF00F0FF)
+    lineColor: Color = Color(0xFF00F0FF),
+    wrapInCard: Boolean = true,
 ) {
     if (dataPoints.isEmpty()) {
-        Card(modifier = modifier) {
+        SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {
             Box(
                 modifier = Modifier.fillMaxWidth().height(200.dp),
                 contentAlignment = Alignment.Center
@@ -41,8 +45,8 @@ fun SpeedChart(
     val maxTime = (dataPoints.maxOf { it.elapsedTime } * 1000).toInt()
     val maxSpeed = dataPoints.maxOf { it.speed }.toFloat()
 
-    Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {
+        Column(modifier = if (wrapInCard) Modifier.padding(16.dp) else Modifier) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -128,19 +132,35 @@ fun SpeedChart(
     }
 }
 
+@Composable
+private fun SpeedChartShell(
+    modifier: Modifier,
+    wrapInCard: Boolean,
+    content: @Composable () -> Unit,
+) {
+    if (wrapInCard) {
+        Card(modifier = modifier) { content() }
+    } else {
+        Box(modifier = modifier) { content() }
+    }
+}
+
 /**
  * G值曲线图
  * 显示测试过程中加速度随时间的变化
+ *
+ * @param wrapInCard 默认 true 保持向下兼容；V2 详情页传 false 由外层 `CutCornerPanel` 承担容器。
  */
 @Composable
 fun GForceChart(
     dataPoints: List<GpsDataPoint>,
     maxAcceleration: Double = 0.0,
     modifier: Modifier = Modifier,
-    lineColor: Color = Color(0xFF00FF78)
+    lineColor: Color = Color(0xFF00FF78),
+    wrapInCard: Boolean = true,
 ) {
     if (dataPoints.isEmpty()) {
-        Card(modifier = modifier) {
+        SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {
             Box(
                 modifier = Modifier.fillMaxWidth().height(200.dp),
                 contentAlignment = Alignment.Center
@@ -183,8 +203,8 @@ fun GForceChart(
         (gForcePoints.maxOfOrNull { abs(it.second) } ?: 0.5).toFloat()
     }
 
-    Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {
+        Column(modifier = if (wrapInCard) Modifier.padding(16.dp) else Modifier) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
