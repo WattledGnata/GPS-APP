@@ -175,6 +175,16 @@ fun TrackTechAppShell() {
                         sessionViewModel = sessionViewModel,
                     )
                 }
+                composable(
+                    route = "performance_result/{testId}",
+                    arguments = listOf(navArgument("testId") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val testId = backStackEntry.arguments?.getString("testId").orEmpty()
+                    PerformanceResultScreen(
+                        testId = testId,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
         }
     }
