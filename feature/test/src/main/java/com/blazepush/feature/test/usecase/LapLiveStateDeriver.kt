@@ -140,7 +140,7 @@ object LapLiveStateDeriver {
             return AbnormalState.WAITING_FOR_GPS_LOCK
         }
         val invalidatingEvents = session?.crossingEvents
-            ?.filter { !it.accepted && it.reason in INVALIDATING_REASONS }
+            ?.filter { !it.accepted && it.reason in invalidatingReasons }
             .orEmpty()
         if (invalidatingEvents.isEmpty()) return null
 

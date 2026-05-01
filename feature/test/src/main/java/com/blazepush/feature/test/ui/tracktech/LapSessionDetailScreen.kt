@@ -496,7 +496,10 @@ private fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): Detail
         )
     }
     return DetailMetrics(
-        totalLaps = acceptedSF.size,
+        // totalLaps 是 "完成圈数尝试"：valid 完成圈 + invalid 作废圈。
+        // 不能用 acceptedSF.size，因为它把首次开圈 crossing 也算 1（第 1 圈完成时
+        // acceptedSF 有 2 个，会让 UI 显示 TOTAL LAPS = 2 而实际只 1 圈完成）。
+        totalLaps = durations.size + rejectedSF.size,
         validLaps = durations.size,
         invalidLaps = rejectedSF.size,
         bestLapMs = bestLapMs,

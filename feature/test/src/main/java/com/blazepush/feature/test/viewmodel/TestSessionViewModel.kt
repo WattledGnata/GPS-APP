@@ -138,9 +138,18 @@ class TestSessionViewModel(
         gpsDataViewModel.dataQuality,
         tickerFlow(LAP_LIVE_TICK_PERIOD_MS),
     ) { session: LapSession?, gps: GpsData, conn: ConnectionState, quality: DataQuality, _: Unit ->
+        // currentTimeMs 用 GPS 时间轴（与 crossing.timestampMillis 同源），
+        // 但通过 elapsedRealtime 在 GPS 帧间隔内推进，让 ticker 50ms 驱动 timer 平滑滚动
+        // （不依赖 GPS 帧到达频率：5Hz replay 下 timer 仍 50ms 跳一次）。
+        val anchorElapsed = lastReceivedAtElapsed
+        val currentMs = if (anchorElapsed > 0L) {
+            gps.timestamp + (SystemClock.elapsedRealtime() - anchorElapsed)
+        } else {
+            gps.timestamp
+        }
         LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = gps.timestamp,
+            currentTimeMs = currentMs,
             gpsData = gps,
             connectionState = conn,
             dataQuality = quality,
@@ -299,9 +308,11 @@ class TestSessionViewModel(
         val sessionId = activeLapSessionId ?: return null
         val sessionSnapshot = _lapSession.value
         val startTs = activeLapStartSystemTs
-        val completedLaps = sessionSnapshot?.completedLaps.orEmpty()
-        val lapCount = completedLaps.size
-        val bestLapMs = completedLaps.minOfOrNull { it.durationMillis }
+        // D12 契约：lapCount / bestLapMs 仅基于 qualityFlags 全空的 valid 圈，
+        // 排除 IncompleteSectors / ProtocolDesyncGap / SuspectedJitter 等带 quality flag 的作废圈
+        val validLaps = sessionSnapshot?.completedLaps.orEmpty().filter { it.qualityFlags.isEmpty() }
+        val lapCount = validLaps.size
+        val bestLapMs = validLaps.minOfOrNull { it.durationMillis }
         val totalDurationMs = startTs?.let { System.currentTimeMillis() - it } ?: 0L
 
         telemetryRepository.endSession(sessionId)
