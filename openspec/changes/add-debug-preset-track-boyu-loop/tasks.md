@@ -53,11 +53,11 @@
 
 ## 4. 测试拆 variant + 新增 boyu loop 契约
 
-- [ ] 4.1 把 `feature/test/src/test/.../TrackCatalogTest.kt` 内的 `getAllTracks_exposesOnlyTficLpccPreset` 测试**搬到** `feature/test/src/testRelease/java/com/blazepush/feature/test/repository/TrackCatalogReleaseVariantTest.kt`（新文件）；断言保持 `assertEquals(listOf("preset-tfic-lpcc"), ids)` 不变。`getTrack_locksTficLpccCoordinateContractWithReplayAlignedPresetConstants` 与 `getTrack_returnsNullForUnknownTrackId` **保留在** `src/test/`（共享，两个 variant 都跑）。
-- [ ] 4.2 新建 `feature/test/src/testDebug/java/com/blazepush/feature/test/repository/TrackCatalogDebugVariantTest.kt`，包含 1 个测试方法断言 `assertEquals(listOf("preset-tfic-lpcc", "preset-boyu-loop"), ids)`（顺序由 `mainPresets + extraPresetTracks()` 拼接顺序锁定）。
-- [ ] 4.3 新建 `feature/test/src/testDebug/java/com/blazepush/feature/test/repository/BoyuLoopPresetTest.kt`，覆盖 specs 中 4 个 boyu loop scenario：(a) 顶层字段契约（`name.zh == "成都天投泊寓环线"`、`name.en == "Chengdu Tiantou Boyu Loop"`、`name.abbr == null`、`lengthKm == 2.591`、`thumbnailAssetPath == null`、`source == TrackSource.Preset`、`referencePath.points.size == 87`）；(b) gate 顺序契约（`startFinishGate.type == StartFinish`、`startFinishGate.name == "起终点"`、`sectorGates.size == 4` 全部 type Sector、`sequenceIndex == listOf(1,2,3,4)`）；(c) referencePath bbox（lat ∈ [30.397, 30.407]、lon ∈ [104.054, 104.062]）；(d) referencePath 闭合度 ≤ 5m（用 Haversine 或简化大圆距离）。
-- [ ] 4.4 跑 `./gradlew :feature:test:testReleaseUnitTest`：4.1 release 测试通过 + 共享测试通过；不应执行 4.2 / 4.3。
-- [ ] 4.5 跑 `./gradlew :feature:test:testDebugUnitTest`：4.2 / 4.3 debug 测试通过 + 共享测试通过；不应执行 4.1 release-only 测试。
+- [x] 4.1 把 `feature/test/src/test/.../TrackCatalogTest.kt` 内的 `getAllTracks_exposesOnlyTficLpccPreset` 测试**搬到** `feature/test/src/testRelease/java/com/blazepush/feature/test/repository/TrackCatalogReleaseVariantTest.kt`（新文件）；断言保持 `assertEquals(listOf("preset-tfic-lpcc"), ids)` 不变。`getTrack_locksTficLpccCoordinateContractWithReplayAlignedPresetConstants` 与 `getTrack_returnsNullForUnknownTrackId` **保留在** `src/test/`（共享，两个 variant 都跑）。
+- [x] 4.2 新建 `feature/test/src/testDebug/java/com/blazepush/feature/test/repository/TrackCatalogDebugVariantTest.kt`，包含 1 个测试方法断言 `assertEquals(listOf("preset-tfic-lpcc", "preset-boyu-loop"), ids)`（顺序由 `mainPresets + extraPresetTracks()` 拼接顺序锁定）。
+- [x] 4.3 新建 `feature/test/src/testDebug/java/com/blazepush/feature/test/repository/BoyuLoopPresetTest.kt`，覆盖 specs 中 4 个 boyu loop scenario：(a) 顶层字段契约（`name.zh == "成都天投泊寓环线"`、`name.en == "Chengdu Tiantou Boyu Loop"`、`name.abbr == null`、`lengthKm == 2.591`、`thumbnailAssetPath == null`、`source == TrackSource.Preset`、`referencePath.points.size == 87`）；(b) gate 顺序契约（`startFinishGate.type == StartFinish`、`startFinishGate.name == "起终点"`、`sectorGates.size == 4` 全部 type Sector、`sequenceIndex == listOf(1,2,3,4)`）；(c) referencePath bbox（lat ∈ [30.397, 30.407]、lon ∈ [104.054, 104.062]）；(d) referencePath 闭合度 ≤ 5m（用 Haversine 或简化大圆距离）。
+- [x] 4.4 跑 `./gradlew :feature:test:testReleaseUnitTest`：4.1 release 测试通过 + 共享测试通过；不应执行 4.2 / 4.3。
+- [x] 4.5 跑 `./gradlew :feature:test:testDebugUnitTest`：4.2 / 4.3 debug 测试通过 + 共享测试通过；不应执行 4.1 release-only 测试。
 
 ## 5. release 包零变更对照
 

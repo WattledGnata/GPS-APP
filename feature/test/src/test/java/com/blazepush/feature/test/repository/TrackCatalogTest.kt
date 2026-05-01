@@ -6,7 +6,6 @@ package com.blazepush.feature.test.repository
 
 import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.TrackSource
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -15,14 +14,10 @@ import org.junit.Test
 
 class TrackCatalogTest {
 
-    @Test
-    fun getAllTracks_exposesOnlyTficLpccPreset() = runTest {
-        val catalog = PresetTrackCatalog()
-
-        val ids = catalog.getAllTracks().map { it.id }
-
-        assertEquals(listOf("preset-tfic-lpcc"), ids)
-    }
+    // getAllTracks_exposesOnlyTficLpccPreset 已搬到 src/testRelease/.../TrackCatalogReleaseVariantTest.kt
+    // 因为 :feature:test:testDebugUnitTest 下 PresetTrackCatalog().getAllTracks() 会额外
+    // 返回天投泊寓环线（debug variant only），原断言会失败。共享 src/test/ 内只保留与 variant
+    // 无关的契约。详见 OpenSpec change `add-debug-preset-track-boyu-loop` design D5。
 
     @Test
     fun getTrack_locksTficLpccCoordinateContractWithReplayAlignedPresetConstants() {
