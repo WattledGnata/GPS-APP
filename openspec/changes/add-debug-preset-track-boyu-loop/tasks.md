@@ -67,18 +67,24 @@
 
 ## 6. 真机验证 gate（默认设备 8KE0219522008434，串行执行需用户授权）
 
-- [ ] 6.1 **需用户授权**：debug apk `adb -s 8KE0219522008434 install -r` 后启动 GPS App，进入赛道选择页面（SelectTrackBottomSheet）+ Records 主屏 + Laps 主屏，确认每处赛道列表都展示 2 条赛道，**TFIC 在第 0 位、成都天投泊寓环线在第 1 位**（与 `mainPresets + extraPresetTracks()` 拼接顺序一致）。
-- [ ] 6.2 **需用户授权**：选中"成都天投泊寓环线"，确认：
+- [x] 6.1 **需用户授权**：debug apk `adb -s 8KE0219522008434 install -r` 后启动 GPS App，进入赛道选择页面（SelectTrackBottomSheet）+ Records 主屏 + Laps 主屏，确认每处赛道列表都展示 2 条赛道，**TFIC 在第 0 位、成都天投泊寓环线在第 1 位**（与 `mainPresets + extraPresetTracks()` 拼接顺序一致）。
+  - **2026-05-01 实测通过**：用户确认双赛道顺序正确显示，缩略图与赛道一一对应。
+- [x] 6.2 **需用户授权**：选中"成都天投泊寓环线"，确认：
+  - **2026-05-01 实测通过**：缩略图、字号、滚动渲染均符合预期；同时暴露 RecordsHomeScreen.LapsView 顶部 panel 标题与下方 SESSION HISTORY 关联错位问题（pre-existing），已沉淀 `docs/design/records-by-track-filter-deferred.md` 9 章 memo + §10 backlog 链 → follow-up round `wire-records-by-track`。
   - **缩略图**：本 round `thumbnailAssetPath = null`，`TrackThumbnail` 走 null fallback → 应渲染 cyan 1dp 描边占位框 + 中央 "NO PREVIEW" 文字（Compose 源 `feature/test/src/main/java/com/blazepush/feature/test/ui/tracktech/TrackThumbnail.kt:88` `FallbackPlaceholder`）；列表与 Laps/Records 三处都应是同一 fallback；**不**期望 referencePath 简图（缩略图 widget 设计上不消费 referencePath，referencePath 简图属于另一 widget 范畴，本 round 不做）
   - **字号**：所有 metric/row/label 类 Text **无** ellipsis 截断（V2 视觉规则核查；尤其 SelectTrackBottomSheet 的赛道名行：track.name.zh "成都天投泊寓环线" 共 7 个汉字，不应被 ellipsis）
   - **列表渲染**：滚动顺滑、无可见卡顿（87 点 referencePath 不应造成性能可感知劣化）
-- [ ] 6.3 **需用户授权**：release apk `adb -s 8KE0219522008434 install -r` 后启动，确认赛道选择列表（SelectTrackBottomSheet）+ Records 主屏 + Laps 主屏每处只展示 TFIC LPCC 一条；切回 debug 包不应残留状态。
-- [ ] 6.4 在 `tasks.md §6` 旁记录三步真机验证结果（通过 / 截图 / 异常），由用户主笔签收；如需缩略图真实图，按 §10 follow-up 立项 `add-debug-preset-track-boyu-loop-thumbnail`。
+- [x] 6.3 **需用户授权**：release apk `adb -s 8KE0219522008434 install -r` 后启动，确认赛道选择列表（SelectTrackBottomSheet）+ Records 主屏 + Laps 主屏每处只展示 TFIC LPCC 一条；切回 debug 包不应残留状态。
+  - **2026-05-01 实测通过**：因 release / debug signing key 不同先 `adb uninstall com.blazepush` 后再装；release 包真机三处赛道列表均仅含 TFIC LPCC，无天投泊寓字样；验完已切回 debug 包供日常使用。
+- [x] 6.4 在 `tasks.md §6` 旁记录三步真机验证结果（通过 / 截图 / 异常），由用户主笔签收；如需缩略图真实图，按 §10 follow-up 立项 `add-debug-preset-track-boyu-loop-thumbnail`。
+  - **2026-05-01 签收**：6.1/6.2/6.3 全部通过；6.2 暴露 pre-existing Records-by-track 过滤问题已 follow-up；缩略图真实图按 §10 backlog 立项。
 
 ## 7. 提交准备
 
-- [ ] 7.1 跑 `./gradlew kt-format-check`（或项目对应任务）确认无 pre-existing 风格债被本 round 触发；如触发，先 fix 再 commit，禁用 hook 不允许（参考记忆 `feedback_never_disable_precommit_hooks`）。
-- [ ] 7.2 草拟 commit message（Conventional Commits）：`feat(track): add debug-only preset 天投泊寓环线 (round add-debug-preset-track-boyu-loop)`；message body 引用本 change 名 + 引用 follow-up backlog（§10）。
+- [x] 7.1 跑 `./gradlew kt-format-check`（或项目对应任务）确认无 pre-existing 风格债被本 round 触发；如触发，先 fix 再 commit，禁用 hook 不允许（参考记忆 `feedback_never_disable_precommit_hooks`）。
+  - **2026-05-01 通过**：本机 pre-commit hook 在每次 `git commit` 时自动 invoke kt-format-check；本 round 触发过 2 处违规均按提示直接 Edit 修复（no-trailing-newline × 2 + class-comment / public-fun-with-comment-block × 9）后 commit 通过；未禁用 hook。
+- [x] 7.2 草拟 commit message（Conventional Commits）：`feat(track): add debug-only preset 天投泊寓环线 (round add-debug-preset-track-boyu-loop)`；message body 引用本 change 名 + 引用 follow-up backlog（§10）。
+  - **2026-05-01 完成**：本 round 采用按章节分 commit 模式而非单一 squash commit；5 个 commits（`ae58830` 文档+脚本+受控输入 / `18065a4` 主代码 §2+§3 / `14bb1f1` 测试 §4 / `1169ae3` §5 进度 / `93679df` Records 过滤 deferred memo）每个都用 Conventional Commits 格式且引用 round 名与 §10 backlog；review 时按 commit 维度审更聚焦。
 - [ ] 7.3 **需用户授权 push**：commit 后等用户拍板是否 push 到 `feature/track-tech-v2`（或当前主 feature 分支）；本 round CC **不**自动 push。
 
 ## 8. Codex review 触发
