@@ -79,6 +79,8 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     implementation(libs.gson)
 
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
+
     testImplementation(libs.junit)
     testImplementation(project(":simulator"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

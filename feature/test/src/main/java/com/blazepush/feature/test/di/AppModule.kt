@@ -2,6 +2,8 @@ package com.blazepush.feature.test.di
 
 import androidx.room.Room
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.feature.test.datastore.RecentTracksStore
+import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
@@ -77,6 +79,8 @@ val repositoryModule = module {
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
     single { TelemetryRepository(androidContext(), get(), get()) }
+    // round `replace-nearby-tracks-with-recent-strip` §2.2：接口为 key、生产 RecentTracksStore 实例为 value
+    single<RecentTracksStoreApi> { RecentTracksStore(androidContext()) }
 }
 
 /**
@@ -128,7 +132,7 @@ private inline fun <reified T : Throwable> Throwable.findInCauseChain(): T? {
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
     single { GpsDataViewModel(get(), get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
 

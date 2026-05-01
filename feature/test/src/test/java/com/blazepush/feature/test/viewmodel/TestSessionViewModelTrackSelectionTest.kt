@@ -18,6 +18,7 @@ import com.blazepush.feature.test.usecase.LapTimingEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -88,7 +89,71 @@ class TestSessionViewModelTrackSelectionTest {
         }
     }
 
-    private fun createViewModel(trackCatalog: TrackCatalog): TestSessionViewModel {
+    // round `replace-nearby-tracks-with-recent-strip` §2.5 测试 7：
+    // selectTrack(trackX) 调用后 store.add(trackX.id) 被触发
+    @Test
+    fun selectTrack_writesToRecentTracksStore() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val fakeStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore()
+            val viewModel = createViewModel(PresetTrackCatalog(), fakeStore)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val target = viewModel.availableTracks.value.first()
+            viewModel.selectTrack(target)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(listOf(target.id), fakeStore.recentIds.first())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    // §2.5 测试 8：连续 selectTrack 后 recentTrackIds StateFlow 与 store 推送一致
+    @Test
+    fun selectTrack_recentTrackIdsReflectsStoreOrder() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val fakeStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore()
+            val viewModel = createViewModel(PresetTrackCatalog(), fakeStore)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val tracks = viewModel.availableTracks.value
+            // PresetTrackCatalog 当前只有 1 条，模拟两次"选同一条"验证 dedupe + 头插
+            viewModel.selectTrack(tracks.first())
+            dispatcher.scheduler.advanceUntilIdle()
+            viewModel.selectTrack(tracks.first())
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(listOf(tracks.first().id), viewModel.recentTrackIds.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    // §2.5 测试 9：初始化 fallback 不污染 RECENT
+    @Test
+    fun init_fallbackToFirstTrack_doesNotPolluteRecentTracksStore() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val fakeStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore()
+            val viewModel = createViewModel(PresetTrackCatalog(), fakeStore)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // 初始化 fallback 设了 currentSelectedTrack 但不应触发 store.add
+            assertEquals(viewModel.availableTracks.value.first(), viewModel.currentSelectedTrack.value)
+            assertEquals(emptyList<String>(), viewModel.recentTrackIds.value)
+            assertEquals(emptyList<String>(), fakeStore.recentIds.first())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    private fun createViewModel(
+        trackCatalog: TrackCatalog,
+        recentTracksStore: com.blazepush.feature.test.datastore.RecentTracksStoreApi =
+            com.blazepush.feature.test.datastore.FakeRecentTracksStore(),
+    ): TestSessionViewModel {
         val gpsFlow = MutableStateFlow<com.blazepush.core.domain.model.GpsData>(
             com.blazepush.core.domain.model.GpsData.Empty
         )
@@ -110,6 +175,7 @@ class TestSessionViewModelTrackSelectionTest {
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
             telemetryRepository = mock(TelemetryRepository::class.java),
+            recentTracksStore = recentTracksStore,
         )
     }
 }

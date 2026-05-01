@@ -361,6 +361,7 @@ class TestSessionViewModelTrackLapTest {
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
             telemetryRepository = mock(TelemetryRepository::class.java),
+            recentTracksStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore(),
         )
     }
 

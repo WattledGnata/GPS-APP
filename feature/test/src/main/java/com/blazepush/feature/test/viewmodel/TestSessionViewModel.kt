@@ -14,6 +14,7 @@ import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
@@ -85,6 +86,7 @@ class TestSessionViewModel(
     private val trackCatalog: TrackCatalog,
     private val lapTimingEngine: LapTimingEngine,
     private val telemetryRepository: TelemetryRepository,
+    private val recentTracksStore: RecentTracksStoreApi,
 ) : ViewModel() {
 
     companion object {
@@ -121,8 +123,14 @@ class TestSessionViewModel(
     private val _currentSelectedTrack = MutableStateFlow<Track?>(null)
     val currentSelectedTrack: StateFlow<Track?> = _currentSelectedTrack.asStateFlow()
 
+    // round `replace-nearby-tracks-with-recent-strip` §2.1：用户最近选过的赛道列表，
+    // 由 init block collect RecentTracksStoreApi.recentIds 推送。selectTrack 触发持久化写。
+    private val _recentTrackIds = MutableStateFlow<List<String>>(emptyList())
+    val recentTrackIds: StateFlow<List<String>> = _recentTrackIds.asStateFlow()
+
     fun selectTrack(track: Track) {
         _currentSelectedTrack.value = track
+        viewModelScope.launch { recentTracksStore.add(track.id) }
     }
 
     private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
@@ -210,8 +218,15 @@ class TestSessionViewModel(
             val loaded = trackCatalog.getAllTracks()
             _availableTracks.value = loaded
             if (_currentSelectedTrack.value == null) {
+                // 直接赋值，**不**通过 selectTrack —— 避免初始化 fallback 触发 RecentTracksStore.add
+                // 污染 RECENT 列表（spec §2.1 + Requirement 「初始化不污染 RECENT」）
                 _currentSelectedTrack.value = loaded.firstOrNull()
             }
+        }
+
+        // round `replace-nearby-tracks-with-recent-strip` §2.1：collect RecentTracksStore 推送
+        viewModelScope.launch {
+            recentTracksStore.recentIds.collect { _recentTrackIds.value = it }
         }
 
         viewModelScope.launch {
