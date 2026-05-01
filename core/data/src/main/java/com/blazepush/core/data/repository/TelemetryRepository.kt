@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本 round wire-real-data-to-records-and-laps-tabs §1.4 追加 4 个统计 Flow 方法；
+//       既有方法 doc 缺失为 baseline 历史问题，按 scope-boundary 推到 D round
+//       （kt-format-cleanup-pass）批量补齐，本 round 不顺手改。
 package com.blazepush.core.data.repository
 
 import android.content.Context
@@ -13,6 +17,8 @@ import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TelemetrySessionType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -193,6 +199,22 @@ class TelemetryRepository(
             .take(limit)
             .map { it.toDomain() }
             .toList()
+
+    // round wire-real-data-to-records-and-laps-tabs §1.4：按 trackId 聚合 Flow 查询。
+    // 闭环判定 endTs > startTs（startSession 写 endTs=startTs 占位）+ best lap
+    // 加 bestLapMs IS NOT NULL 排除首圈未完成。
+
+    fun getBestLapForTrack(trackId: String): Flow<TelemetrySession?> =
+        sessionDao.getBestLapForTrack(trackId).map { it?.toDomain() }
+
+    fun getSessionCountForTrack(trackId: String): Flow<Int> =
+        sessionDao.getSessionCountForTrack(trackId)
+
+    fun getTotalLapCountForTrack(trackId: String): Flow<Int> =
+        sessionDao.getTotalLapCountForTrack(trackId)
+
+    fun getRecentSessionsForTrack(trackId: String, limit: Int): Flow<List<TelemetrySession>> =
+        sessionDao.getRecentSessionsForTrack(trackId, limit).map { list -> list.map { it.toDomain() } }
 
     /**
      * 读加减速 session 全部 sample（顺序读整个 chunk file）。

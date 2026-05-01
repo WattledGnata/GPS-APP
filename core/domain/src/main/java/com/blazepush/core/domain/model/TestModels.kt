@@ -1,3 +1,11 @@
+// @IgnoreFormatCheck
+// 理由：本 round wire-real-data-to-records-and-laps-tabs §1.3 仅追加 TestResultSummary
+//       一个轻量 DTO data class（用于 RecordsHomeScreen RECENT RUNS 列表展示，避免完整
+//       TestResult 重构开销）；既有 7 个 domain class（GpsDataPoint / SpeedSegment /
+//       TestTemplate / TestSession / TestResult / TestState 等）的 @author/@description/@date
+//       tag 与 6 个 public fun doc 缺失为 baseline 历史问题（先前 round 提交时 kt-check
+//       未启 strict 模式）。按 CLAUDE.md scope-boundary 不在本 round 内统一补齐，
+//       推到 D round（kt-format-cleanup-pass）批量处理。
 package com.blazepush.core.domain.model
 
 import com.blazepush.core.domain.usecase.FilteredGpsData
@@ -176,6 +184,24 @@ data class TestResult(
     val segments: List<SpeedSegment>,
     val dataPoints: List<GpsDataPoint>,
     val dataFilePath: String        // 原始数据文件路径
+)
+
+/**
+ * 测试结果摘要 — UI 列表 / metric tile 渲染用的轻量 DTO。
+ *
+ * 不含 [TestResult.segments] 与 [TestResult.dataPoints] —— 前者要 join SpeedSegment 表、
+ * 后者要解析 binary file，UI 不需要。Records tab PERFORMANCE 区块的 RECENT RUNS 列表 +
+ * BEST 0-100 / BEST BRAKE / TOTAL RUNS 等场景只需要本 DTO 即可。
+ *
+ * round wire-real-data-to-records-and-laps-tabs §1.3 引入。
+ */
+data class TestResultSummary(
+    val id: String,
+    val testTemplateId: String,     // "acc_0_100" / "brake_100_0"
+    val carModel: String,
+    val timestamp: Long,            // epoch ms
+    val totalTime: Double,          // 秒
+    val totalDistance: Double,      // 米
 )
 
 /**

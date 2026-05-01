@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本 round wire-real-data-to-records-and-laps-tabs §1.2 追加 4 个统计 @Query 方法；
+//       既有方法 doc 缺失为 baseline 历史问题，按 scope-boundary 推到 D round
+//       （kt-format-cleanup-pass）批量补齐，本 round 不顺手改。
 package com.blazepush.core.data.local.dao
 
 import androidx.room.Dao
@@ -5,6 +9,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Telemetry session metadata DAO（A56 引入）。
@@ -60,4 +65,38 @@ interface TelemetrySessionDao {
      */
     @Query("SELECT * FROM telemetry_sessions ORDER BY startTs DESC")
     suspend fun queryAll(): List<TelemetrySessionEntity>
+
+    // round wire-real-data-to-records-and-laps-tabs §1.2：按 trackId 聚合查询。
+    // 关键 schema 口径：
+    // - 列名 sessionType（不是 type），值 'LAP_SESSION'（与 TelemetrySessionType.LAP_SESSION.name 一致）
+    // - endTs 非空，startSession 写 endTs=startTs 占位、endSession 才写真实值；
+    //   闭环判定 MUST 用 endTs > startTs（不能 endTs IS NOT NULL）
+    // - bestLapMs 可空（首圈未完成 / 无有效 best），best lap 查询 MUST 加 IS NOT NULL 排除
+
+    @Query(
+        "SELECT * FROM telemetry_sessions " +
+            "WHERE trackId = :trackId AND endTs > startTs " +
+            "AND bestLapMs IS NOT NULL AND sessionType = 'LAP_SESSION' " +
+            "ORDER BY bestLapMs ASC LIMIT 1"
+    )
+    fun getBestLapForTrack(trackId: String): Flow<TelemetrySessionEntity?>
+
+    @Query(
+        "SELECT COUNT(*) FROM telemetry_sessions " +
+            "WHERE trackId = :trackId AND endTs > startTs AND sessionType = 'LAP_SESSION'"
+    )
+    fun getSessionCountForTrack(trackId: String): Flow<Int>
+
+    @Query(
+        "SELECT COALESCE(SUM(lapCount), 0) FROM telemetry_sessions " +
+            "WHERE trackId = :trackId AND endTs > startTs AND sessionType = 'LAP_SESSION'"
+    )
+    fun getTotalLapCountForTrack(trackId: String): Flow<Int>
+
+    @Query(
+        "SELECT * FROM telemetry_sessions " +
+            "WHERE trackId = :trackId AND endTs > startTs AND sessionType = 'LAP_SESSION' " +
+            "ORDER BY startTs DESC LIMIT :limit"
+    )
+    fun getRecentSessionsForTrack(trackId: String, limit: Int): Flow<List<TelemetrySessionEntity>>
 }

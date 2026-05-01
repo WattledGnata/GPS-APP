@@ -207,6 +207,22 @@ class TelemetryRepositoryTest {
             sessions.find { it.sessionId == sessionId }
 
         override suspend fun queryAll() = sessions.toList()
+
+        // round wire-real-data-to-records-and-laps-tabs §1.6：同步新增 abstract 方法
+        // 避免 :core:data:testDebugUnitTest 编译失败。本 fake 测试场景不需要 trackId
+        // 聚合行为，统一返回轻量空 flow（getBestLapForTrack 行为由 §1.7
+        // TelemetryRepositoryTrackQueryTest 用 in-memory Room 覆盖）。
+        override fun getBestLapForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf<TelemetrySessionEntity?>(null)
+
+        override fun getSessionCountForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf(0)
+
+        override fun getTotalLapCountForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf(0)
+
+        override fun getRecentSessionsForTrack(trackId: String, limit: Int) =
+            kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
     }
 
     private class FakeCrossingEventDao : CrossingEventDao {
