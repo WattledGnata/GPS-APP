@@ -1,0 +1,185 @@
+// 本函数 MUST 仅由 src/debug + src/release 双源集互斥各提供一份实现；
+// main 源集禁止声明同签名函数（debug variant 编译时同包同签名 top-level
+// 函数会触发 duplicate JVM declarations）。
+// 本 round 由 OpenSpec change `add-debug-preset-track-boyu-loop` design D1/D2 锁定该机制。
+//
+// `boyuLoopTrack` 内的所有几何参数（87 点 referencePath + 5 个 TimingGate）由
+// `docs/tools/decode_rcz_session.py` 一次性从受控输入
+// `docs/tools/input/session_20260108_225454_天投泊寓环线.rcz` 离线生成。
+// 修改请重新运行脚本（详见 docs/design/rcz-format-decoding.md），勿手工编辑。
+package com.blazepush.feature.test.repository
+
+import com.blazepush.feature.test.model.track.GeoLine
+import com.blazepush.feature.test.model.track.GeoPoint
+import com.blazepush.feature.test.model.track.GeoVector
+import com.blazepush.feature.test.model.track.TimingGate
+import com.blazepush.feature.test.model.track.TimingGateType
+import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackName
+import com.blazepush.feature.test.model.track.TrackPath
+
+private val boyuLoopTrack: Track = Track(
+    id = "preset-boyu-loop",
+    name = TrackName(
+        zh = "成都天投泊寓环线",
+        en = "Chengdu Tiantou Boyu Loop",
+        abbr = null,
+    ),
+    lengthKm = 2.591,
+    thumbnailAssetPath = null,
+    referencePath = TrackPath(
+        points = listOf(
+            GeoPoint(30.3997702, 104.0614972),
+            GeoPoint(30.3995002, 104.0614918),
+            GeoPoint(30.3992258, 104.0614965),
+            GeoPoint(30.3989535, 104.0615163),
+            GeoPoint(30.3986862, 104.0615610),
+            GeoPoint(30.3984175, 104.0616158),
+            GeoPoint(30.3981520, 104.0616747),
+            GeoPoint(30.3979025, 104.0616060),
+            GeoPoint(30.3979287, 104.0613192),
+            GeoPoint(30.3981137, 104.0610857),
+            GeoPoint(30.3983010, 104.0608515),
+            GeoPoint(30.3984880, 104.0606177),
+            GeoPoint(30.3986727, 104.0603800),
+            GeoPoint(30.3988363, 104.0601292),
+            GeoPoint(30.3989660, 104.0598478),
+            GeoPoint(30.3990515, 104.0595513),
+            GeoPoint(30.3991082, 104.0592433),
+            GeoPoint(30.3991665, 104.0589302),
+            GeoPoint(30.3992405, 104.0586253),
+            GeoPoint(30.3993343, 104.0583252),
+            GeoPoint(30.3994388, 104.0580333),
+            GeoPoint(30.3995412, 104.0577380),
+            GeoPoint(30.3996480, 104.0574467),
+            GeoPoint(30.3997828, 104.0571728),
+            GeoPoint(30.3999615, 104.0569375),
+            GeoPoint(30.4001740, 104.0567448),
+            GeoPoint(30.4004143, 104.0565948),
+            GeoPoint(30.4006665, 104.0564652),
+            GeoPoint(30.4009098, 104.0563300),
+            GeoPoint(30.4011468, 104.0561787),
+            GeoPoint(30.4013718, 104.0559967),
+            GeoPoint(30.4015820, 104.0557888),
+            GeoPoint(30.4017703, 104.0555593),
+            GeoPoint(30.4019290, 104.0553052),
+            GeoPoint(30.4020653, 104.0550327),
+            GeoPoint(30.4021897, 104.0547515),
+            GeoPoint(30.4023282, 104.0544812),
+            GeoPoint(30.4025108, 104.0542552),
+            GeoPoint(30.4027790, 104.0542107),
+            GeoPoint(30.4030500, 104.0541933),
+            GeoPoint(30.4033215, 104.0541820),
+            GeoPoint(30.4035945, 104.0541745),
+            GeoPoint(30.4038647, 104.0541735),
+            GeoPoint(30.4041377, 104.0541727),
+            GeoPoint(30.4044128, 104.0541727),
+            GeoPoint(30.4046887, 104.0541772),
+            GeoPoint(30.4049623, 104.0541872),
+            GeoPoint(30.4052320, 104.0542010),
+            GeoPoint(30.4055015, 104.0542225),
+            GeoPoint(30.4057730, 104.0542453),
+            GeoPoint(30.4060350, 104.0543115),
+            GeoPoint(30.4061045, 104.0545987),
+            GeoPoint(30.4060860, 104.0549162),
+            GeoPoint(30.4060580, 104.0552278),
+            GeoPoint(30.4059922, 104.0555315),
+            GeoPoint(30.4059002, 104.0558277),
+            GeoPoint(30.4057862, 104.0561132),
+            GeoPoint(30.4056533, 104.0563937),
+            GeoPoint(30.4055170, 104.0566722),
+            GeoPoint(30.4053830, 104.0569493),
+            GeoPoint(30.4052473, 104.0572280),
+            GeoPoint(30.4051102, 104.0574993),
+            GeoPoint(30.4049530, 104.0577602),
+            GeoPoint(30.4047677, 104.0579945),
+            GeoPoint(30.4045600, 104.0582050),
+            GeoPoint(30.4043337, 104.0583912),
+            GeoPoint(30.4040948, 104.0585448),
+            GeoPoint(30.4038477, 104.0586775),
+            GeoPoint(30.4035997, 104.0588172),
+            GeoPoint(30.4033607, 104.0589642),
+            GeoPoint(30.4031295, 104.0591277),
+            GeoPoint(30.4029117, 104.0593177),
+            GeoPoint(30.4027103, 104.0595337),
+            GeoPoint(30.4025317, 104.0597712),
+            GeoPoint(30.4023668, 104.0600232),
+            GeoPoint(30.4022028, 104.0602743),
+            GeoPoint(30.4020178, 104.0605067),
+            GeoPoint(30.4018158, 104.0607163),
+            GeoPoint(30.4015995, 104.0609088),
+            GeoPoint(30.4013945, 104.0611155),
+            GeoPoint(30.4012185, 104.0613538),
+            GeoPoint(30.4009838, 104.0614988),
+            GeoPoint(30.4007135, 104.0615193),
+            GeoPoint(30.4004383, 104.0615297),
+            GeoPoint(30.4001652, 104.0615268),
+            GeoPoint(30.3998937, 104.0615197),
+            GeoPoint(30.3997763, 104.0615162)
+        )
+    ),
+    startFinishGate = TimingGate(
+        id = "start-finish",
+        name = "起终点",
+        type = TimingGateType.StartFinish,
+        line = GeoLine(
+            start = GeoPoint(30.3997726667, 104.0617311259),
+            end = GeoPoint(30.3997726667, 104.0612088741)
+        ),
+        passDirection = GeoVector(x = -0.000450450450, y = 0.000000000000),
+        sequenceIndex = 0,
+        minDirectionalSpeedMps = null
+    ),
+    sectorGates = listOf(
+        TimingGate(
+            id = "s1",
+            name = "s1",
+            type = TimingGateType.Sector,
+            line = GeoLine(
+                start = GeoPoint(30.3982251532, 104.0606549426),
+                end = GeoPoint(30.3985491801, 104.0610177241)
+            ),
+            passDirection = GeoVector(x = 0.000312909176, y = -0.000375671247),
+            sequenceIndex = 1,
+            minDirectionalSpeedMps = null
+        ),
+        TimingGate(
+            id = "s2",
+            name = "s2",
+            type = TimingGateType.Sector,
+            line = GeoLine(
+                start = GeoPoint(30.4009747678, 104.0559224651),
+                end = GeoPoint(30.4011722322, 104.0563918682)
+            ),
+            passDirection = GeoVector(x = 0.000404862183, y = -0.000228943214),
+            sequenceIndex = 2,
+            minDirectionalSpeedMps = null
+        ),
+        TimingGate(
+            id = "s3",
+            name = "s3",
+            type = TimingGateType.Sector,
+            line = GeoLine(
+                start = GeoPoint(30.4041296667, 104.0539085291),
+                end = GeoPoint(30.4041296667, 104.0544308043)
+            ),
+            passDirection = GeoVector(x = 0.000450450450, y = 0.000000000000),
+            sequenceIndex = 3,
+            minDirectionalSpeedMps = null
+        ),
+        TimingGate(
+            id = "s4",
+            name = "s4",
+            type = TimingGateType.Sector,
+            line = GeoLine(
+                start = GeoPoint(30.4055670557, 104.0573874975),
+                end = GeoPoint(30.4051809443, 104.0571185025)
+            ),
+            passDirection = GeoVector(x = -0.000231999133, y = 0.000447682930),
+            sequenceIndex = 4,
+            minDirectionalSpeedMps = null
+        )
+    )
+)
+
+internal fun extraPresetTracks(): List<Track> = listOf(boyuLoopTrack)

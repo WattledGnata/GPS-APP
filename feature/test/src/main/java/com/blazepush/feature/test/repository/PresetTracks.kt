@@ -13,7 +13,10 @@ import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.model.track.TrackName
 import com.blazepush.feature.test.model.track.TrackPath
 
-internal val presetTracks: List<Track> = listOf(
+// `extraPresetTracks` 由 src/debug/ 与 src/release/ 互斥变体源集各提供一份实现；
+// main 源集**禁止**声明同签名函数（否则 debug variant 会触发 duplicate JVM declarations）。
+// 变体差异见 OpenSpec change `add-debug-preset-track-boyu-loop` design D1/D2。
+private val mainPresets: List<Track> = listOf(
     Track(
         id = "preset-tfic-lpcc",
         name = TrackName(
@@ -80,6 +83,8 @@ internal val presetTracks: List<Track> = listOf(
         )
     )
 )
+
+internal val presetTracks: List<Track> = mainPresets + extraPresetTracks()
 
 class PresetTrackCatalog : TrackCatalog {
     // A37：内存直返，suspend 不强制 withContext(Dispatchers.IO)

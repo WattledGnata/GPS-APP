@@ -17,28 +17,29 @@
 
 ## 2. main 源集钩子改造（main 不实现 extraPresetTracks，只调用）
 
-- [ ] 2.1 修改 `feature/test/src/main/java/com/blazepush/feature/test/repository/PresetTracks.kt`：
+- [x] 2.1 修改 `feature/test/src/main/java/com/blazepush/feature/test/repository/PresetTracks.kt`：
   - 抽出 `private val mainPresets = listOf(<原 TFIC>)`（原 `presetTracks` 的 13 点 referencePath / gate 坐标**完全不变**）
   - 将 `internal val presetTracks` 改为 `internal val presetTracks: List<Track> = mainPresets + extraPresetTracks()`
   - 在 `mainPresets` 上方加引用注释："`extraPresetTracks` 由 src/debug + src/release 互斥源集各提供一份；main 源集禁止声明同签名函数（否则 debug variant 会触发 duplicate JVM declarations）。变体差异见 OpenSpec change `add-debug-preset-track-boyu-loop` design D1/D2。"
   - **不**新增 main 源集下任何其它文件
-- [ ] 2.2 跑 `./gradlew :feature:test:assembleRelease`：确认 release variant 单独编译失败（缺 `extraPresetTracks` 实现，因 release 源集尚未建），证明 D1 互斥源集机制必要性 —— 这是预期失败点，不算阻塞，证明源集隔离生效后再修。
+- [x] 2.2 跑 `./gradlew :feature:test:assembleRelease`：确认 release variant 单独编译失败（缺 `extraPresetTracks` 实现，因 release 源集尚未建），证明 D1 互斥源集机制必要性 —— 这是预期失败点，不算阻塞，证明源集隔离生效后再修。
   - 备选：用 `git stash` 暂存 PresetTracks.kt 改动跑 sanity check 后回滚，避免 task 2.1 单独无法 compile 的中间态进入 commit。建议把 2.1 + 3.x + 4.x 合并为单 commit。
+  - **本 round 实施时采纳备选方案**（用户 apply 阶段实施约束）：2.1 + 3.1 + 3.2 一起改、一起 commit，跳过单独跑 release variant 看失败这一步，直接跑 3.3 双 variant 同时验证编译通过。
 
 ## 3. release 与 debug 变体源集实现
 
-- [ ] 3.1 创建 `feature/test/src/release/java/com/blazepush/feature/test/repository/ExtraPresetTracksRelease.kt`：
+- [x] 3.1 创建 `feature/test/src/release/java/com/blazepush/feature/test/repository/ExtraPresetTracksRelease.kt`：
   - 包名 `com.blazepush.feature.test.repository`
   - 内容：`internal fun extraPresetTracks(): List<Track> = emptyList()`
   - 文件顶部注释（**两份变体源集文件须放完全一致的注释**）："本函数 MUST 仅由 src/debug + src/release 双源集**互斥**各提供一份实现；main 源集禁止声明同签名函数（debug variant 编译时同包同签名 top-level 函数会触发 duplicate JVM declarations）。本 round 由 OpenSpec change `add-debug-preset-track-boyu-loop` design D1/D2 锁定该机制。"
-- [ ] 3.2 创建 `feature/test/src/debug/java/com/blazepush/feature/test/repository/ExtraPresetTracksDebug.kt`：
+- [x] 3.2 创建 `feature/test/src/debug/java/com/blazepush/feature/test/repository/ExtraPresetTracksDebug.kt`：
   - 包名 `com.blazepush.feature.test.repository`
   - 文件顶部注释同 3.1 风格
   - body 返回 `listOf(boyuLoopTrack)`，`boyuLoopTrack` 由本文件内私有 `val` 持有
   - `boyuLoopTrack` 内容来自 1.3 脚本输出（87 点 referencePath + 起终点 + 4 sector，sequenceIndex 1..4 实测反推）；`Track.id = "preset-boyu-loop"`、`name.zh = "成都天投泊寓环线"`、`name.en = "Chengdu Tiantou Boyu Loop"`、`name.abbr = null`、`lengthKm = 2.591`、`thumbnailAssetPath = null`、`source = TrackSource.Preset`
-- [ ] 3.3 跑 `./gradlew :feature:test:assembleRelease :feature:test:assembleDebug`，确认两套 variant 都编译通过（即 task 2.2 的预期失败点已被本 task 解决）。
-- [ ] 3.4 跑 `./gradlew :app:assembleDebug` 确认 debug apk 编译通过；用 `apkanalyzer dex packages app/build/outputs/apk/debug/app-debug.apk | grep -i extrapresettracks` 检查 dex 中应找到 `com.blazepush.feature.test.repository.ExtraPresetTracksDebugKt`、**不**找到 `ExtraPresetTracksReleaseKt`。
-- [ ] 3.5 跑 `./gradlew :app:assembleRelease` 确认 release apk 编译通过；做**两条互补检查**（apkanalyzer 输出包/类层级**不含 string constant pool**，无法证伪字符串存在，必须配合 dex strings 扫描）：
+- [x] 3.3 跑 `./gradlew :feature:test:assembleRelease :feature:test:assembleDebug`，确认两套 variant 都编译通过（即 task 2.2 的预期失败点已被本 task 解决）。
+- [x] 3.4 跑 `./gradlew :app:assembleDebug` 确认 debug apk 编译通过；用 `apkanalyzer dex packages app/build/outputs/apk/debug/app-debug.apk | grep -i extrapresettracks` 检查 dex 中应找到 `com.blazepush.feature.test.repository.ExtraPresetTracksDebugKt`、**不**找到 `ExtraPresetTracksReleaseKt`。
+- [x] 3.5 跑 `./gradlew :app:assembleRelease` 确认 release apk 编译通过；做**两条互补检查**（apkanalyzer 输出包/类层级**不含 string constant pool**，无法证伪字符串存在，必须配合 dex strings 扫描）：
   - **类存在性**：`apkanalyzer dex packages app/build/outputs/apk/release/app-release.apk | grep -i extrapresettracks`，**只**应输出含 `ExtraPresetTracksReleaseKt` 的行，**不**输出 `ExtraPresetTracksDebugKt`。
   - **字符串不存在性**（本工程 release apk 实测为 multi-dex 16+ classes*.dex，必须扫全部）：
     ```bash
