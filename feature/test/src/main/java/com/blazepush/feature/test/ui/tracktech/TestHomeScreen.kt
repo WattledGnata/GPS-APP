@@ -54,6 +54,14 @@ fun TestHomeScreen(
         TabGatingPolicy.computeTabReadiness(connectionState, gpsData, dataQuality)
     }
 
+    val bestAcc by sessionViewModel.bestAcceleration0To100.collectAsState()
+    val recentRuns by sessionViewModel.recentRuns.collectAsState()
+    val lastAcc = remember(recentRuns) {
+        // recentRuns 已按 timestamp DESC，第一条 acc_0_100 即"最近一次 0-100"。
+        // PERSONAL BEST / LAST RUN 区块字面量 "0-100"，所以只取加速测试，不混制动测试。
+        recentRuns.firstOrNull { it.testTemplateId == "acc_0_100" }
+    }
+
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT ||
         dataQuality.overall == QualityLevel.GOOD
     val signalLabel = when (dataQuality.overall) {
@@ -173,7 +181,7 @@ fun TestHomeScreen(
             ) {
                 MetricTile(
                     label = "PERSONAL BEST",
-                    value = "—.—",
+                    value = bestAcc?.let { "%.2f".format(it.totalTime) } ?: "—.—",
                     unit = "s",
                     status = "0-100",
                     accentColor = TrackTechColors.Purple,
@@ -182,7 +190,7 @@ fun TestHomeScreen(
                 )
                 MetricTile(
                     label = "LAST RUN",
-                    value = "—.—",
+                    value = lastAcc?.let { "%.2f".format(it.totalTime) } ?: "—.—",
                     unit = "s",
                     status = "0-100",
                     accentColor = TrackTechColors.Cyan,

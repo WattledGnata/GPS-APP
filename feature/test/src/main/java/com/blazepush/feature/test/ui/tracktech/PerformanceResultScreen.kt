@@ -243,7 +243,9 @@ private fun MetricRow(
             unit = "G",
             modifier = Modifier.weight(1f),
             accentColor = TrackTechColors.TextSecondary,
-            valueSize = MetricSize.Small,
+            // 跟同行 DISTANCE/TIME + PEAK G 保持 Medium，避免 tile 高度不齐；
+            // "弱化"语义靠 accentColor = TextSecondary 的 muted 色已足够。
+            valueSize = MetricSize.Medium,
             valueKind = MetricKind.Score,
         )
     }
