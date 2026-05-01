@@ -1,8 +1,6 @@
 package com.blazepush.feature.test.viewmodel
 
 import com.blazepush.core.bluetooth.BleDeviceManager
-import com.blazepush.core.data.repository.TelemetryRepository
-import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
@@ -354,13 +352,13 @@ class TestSessionViewModelTrackLapTest {
         return TestSessionViewModel(
             gpsDataViewModel = gpsDataViewModel,
             bleDeviceManager = bleDeviceManager,
-            testResultRepository = mock(TestResultRepository::class.java),
+            testResultRepository = mockTestResultRepositoryWithEmptyFlows(),
             calculateResultUseCase = mock(CalculateResultUseCase::class.java),
             smartTestLauncher = mock(com.blazepush.core.domain.usecase.SmartTestLauncher::class.java),
             gpsDataFilter = gpsDataFilter,
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
-            telemetryRepository = mock(TelemetryRepository::class.java),
+            telemetryRepository = mockTelemetryRepositoryWithEmptyFlows(),
             recentTracksStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore(),
         )
     }

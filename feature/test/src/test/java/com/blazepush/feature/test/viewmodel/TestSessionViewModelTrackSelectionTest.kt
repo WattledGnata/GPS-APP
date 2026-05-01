@@ -168,13 +168,13 @@ class TestSessionViewModelTrackSelectionTest {
         return TestSessionViewModel(
             gpsDataViewModel = gpsDataViewModel,
             bleDeviceManager = bleDeviceManager,
-            testResultRepository = mock(TestResultRepository::class.java),
+            testResultRepository = mockTestResultRepositoryWithEmptyFlows(),
             calculateResultUseCase = mock(CalculateResultUseCase::class.java),
             smartTestLauncher = mock(SmartTestLauncher::class.java),
             gpsDataFilter = GpsDataFilter(),
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
-            telemetryRepository = mock(TelemetryRepository::class.java),
+            telemetryRepository = mockTelemetryRepositoryWithEmptyFlows(),
             recentTracksStore = recentTracksStore,
         )
     }

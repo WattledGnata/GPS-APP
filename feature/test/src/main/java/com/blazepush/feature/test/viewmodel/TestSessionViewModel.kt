@@ -25,6 +25,8 @@ import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.model.TestSession
+import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
@@ -41,6 +43,7 @@ import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.usecase.LapLiveStateDeriver
 import com.blazepush.feature.test.usecase.LapTimingEngine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,6 +51,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -132,6 +137,51 @@ class TestSessionViewModel(
         _currentSelectedTrack.value = track
         viewModelScope.launch { recentTracksStore.add(track.id) }
     }
+
+    // round `wire-real-data-to-records-and-laps-tabs` §2.1：暴露 8 个统计 StateFlow，
+    // 4 个性能测试相关（直接 stateIn）+ 4 个圈速 session 相关（flatMapLatest 跟随
+    // currentSelectedTrack 切换；订阅 5s 缓冲避免 tab 快速切震荡）。
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val bestAcceleration0To100: StateFlow<TestResultSummary?> =
+        testResultRepository.getBestResult(TestTemplate.Acceleration0To100)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val bestBraking100To0: StateFlow<TestResultSummary?> =
+        testResultRepository.getBestResult(TestTemplate.Braking100To0)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val totalRunCount: StateFlow<Int> =
+        testResultRepository.getTotalRunCount()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val recentRuns: StateFlow<List<TestResultSummary>> =
+        testResultRepository.getRecentResultsFlow(5)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val bestLapForCurrentTrack: StateFlow<TelemetrySession?> = _currentSelectedTrack
+        .filterNotNull()
+        .flatMapLatest { track -> telemetryRepository.getBestLapForTrack(track.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val sessionCountForCurrentTrack: StateFlow<Int> = _currentSelectedTrack
+        .filterNotNull()
+        .flatMapLatest { track -> telemetryRepository.getSessionCountForTrack(track.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val totalLapCountForCurrentTrack: StateFlow<Int> = _currentSelectedTrack
+        .filterNotNull()
+        .flatMapLatest { track -> telemetryRepository.getTotalLapCountForTrack(track.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val recentSessionsForCurrentTrack: StateFlow<List<TelemetrySession>> = _currentSelectedTrack
+        .filterNotNull()
+        .flatMapLatest { track -> telemetryRepository.getRecentSessionsForTrack(track.id, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
     val lapRunConfig: StateFlow<LapRunConfig?> = _lapRunConfig.asStateFlow()
