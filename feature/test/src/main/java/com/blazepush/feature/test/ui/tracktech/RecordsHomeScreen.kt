@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.feature.test.model.track.Track
@@ -89,7 +90,7 @@ fun RecordsHomeScreen(
         )
 
         when (selectedSegment) {
-            "PERFORMANCE" -> PerformanceView(context = context)
+            "PERFORMANCE" -> PerformanceView(navController = navController)
             "LAPS" -> LapsView(context = context, navController = navController)
         }
 
@@ -132,7 +133,7 @@ private fun RecordsTitleRow(context: Context) {
 
 @Composable
 private fun PerformanceView(
-    context: Context,
+    navController: NavController,
     testSessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     val bestAcc by testSessionViewModel.bestAcceleration0To100.collectAsState()
@@ -175,7 +176,7 @@ private fun PerformanceView(
             )
         }
 
-        SpeedCurveStub()
+        SpeedCurveSection(bestAcc = bestAcc)
     }
 
     Spacer(Modifier.height(4.dp))
@@ -210,7 +211,7 @@ private fun PerformanceView(
                     title = title,
                     subtitle = subtitle,
                     onClick = {
-                        Toast.makeText(context, "Run detail placeholder", Toast.LENGTH_SHORT).show()
+                        navController.navigate("performance_result/${result.id}")
                     },
                 )
             }
@@ -242,8 +243,18 @@ private fun recentRunRowContent(
     return Triple(icon, type, subtitle)
 }
 
+/**
+ * SPEED CURVE 卡片：消费 BEST 0-100 record 的 dataFilePath → PerformanceTestTelemetryReader.read()
+ * 出真实速度曲线 + 找首个 speed >= 100 km/h 的点作 100 km/h 标注；
+ * 无 best record / binary 读不出时 fallback 到 muted 占位。
+ *
+ * round redesign-performance-result-screen 替代了原 SpeedCurveStub 硬编码假曲线（150 * exp(-1.4t*5)）+
+ * "4.21 s / 100 km/h" 字面量。dataPoints 已由 A56 round（unify-gps-telemetry-persistence）持久化到
+ * dataFilePath 指向的 binary chunk，无需新增 schema 迁移。
+ */
 @Composable
-private fun SpeedCurveStub() {
+private fun SpeedCurveSection(bestAcc: TestResultSummary?) {
+    val curve = produceCurveSamples(bestAcc)
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -274,20 +285,67 @@ private fun SpeedCurveStub() {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Box(modifier = Modifier.fillMaxSize()) {
-                SpeedCurveCanvas(modifier = Modifier.fillMaxSize())
-                SpeedCurveBubble(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 8.dp, end = 8.dp),
-                )
+            if (curve == null || curve.points.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (bestAcc == null) "暂无 0-100 成绩" else "曲线数据不可用",
+                        style = TrackTechTypography.UiTextSmall,
+                        color = TrackTechColors.TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    SpeedCurveCanvas(curve = curve, modifier = Modifier.fillMaxSize())
+                    if (curve.hundredKmhAtSec != null) {
+                        SpeedCurveBubble(
+                            timeLabel = "%.2f s".format(curve.hundredKmhAtSec),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 8.dp, end = 8.dp),
+                        )
+                    }
+                }
             }
         }
     }
 }
 
+/** Speed curve 的 UI 派生数据：xy 列表 + 100 km/h 命中时间（若达到）+ 轴上限。 */
+private data class SpeedCurveData(
+    val points: List<Pair<Float, Float>>, // (elapsedSec, speedKmh)
+    val maxSec: Float,
+    val maxSpeedKmh: Float,
+    val hundredKmhAtSec: Float?,
+)
+
 @Composable
-private fun SpeedCurveCanvas(modifier: Modifier) {
+private fun produceCurveSamples(best: TestResultSummary?): SpeedCurveData? {
+    if (best == null || best.dataFilePath.isBlank()) return null
+    // 读 binary 是 IO；对 ~250 sample（10 秒 25 Hz）级别成本约 < 5ms，远低于一次 recomposition。
+    // remember 按 dataFilePath 缓存，切换 best record 才重读。
+    return remember(best.id, best.dataFilePath) {
+        val samples = PerformanceTestTelemetryReader.read(best.dataFilePath)
+        if (samples.isEmpty()) return@remember null
+        val points = samples.map { it.tsDeltaMs / 1000f to it.speedKmh.toFloat() }
+        val maxSec = points.maxOf { it.first }.coerceAtLeast(1f)
+        val maxSpeed = points.maxOf { it.second }.coerceAtLeast(100f)
+        val hundredAt = points.firstOrNull { it.second >= 100f }?.first
+        SpeedCurveData(
+            points = points,
+            maxSec = maxSec,
+            maxSpeedKmh = maxSpeed,
+            hundredKmhAtSec = hundredAt,
+        )
+    }
+}
+
+@Composable
+private fun SpeedCurveCanvas(curve: SpeedCurveData, modifier: Modifier) {
     val axisColor = TrackTechColors.BorderAlpha60
     val curveColor = TrackTechColors.Cyan
     val dashColor = TrackTechColors.Purple.copy(alpha = 0.6f)
@@ -302,90 +360,45 @@ private fun SpeedCurveCanvas(modifier: Modifier) {
         val originX = leftPad
         val originY = size.height - bottomPad
 
-        // 横轴
-        drawLine(
-            color = axisColor,
-            start = Offset(originX, originY),
-            end = Offset(originX + plotW, originY),
-            strokeWidth = 1f,
-        )
-        // 纵轴
-        drawLine(
-            color = axisColor,
-            start = Offset(originX, originY),
-            end = Offset(originX, originY - plotH),
-            strokeWidth = 1f,
-        )
+        // 横轴 / 纵轴
+        drawLine(axisColor, Offset(originX, originY), Offset(originX + plotW, originY), strokeWidth = 1f)
+        drawLine(axisColor, Offset(originX, originY), Offset(originX, originY - plotH), strokeWidth = 1f)
 
-        // x tick: 0..5 s（6 个 tick）
+        // x tick: 0..5（按 maxSec 5 等分）
         for (i in 0..5) {
             val x = originX + plotW * (i / 5f)
-            drawLine(
-                color = axisColor,
-                start = Offset(x, originY),
-                end = Offset(x, originY + 4f),
-                strokeWidth = 1f,
-            )
+            drawLine(axisColor, Offset(x, originY), Offset(x, originY + 4f), strokeWidth = 1f)
         }
-        // y tick: 0/50/100/150 km/h（4 个 tick）
+        // y tick: 0/50/100/150 km/h 等分
         for (i in 0..3) {
             val y = originY - plotH * (i / 3f)
-            drawLine(
-                color = axisColor,
-                start = Offset(originX, y),
-                end = Offset(originX - 4f, y),
-                strokeWidth = 1f,
-            )
+            drawLine(axisColor, Offset(originX, y), Offset(originX - 4f, y), strokeWidth = 1f)
         }
 
-        // cyan 渐近曲线：0 -> ~100 km/h @ 4.21s -> 渐近 ~150
-        // 参数化：t in [0, 1] 映射 x 0 -> plotW；speed = 150 * (1 - exp(-2.4*t)) 类似
+        // 真实速度曲线：speed (km/h) vs time (s)
         val path = Path()
-        val steps = 60
-        for (i in 0..steps) {
-            val t = i / steps.toFloat()
-            // 5 秒映射到 plotW，曲线在 5 秒达到约 130 km/h（继续走可达 150）
-            val speed = 150f * (1f - kotlin.math.exp(-1.4 * t * 5).toFloat())
-            val x = originX + plotW * t
-            val y = originY - plotH * (speed / 150f)
+        curve.points.forEachIndexed { i, (sec, kmh) ->
+            val x = originX + plotW * (sec / curve.maxSec)
+            val y = originY - plotH * (kmh / curve.maxSpeedKmh)
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
-        drawPath(
-            path = path,
-            color = curveColor,
-            style = Stroke(width = 2.5.dp.toPx()),
-        )
+        drawPath(path = path, color = curveColor, style = Stroke(width = 2.5.dp.toPx()))
 
-        // 100 km/h 处水平虚线 + 4.21 s 处垂直虚线
-        val tHit = 4.21f / 5f
-        val crossX = originX + plotW * tHit
-        val crossY = originY - plotH * (100f / 150f)
-        val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
-        drawLine(
-            color = dashColor,
-            start = Offset(originX, crossY),
-            end = Offset(crossX, crossY),
-            strokeWidth = 1.2.dp.toPx(),
-            pathEffect = dash,
-        )
-        drawLine(
-            color = dashColor,
-            start = Offset(crossX, originY),
-            end = Offset(crossX, crossY),
-            strokeWidth = 1.2.dp.toPx(),
-            pathEffect = dash,
-        )
-        // 交点圆点
-        drawCircle(
-            color = dotColor,
-            radius = 5.dp.toPx(),
-            center = Offset(crossX, crossY),
-        )
+        // 100 km/h 命中点：水平虚线 + 垂直虚线 + 圆点
+        val hitSec = curve.hundredKmhAtSec
+        if (hitSec != null) {
+            val crossX = originX + plotW * (hitSec / curve.maxSec)
+            val crossY = originY - plotH * (100f / curve.maxSpeedKmh)
+            val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+            drawLine(dashColor, Offset(originX, crossY), Offset(crossX, crossY), 1.2.dp.toPx(), pathEffect = dash)
+            drawLine(dashColor, Offset(crossX, originY), Offset(crossX, crossY), 1.2.dp.toPx(), pathEffect = dash)
+            drawCircle(color = dotColor, radius = 5.dp.toPx(), center = Offset(crossX, crossY))
+        }
     }
 }
 
 @Composable
-private fun SpeedCurveBubble(modifier: Modifier) {
+private fun SpeedCurveBubble(timeLabel: String, modifier: Modifier) {
     Box(
         modifier = modifier
             .wrapContentSize()
@@ -403,7 +416,7 @@ private fun SpeedCurveBubble(modifier: Modifier) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "4.21 s",
+                text = timeLabel,
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextSecondary,
                 maxLines = 1,

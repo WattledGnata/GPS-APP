@@ -93,6 +93,7 @@ class TestResultRepository(
         timestamp = timestamp,
         totalTime = totalTime,
         totalDistance = totalDistance,
+        dataFilePath = dataFilePath,
     )
 
     /**

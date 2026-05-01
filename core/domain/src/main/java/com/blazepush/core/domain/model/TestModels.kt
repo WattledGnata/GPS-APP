@@ -202,6 +202,10 @@ data class TestResultSummary(
     val timestamp: Long,            // epoch ms
     val totalTime: Double,          // 秒
     val totalDistance: Double,      // 米
+    // round redesign-performance-result-screen 追加：UI 层（如 RecordsHomeScreen.SpeedCurveSection）
+    // 需要透 dataFilePath 直接读 binary dataPoints 画真实曲线 + 100 km/h 标注，避免再多走一层
+    // Repository getDataPointsForResult flow 包装。值为空字符串视为无 binary。
+    val dataFilePath: String = "",
 )
 
 /**
