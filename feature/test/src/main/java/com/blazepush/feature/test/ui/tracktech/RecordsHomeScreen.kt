@@ -424,10 +424,12 @@ private fun LapsView(
     testSessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
+    val availableTracks by testSessionViewModel.availableTracks.collectAsState()
     val bestLap by testSessionViewModel.bestLapForCurrentTrack.collectAsState()
     val sessionCount by testSessionViewModel.sessionCountForCurrentTrack.collectAsState()
     val totalLapCount by testSessionViewModel.totalLapCountForCurrentTrack.collectAsState()
     val recentSessions by testSessionViewModel.recentSessionsForCurrentTrack.collectAsState()
+    var showSelectTrackSheet by remember { mutableStateOf(false) }
 
     val record = remember(currentTrack, bestLap, sessionCount, totalLapCount) {
         CurrentTrackRecord(
@@ -447,7 +449,11 @@ private fun LapsView(
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        CurrentTrackRecordCard(track = currentTrack, record = record)
+        CurrentTrackRecordCard(
+            track = currentTrack,
+            record = record,
+            onClick = { showSelectTrackSheet = true },
+        )
 
         Row(
             modifier = Modifier
@@ -520,6 +526,15 @@ private fun LapsView(
             }
         }
     }
+
+    if (showSelectTrackSheet) {
+        SelectTrackBottomSheet(
+            onDismiss = { showSelectTrackSheet = false },
+            tracks = availableTracks,
+            currentTrackId = currentTrack?.id,
+            onTrackSelected = { testSessionViewModel.selectTrack(it) },
+        )
+    }
 }
 
 private fun formatLapSessionRowTitle(session: TelemetrySession): String {
@@ -529,11 +544,16 @@ private fun formatLapSessionRowTitle(session: TelemetrySession): String {
 }
 
 @Composable
-private fun CurrentTrackRecordCard(track: Track?, record: CurrentTrackRecord) {
+private fun CurrentTrackRecordCard(
+    track: Track?,
+    record: CurrentTrackRecord,
+    onClick: () -> Unit,
+) {
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
-            .height(170.dp),
+            .height(170.dp)
+            .clickable { onClick() },
         cutSize = 14.dp,
         cutCorners = cutCornersDiagonal,
         contentPadding = 16.dp,
