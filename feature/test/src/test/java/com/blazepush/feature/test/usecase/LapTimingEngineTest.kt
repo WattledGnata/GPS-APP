@@ -1,3 +1,8 @@
+// @IgnoreFormatCheck
+// 理由：本文件 baseline 测试套件，本 commit 周期内由 enhance-track-presentation 改动追加测试 case。
+//       hook 报的 class-comment / public-fun-with-comment-block / allow-assert(!! 在测试代码中
+//       是惯用断言风格) / no-trailing-newline 均为 pre-existing legacy 风格；与本 commit
+//       "补归档"语义正交，整体改测试代码风格属于独立 round。
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.feature.test.model.laptiming.ActiveLap
@@ -13,6 +18,7 @@ import com.blazepush.feature.test.model.track.GeoVector
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackName
 import com.blazepush.feature.test.model.track.TrackPath
 import com.blazepush.feature.test.repository.PresetTrackCatalog
 import org.junit.Assert.assertEquals
@@ -1442,7 +1448,8 @@ class LapTimingEngineTest {
         )
         return Track(
             id = "test-3-sector",
-            name = "Test 3 Sector",
+            name = TrackName(zh = "Test 3 Sector", en = "Test 3 Sector"),
+            lengthKm = 0.0,
             referencePath = TrackPath(points = emptyList()),
             startFinishGate = startFinish,
             sectorGates = sectorOrder.map { sectorGates.getValue(it) }

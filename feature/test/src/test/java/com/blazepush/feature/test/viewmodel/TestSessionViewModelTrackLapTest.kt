@@ -150,7 +150,8 @@ class TestSessionViewModelTrackLapTest {
             assertFalse(summary.isNullOrBlank())
             assertTrue(requireNotNull(summary).contains("trackId=preset-tfic-lpcc"))
             assertTrue(summary.contains("source=Generated"))
-            assertTrue(summary.contains("layoutName=REAL_TRACK_REPLAY"))
+            // layoutName 字段已被 change `enhance-track-presentation` §1.2 / §3.1 移除；
+            // 来源标识由 source = TrackSource.Generated 接管（上一行已断）。
             assertTrue(summary.contains("startFinish="))
             assertTrue(summary.contains("startFinish=30.496167246506413,104.43343794245452->30.49619075349359,104.43291739087881"))
             assertTrue(summary.contains("s1="))

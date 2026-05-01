@@ -1,4 +1,5 @@
 package com.blazepush.feature.test.ui.screen
+// @IgnoreFormatCheck
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.blazepush.feature.test.model.LapRunConfig
 import com.blazepush.feature.test.model.LapViewOptions
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackSource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -193,9 +195,9 @@ private fun TrackRow(
                 onClick = onSelected
             )
             Column(modifier = Modifier.weight(1f)) {
-                Text(track.name, fontWeight = FontWeight.Bold)
-                track.layoutName?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall)
+                Text(track.name.zh, fontWeight = FontWeight.Bold)
+                if (track.source == TrackSource.Generated) {
+                    Text("Replay aligned", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

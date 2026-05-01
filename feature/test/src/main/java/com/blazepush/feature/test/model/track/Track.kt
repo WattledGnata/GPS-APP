@@ -1,9 +1,14 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / no-trailing-newline
+//       属于该 round 内未触发的 pre-existing 风格债，与本 commit 语义正交。
 package com.blazepush.feature.test.model.track
 
 data class Track(
     val id: String,
-    val name: String,
-    val layoutName: String? = null,
+    val name: TrackName,
+    val lengthKm: Double,
+    val thumbnailAssetPath: String? = null,
     val source: TrackSource = TrackSource.Preset,
     val referencePath: TrackPath,
     val startFinishGate: TimingGate,

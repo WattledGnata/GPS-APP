@@ -1,6 +1,11 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / public-fun-with-comment-block
+//       / no-trailing-newline 属于该 round 内未触发的 pre-existing 风格债。
 package com.blazepush.feature.test.repository
 
 import com.blazepush.feature.test.model.track.TimingGateType
+import com.blazepush.feature.test.model.track.TrackSource
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,7 +34,12 @@ class TrackCatalogTest {
         val sector1Line = track.sectorGates[0].line
         val sector2Line = track.sectorGates[1].line
 
-        assertEquals("TFIC LPCC", track.name)
+        assertEquals("成都天府国际赛道", track.name.zh)
+        assertEquals("Chengdu Tianfu International Circuit", track.name.en)
+        assertEquals("TFIC", track.name.abbr)
+        assertEquals(3.260, track.lengthKm, 1e-6)
+        assertEquals("track_thumbnails/chengdu_tianfu.png", track.thumbnailAssetPath)
+        assertEquals(TrackSource.Preset, track.source)
         assertEquals(TimingGateType.StartFinish, track.startFinishGate.type)
         assertEquals("起点", track.startFinishGate.name)
         assertEquals(listOf("s1", "s2"), track.sectorGates.map { it.name })

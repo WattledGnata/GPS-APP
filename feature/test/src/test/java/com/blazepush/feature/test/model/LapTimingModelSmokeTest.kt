@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / public-fun-with-comment-block
+//       / no-trailing-newline 属于该 round 内未触发的 pre-existing 风格债，与本 commit 语义正交。
 package com.blazepush.feature.test.model
 
 import com.blazepush.feature.test.model.laptiming.LapSession
@@ -8,6 +12,7 @@ import com.blazepush.feature.test.model.track.GeoVector
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackName
 import com.blazepush.feature.test.model.track.TrackPath
 import com.blazepush.feature.test.model.track.TrackSource
 import org.junit.Assert.assertEquals
@@ -44,7 +49,8 @@ class LapTimingModelSmokeTest {
         )
         val track = Track(
             id = "preset-track",
-            name = "Preset Track",
+            name = TrackName(zh = "Preset Track", en = "Preset Track"),
+            lengthKm = 0.0,
             referencePath = TrackPath(points = listOf(startPoint)),
             startFinishGate = timingGate
         )

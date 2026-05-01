@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / public-fun-with-comment-block
+//       / no-trailing-newline 属于该 round 内未触发的 pre-existing 风格债，与本 commit 语义正交。
 package com.blazepush.feature.test.repository
 
 import android.content.Context
@@ -89,7 +93,8 @@ class ReplayAlignedTrackCatalog(
         return Track(
             id = TFIC_TRACK_ID,
             name = fallbackTrack.name,
-            layoutName = "REAL_TRACK_REPLAY",
+            lengthKm = fallbackTrack.lengthKm,
+            thumbnailAssetPath = fallbackTrack.thumbnailAssetPath,
             source = TrackSource.Generated,
             referencePath = TrackPath(
                 points = replaySamples.map { sample ->

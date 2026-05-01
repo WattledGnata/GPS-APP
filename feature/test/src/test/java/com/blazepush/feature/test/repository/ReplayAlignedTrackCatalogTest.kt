@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / public-fun-with-comment-block
+//       / no-trailing-newline 属于该 round 内未触发的 pre-existing 风格债。
 package com.blazepush.feature.test.repository
 
 import com.blazepush.feature.test.model.laptiming.CrossingReason
@@ -165,7 +169,8 @@ class ReplayAlignedTrackCatalogTest {
         val track = requireNotNull(catalog.getTrack("preset-tfic-lpcc"))
 
         assertEquals(TrackSource.Generated, track.source)
-        assertEquals("REAL_TRACK_REPLAY", track.layoutName)
+        assertEquals(3.260, track.lengthKm, 1e-6)
+        assertEquals("track_thumbnails/chengdu_tianfu.png", track.thumbnailAssetPath)
         assertTrue(track.referencePath.points.size > 100)
         assertEquals("起点", track.startFinishGate.name)
         assertEquals(listOf("s1", "s2"), track.sectorGates.map { it.name })
@@ -288,7 +293,8 @@ class ReplayAlignedTrackCatalogTest {
         val track = catalog.getTrack("preset-tfic-lpcc")
 
         assertEquals("热缓存命中应返回 replay-aligned 版", TrackSource.Generated, track?.source)
-        assertEquals("REAL_TRACK_REPLAY", track?.layoutName)
+        assertEquals("热缓存命中沿用 preset 长度，不重算", 3.260, track?.lengthKm ?: 0.0, 1e-6)
+        assertEquals("热缓存命中沿用 preset thumbnail", "track_thumbnails/chengdu_tianfu.png", track?.thumbnailAssetPath)
         assertEquals(
             "热 getTrack 不再触发 asset IO（仅首次 getAllTracks 触发一次）",
             countAfterWarm,

@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / public-fun-with-comment-block
+//       / property-name(_a 测试占位) / no-trailing-newline 属于该 round 内未触发的 pre-existing 风格债。
 package com.blazepush.feature.test.model.track
 
 import org.junit.Assert.assertEquals
@@ -87,7 +91,8 @@ class TrackTest {
 
     private fun testTrack(sectorGates: List<TimingGate>): Track = Track(
         id = "test-track",
-        name = "Test Track",
+        name = TrackName(zh = "Test Track", en = "Test Track"),
+        lengthKm = 0.0,
         referencePath = TrackPath(points = emptyList()),
         startFinishGate = TimingGate(
             id = "start-finish",

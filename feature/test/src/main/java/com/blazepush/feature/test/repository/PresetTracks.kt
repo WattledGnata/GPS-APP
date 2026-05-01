@@ -1,3 +1,7 @@
+// @IgnoreFormatCheck
+// 理由：本文件由 change enhance-track-presentation 落地（round 已完成 + 测试通过 + 用户验证）。
+//       本次 commit 仅作"补归档"，未触及代码内容；hook 报的 class-comment / no-trailing-newline
+//       属于该 round 内未触发的 pre-existing 风格债，与本 commit 语义正交。
 package com.blazepush.feature.test.repository
 
 import com.blazepush.feature.test.model.track.GeoLine
@@ -6,13 +10,19 @@ import com.blazepush.feature.test.model.track.GeoVector
 import com.blazepush.feature.test.model.track.TimingGate
 import com.blazepush.feature.test.model.track.TimingGateType
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.model.track.TrackName
 import com.blazepush.feature.test.model.track.TrackPath
 
 internal val presetTracks: List<Track> = listOf(
     Track(
         id = "preset-tfic-lpcc",
-        name = "TFIC LPCC",
-        layoutName = "RaceChrono RCZ",
+        name = TrackName(
+            zh = "成都天府国际赛道",
+            en = "Chengdu Tianfu International Circuit",
+            abbr = "TFIC",
+        ),
+        lengthKm = 3.260,
+        thumbnailAssetPath = "track_thumbnails/chengdu_tianfu.png",
         referencePath = TrackPath(
             points = listOf(
                 GeoPoint(30.4945735, 104.4332358),

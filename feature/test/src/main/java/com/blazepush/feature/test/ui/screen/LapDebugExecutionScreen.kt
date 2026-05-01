@@ -64,7 +64,7 @@ fun LapDebugExecutionScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(text = "Track: ${track.name}", fontWeight = FontWeight.Bold)
+                Text(text = "Track: ${track.name.zh}", fontWeight = FontWeight.Bold)
                 Text(text = "当前圈: Lap $currentLap")
                 Text(text = "下一 Gate: ${nextGate?.name ?: "无"}")
                 Text(text = "会话状态: ${lapSession?.status?.name ?: "Idle"}")
