@@ -34,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,15 +52,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.ui.tracktech.format.formatDate
+import com.blazepush.feature.test.ui.tracktech.format.formatLapMs
+import com.blazepush.feature.test.ui.tracktech.format.formatRunTimestamp
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
-import org.koin.compose.koinInject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun RecordsHomeScreen(
@@ -133,7 +131,15 @@ private fun RecordsTitleRow(context: Context) {
 // =====================================================================
 
 @Composable
-private fun PerformanceView(context: Context) {
+private fun PerformanceView(
+    context: Context,
+    testSessionViewModel: TestSessionViewModel = koinViewModel(),
+) {
+    val bestAcc by testSessionViewModel.bestAcceleration0To100.collectAsState()
+    val bestBrake by testSessionViewModel.bestBraking100To0.collectAsState()
+    val totalRuns by testSessionViewModel.totalRunCount.collectAsState()
+    val recent by testSessionViewModel.recentRuns.collectAsState()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -146,7 +152,7 @@ private fun PerformanceView(context: Context) {
         ) {
             MetricTile(
                 label = "BEST 0-100",
-                value = "4.21",
+                value = bestAcc?.let { "%.2f".format(it.totalTime) } ?: "--",
                 unit = "s",
                 accentColor = TrackTechColors.Purple,
                 valueSize = MetricSize.Medium,
@@ -154,7 +160,7 @@ private fun PerformanceView(context: Context) {
             )
             MetricTile(
                 label = "BEST BRAKE",
-                value = "36.8",
+                value = bestBrake?.let { "%.1f".format(it.totalDistance) } ?: "--",
                 unit = "m",
                 accentColor = TrackTechColors.Red,
                 valueSize = MetricSize.Medium,
@@ -162,7 +168,7 @@ private fun PerformanceView(context: Context) {
             )
             MetricTile(
                 label = "TOTAL RUNS",
-                value = "24",
+                value = totalRuns.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
                 modifier = Modifier.weight(1f),
@@ -187,34 +193,53 @@ private fun PerformanceView(context: Context) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        placeholderRecentRuns.forEach { run ->
-            val (leadingIcon, title, subtitle) = recentRunRowContent(run)
-            TrackTechRow(
-                leadingIcon = leadingIcon,
-                title = title,
-                subtitle = subtitle,
-                onClick = {
-                    Toast.makeText(context, "Run detail placeholder", Toast.LENGTH_SHORT).show()
-                },
+        if (recent.isEmpty()) {
+            Text(
+                text = "No runs yet.",
+                style = TrackTechTypography.UiTextSmall,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+        } else {
+            recent.forEach { result ->
+                val isPB = result.id == bestAcc?.id || result.id == bestBrake?.id
+                val (leadingIcon, title, subtitle) = recentRunRowContent(result, isPB)
+                TrackTechRow(
+                    leadingIcon = leadingIcon,
+                    title = title,
+                    subtitle = subtitle,
+                    onClick = {
+                        Toast.makeText(context, "Run detail placeholder", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
         }
     }
 }
 
-private fun recentRunRowContent(run: RecentRun): Triple<ImageVector, String, String> {
-    if (run.isPB) {
-        return Triple(
-            Icons.Filled.EmojiEvents,
-            run.type,
-            "${run.value} · ${run.time} · Personal Best",
-        )
+private fun recentRunRowContent(
+    result: TestResultSummary,
+    isPB: Boolean,
+): Triple<ImageVector, String, String> {
+    val type = when (result.testTemplateId) {
+        "acc_0_100" -> "0-100 km/h"
+        "brake_100_0" -> "100-0 km/h"
+        else -> result.testTemplateId
     }
-    val icon = if (run.type.startsWith("0-100")) {
-        Icons.Filled.Speed
-    } else {
-        Icons.Outlined.DoNotDisturbOn
+    val value = when (result.testTemplateId) {
+        "acc_0_100" -> "%.2f s".format(result.totalTime)
+        "brake_100_0" -> "%.1f m".format(result.totalDistance)
+        else -> "—"
     }
-    return Triple(icon, run.type, "${run.value} · ${run.time}")
+    val time = formatRunTimestamp(result.timestamp)
+    val icon = when {
+        isPB -> Icons.Filled.EmojiEvents
+        result.testTemplateId == "acc_0_100" -> Icons.Filled.Speed
+        else -> Icons.Outlined.DoNotDisturbOn
+    }
+    val subtitle = if (isPB) "$value · $time · Personal Best" else "$value · $time"
+    return Triple(icon, type, subtitle)
 }
 
 @Composable
@@ -397,25 +422,22 @@ private fun LapsView(
     @Suppress("UNUSED_PARAMETER") context: Context,
     navController: NavController,
     testSessionViewModel: TestSessionViewModel = koinViewModel(),
-    telemetryRepository: TelemetryRepository = koinInject(),
 ) {
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
-    var sessionRows by remember { mutableStateOf<List<TelemetrySession>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        sessionRows = telemetryRepository.getRecentLapSessions(limit = 10)
-    }
-    val record = remember(currentTrack) {
-        // change `enhance-track-presentation` D9：trackName / length 派生自真实 currentTrack；
-        // bestLapTime / bestLapDate / direction / sessions / totalLaps 仍是占位 mock，
-        // 不在本 change 范围。
+    val bestLap by testSessionViewModel.bestLapForCurrentTrack.collectAsState()
+    val sessionCount by testSessionViewModel.sessionCountForCurrentTrack.collectAsState()
+    val totalLapCount by testSessionViewModel.totalLapCountForCurrentTrack.collectAsState()
+    val recentSessions by testSessionViewModel.recentSessionsForCurrentTrack.collectAsState()
+
+    val record = remember(currentTrack, bestLap, sessionCount, totalLapCount) {
         CurrentTrackRecord(
             trackName = currentTrack?.name?.zh ?: "—",
-            bestLapTime = "1:32.457",
-            bestLapDate = "May 18, 2024",
+            bestLapTime = bestLap?.bestLapMs?.let { formatLapMs(it) } ?: "--",
+            bestLapDate = bestLap?.startTs?.let { formatDate(it) } ?: "暂无",
             length = currentTrack?.let { "%.3f km".format(it.lengthKm) } ?: "—",
             direction = "Clockwise",
-            sessions = 8,
-            totalLaps = 56,
+            sessions = sessionCount,
+            totalLaps = totalLapCount,
         )
     }
 
@@ -478,7 +500,7 @@ private fun LapsView(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (sessionRows.isEmpty()) {
+        if (recentSessions.isEmpty()) {
             Text(
                 text = "No lap sessions yet.",
                 style = TrackTechTypography.UiTextSmall,
@@ -487,12 +509,12 @@ private fun LapsView(
                 overflow = TextOverflow.Ellipsis,
             )
         } else {
-            sessionRows.forEach { row ->
+            recentSessions.forEach { session ->
                 TrackTechRow(
                     leadingIcon = Icons.Filled.CalendarMonth,
-                    title = formatLapSessionRowTitle(row),
+                    title = formatLapSessionRowTitle(session),
                     onClick = {
-                        navController.navigate("lap_session_detail/${row.sessionId}")
+                        navController.navigate("lap_session_detail/${session.sessionId}")
                     },
                 )
             }
@@ -501,21 +523,9 @@ private fun LapsView(
 }
 
 private fun formatLapSessionRowTitle(session: TelemetrySession): String {
-    // persist-session-summary-fields round 起：直读 entity 持久化的 lapCount / bestLapMs，
-    // 不再仅显示时间 + duration（baseline 行为）
-    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-    val date = formatter.format(Date(session.startTs))
-    val lapCount = session.lapCount
-    val best = session.bestLapMs?.let { formatLapTimeMs(it) } ?: "--"
-    return "$date · $lapCount laps · best $best"
-}
-
-private fun formatLapTimeMs(ms: Long): String {
-    val totalSec = ms / 1000
-    val minutes = totalSec / 60
-    val seconds = totalSec % 60
-    val millis = ms % 1000
-    return "%d:%02d.%03d".format(minutes, seconds, millis)
+    val date = formatDate(session.startTs)
+    val best = session.bestLapMs?.let { formatLapMs(it) } ?: "--"
+    return "$date · ${session.lapCount} Laps · Best $best"
 }
 
 @Composable
@@ -656,21 +666,8 @@ private fun SegmentedControl(
 }
 
 // =====================================================================
-// Hardcoded placeholder 数据（本 round 不接真实数据层）
+// LapsView 派生用临时容器
 // =====================================================================
-
-private data class RecentRun(
-    val type: String,
-    val value: String,
-    val time: String,
-    val isPB: Boolean,
-)
-
-private val placeholderRecentRuns: List<RecentRun> = listOf(
-    RecentRun("0-100 km/h", "4.58 s", "Today, 10:35", false),
-    RecentRun("100-0 km/h", "38.2 m", "Today, 10:32", false),
-    RecentRun("0-100 km/h", "4.21 s", "May 18, 2024", true),
-)
 
 private data class CurrentTrackRecord(
     val trackName: String,

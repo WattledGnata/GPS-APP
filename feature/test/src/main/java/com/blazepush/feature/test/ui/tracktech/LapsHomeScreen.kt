@@ -39,6 +39,8 @@ import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.ui.tracktech.format.formatDate
+import com.blazepush.feature.test.ui.tracktech.format.formatLapMs
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.compose.koinInject
@@ -58,6 +60,7 @@ fun LapsHomeScreen(
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
     val recentTrackIds by testSessionViewModel.recentTrackIds.collectAsState()
+    val bestLapForCurrent by testSessionViewModel.bestLapForCurrentTrack.collectAsState()
     var showSelectTrackSheet by remember { mutableStateOf(false) }
 
     val readiness = remember(connectionState, gpsData, dataQuality) {
@@ -175,8 +178,8 @@ fun LapsHomeScreen(
             )
             MetricTile(
                 label = currentTrackLabel.uppercase(),
-                value = "1:32.457",
-                status = "Personal Best · placeholder",
+                value = bestLapForCurrent?.bestLapMs?.let { formatLapMs(it) } ?: "--",
+                status = bestLapForCurrent?.let { "Personal Best · ${formatDate(it.startTs)}" } ?: "暂无成绩",
                 accentColor = TrackTechColors.Purple,
                 valueSize = MetricSize.Medium,
             )
