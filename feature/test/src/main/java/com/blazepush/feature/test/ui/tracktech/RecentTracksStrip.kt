@@ -36,27 +36,26 @@ fun RecentTracksStrip(
     availableTracks: List<Track>,
     currentTrackId: String?,
     onTrackClick: (Track) -> Unit,
-    onViewAllClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val resolved = recentTrackIds.mapNotNull { id ->
         availableTracks.firstOrNull { it.id == id }
     }
+    // round 反馈修订：RECENT 空时回退显示所有 availableTracks，避免首次启动横滑区
+    // 视觉空旷。RECENT 一旦有历史则按时间倒序显示。VIEW ALL 入口在 section header
+    // 右侧 IconButton（不在 strip 内部）。
+    val displayTracks = if (resolved.isEmpty()) availableTracks else resolved
 
     LazyRow(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
     ) {
-        items(items = resolved, key = { it.id }) { track ->
+        items(items = displayTracks, key = { it.id }) { track ->
             RecentTrackCard(
                 track = track,
                 isCurrent = track.id == currentTrackId,
                 onClick = { if (track.id != currentTrackId) onTrackClick(track) },
             )
-        }
-        item(key = "__view_all__") {
-            ViewAllCard(onClick = onViewAllClick)
         }
     }
 }
@@ -103,25 +102,5 @@ private fun RecentTrackCard(
     }
 }
 
-@Composable
-private fun ViewAllCard(onClick: () -> Unit) {
-    val shape = CutCornerPanelShape(cutSize = 8.dp, cutCorners = cutCornersDiagonal)
-    Box(
-        modifier = Modifier
-            .width(140.dp)
-            .height(120.dp)
-            .clip(shape)
-            .background(TrackTechColors.Surface, shape)
-            .border(1.dp, TrackTechColors.Cyan, shape)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "VIEW ALL",
-            style = TrackTechTypography.UiTextLabel,
-            color = TrackTechColors.Cyan,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
+// ViewAllCard removed by round 反馈修订：VIEW ALL 改放 LapsHomeScreen
+// section header 右侧 IconButton（GridView icon、cyan tint），不再做横滑序列末尾卡片。
