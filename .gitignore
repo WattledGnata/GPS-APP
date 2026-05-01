@@ -17,6 +17,7 @@ local.properties
 
 # 编译产物
 **/build/
+**/bin/
 *.apk
 *.aab
 *.class
