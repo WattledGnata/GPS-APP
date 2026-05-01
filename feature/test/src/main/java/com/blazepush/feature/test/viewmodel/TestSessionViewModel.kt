@@ -18,6 +18,7 @@ import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
@@ -36,12 +37,18 @@ import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.repository.TrackCatalog
+import com.blazepush.feature.test.usecase.LapLiveState
+import com.blazepush.feature.test.usecase.LapLiveStateDeriver
 import com.blazepush.feature.test.usecase.LapTimingEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -50,6 +57,20 @@ enum class TestMode {
     Braking,
     LapDebug
 }
+
+/**
+ * HOLD TO END / EndConfirmationDialog 完成保存后返回给 UI 的派生 summary。
+ *
+ * @author CC
+ * @description lap session save result snapshot for snackbar / nav
+ * @date 2026-05-01
+ */
+data class LapSessionSaveResult(
+    val sessionId: String,
+    val lapCount: Int,
+    val bestLapMs: Long?,
+    val totalDurationMs: Long,
+)
 
 /**
  * 测试会话ViewModel - 管理测试状态机
@@ -74,6 +95,8 @@ class TestSessionViewModel(
         private const val TRIGGER_CONFIRMATION_COUNT = 5
         private const val STANDSTILL_SPEED_THRESHOLD = 3.0
         private const val STANDSTILL_CONFIRMATION_COUNT = 3
+        private const val LAP_LIVE_TICK_PERIOD_MS = 50L
+        private const val LAP_LIVE_SUBSCRIPTION_TIMEOUT_MS = 5_000L
 
         /**
          * 开圈（prev==0 → updated>0）用新 index；闭圈和 sector 用旧 index。
@@ -95,11 +118,45 @@ class TestSessionViewModel(
     private val _availableTracks = MutableStateFlow<List<Track>>(emptyList())
     val availableTracks: StateFlow<List<Track>> = _availableTracks.asStateFlow()
 
+    private val _currentSelectedTrack = MutableStateFlow<Track?>(null)
+    val currentSelectedTrack: StateFlow<Track?> = _currentSelectedTrack.asStateFlow()
+
+    fun selectTrack(track: Track) {
+        _currentSelectedTrack.value = track
+    }
+
     private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
     val lapRunConfig: StateFlow<LapRunConfig?> = _lapRunConfig.asStateFlow()
 
     private val _lapSession = MutableStateFlow<LapSession?>(null)
     val lapSession: StateFlow<LapSession?> = _lapSession.asStateFlow()
+
+    val lapLiveState: StateFlow<LapLiveState> = combine(
+        _lapSession,
+        gpsDataViewModel.gpsData,
+        gpsDataViewModel.connectionState,
+        gpsDataViewModel.dataQuality,
+        tickerFlow(LAP_LIVE_TICK_PERIOD_MS),
+    ) { session: LapSession?, gps: GpsData, conn: ConnectionState, quality: DataQuality, _: Unit ->
+        LapLiveStateDeriver.derive(
+            session = session,
+            currentTimeMs = gps.timestamp,
+            gpsData = gps,
+            connectionState = conn,
+            dataQuality = quality,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(LAP_LIVE_SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = LapLiveState(
+            currentLapTimerMs = null,
+            lastLapTimeMs = null,
+            bestLapTimeMs = null,
+            deltaToBestMs = null,
+            currentLapNumber = 1,
+            abnormalState = null,
+        ),
+    )
 
     private val _latestLapRecords = MutableStateFlow<List<LapRecord>>(emptyList())
     val latestLapRecords: StateFlow<List<LapRecord>> = _latestLapRecords.asStateFlow()
@@ -141,7 +198,11 @@ class TestSessionViewModel(
     init {
         // A37：异步加载 availableTracks，不指定 Dispatchers.IO（catalog 实现自负 IO 边界）
         viewModelScope.launch {
-            _availableTracks.value = trackCatalog.getAllTracks()
+            val loaded = trackCatalog.getAllTracks()
+            _availableTracks.value = loaded
+            if (_currentSelectedTrack.value == null) {
+                _currentSelectedTrack.value = loaded.firstOrNull()
+            }
         }
 
         viewModelScope.launch {
@@ -223,6 +284,47 @@ class TestSessionViewModel(
         activeLapStartSystemTs = null
         lastWrittenCrossingCount = 0
         viewModelScope.launch { telemetryRepository.endSession(sessionId) }
+    }
+
+    /**
+     * HOLD TO END / EndConfirmationDialog 的 session 终止入口（D12）：
+     * 先捕获派生 summary（清状态前），await endSession，再清 ViewModel session 状态。
+     * 返回 result 给 UI 驱动 Snackbar 与 View Record 跳转；session 未激活时返回 null。
+     *
+     * @author CC
+     * @description finish active lap session and return summary
+     * @date 2026-05-01
+     */
+    suspend fun finishActiveLapSession(): LapSessionSaveResult? {
+        val sessionId = activeLapSessionId ?: return null
+        val sessionSnapshot = _lapSession.value
+        val startTs = activeLapStartSystemTs
+        val completedLaps = sessionSnapshot?.completedLaps.orEmpty()
+        val lapCount = completedLaps.size
+        val bestLapMs = completedLaps.minOfOrNull { it.durationMillis }
+        val totalDurationMs = startTs?.let { System.currentTimeMillis() - it } ?: 0L
+
+        telemetryRepository.endSession(sessionId)
+
+        activeLapSessionId = null
+        activeLapStartSystemTs = null
+        lastWrittenCrossingCount = 0
+        isLapRecording = false
+        _lapSession.value = sessionSnapshot?.copy(status = LapSessionStatus.Finished)
+
+        return LapSessionSaveResult(
+            sessionId = sessionId,
+            lapCount = lapCount,
+            bestLapMs = bestLapMs,
+            totalDurationMs = totalDurationMs,
+        )
+    }
+
+    private fun tickerFlow(periodMs: Long) = flow {
+        while (true) {
+            emit(Unit)
+            delay(periodMs)
+        }
     }
 
     fun skipCountdown() {
@@ -539,7 +641,7 @@ class TestSessionViewModel(
             "${gate.id}=${gate.line.start.latitude},${gate.line.start.longitude}->${gate.line.end.latitude},${gate.line.end.longitude}|dir=${gate.passDirection.x},${gate.passDirection.y}"
         }
 
-        return "trackId=${track.id},source=${track.source},layoutName=${track.layoutName},startFinish=${startFinish.line.start.latitude},${startFinish.line.start.longitude}->${startFinish.line.end.latitude},${startFinish.line.end.longitude}|dir=${startFinish.passDirection.x},${startFinish.passDirection.y},sectors=[$sectors]"
+        return "trackId=${track.id},source=${track.source.name},startFinish=${startFinish.line.start.latitude},${startFinish.line.start.longitude}->${startFinish.line.end.latitude},${startFinish.line.end.longitude}|dir=${startFinish.passDirection.x},${startFinish.passDirection.y},sectors=[$sectors]"
     }
 
     private fun GpsData.toLapGpsSample(): GpsSample = GpsSample(

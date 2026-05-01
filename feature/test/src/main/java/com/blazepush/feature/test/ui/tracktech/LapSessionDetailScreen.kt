@@ -1,0 +1,505 @@
+package com.blazepush.feature.test.ui.tracktech
+// @IgnoreFormatCheck
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavController
+import com.blazepush.core.data.repository.TelemetryRepository
+import com.blazepush.core.domain.model.TelemetryCrossingEvent
+import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.abs
+
+/**
+ * Records/Laps Session 详情屏（Overview + Lap Records List）。
+ *
+ * 数据接入仅通过 TelemetryRepository public API（D13）：getSession + getCrossings；
+ * UI 层不直接 import CrossingEventDao / TelemetrySessionDao。
+ *
+ * @author CC
+ * @description lap session detail screen
+ * @date 2026-05-01
+ */
+@Composable
+fun LapSessionDetailScreen(
+    navController: NavController,
+    sessionId: String,
+    telemetryRepository: TelemetryRepository = koinInject(),
+    sessionViewModel: TestSessionViewModel = koinViewModel(),
+) {
+    var session by remember { mutableStateOf<TelemetrySession?>(null) }
+    var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
+    var topSpeed by remember { mutableStateOf<Double?>(null) }
+
+    val track by sessionViewModel.currentSelectedTrack.collectAsState()
+
+    LaunchedEffect(sessionId) {
+        val loadedSession = telemetryRepository.getSession(sessionId)
+        session = loadedSession
+        crossings = telemetryRepository.getCrossings(sessionId)
+        // 读 binary samples 取赛道全程最高速度（不能用 crossings 派生 — crossings.speedKmh 仅为过线瞬间速度）
+        topSpeed = loadedSession?.let { sess ->
+            // 用 readPerformanceSamples（顺序读全文件，不按时间窗口过滤）派生全程 max。
+            // 不能用 readLapSamples 因为 baseline 写入时 tsDeltaMs = 协议ts - 真壁钟
+            // （混合时间轴），而 reader 的 absoluteTs = header.startTs(真壁钟) + tsDeltaMs
+            // = 协议ts，与 entity.startTs/endTs（真壁钟）做窗口比较时永远不在范围内 →
+            // readLapSamples 返回空。baseline 时间轴 hygiene 修复见
+            // docs/design/laptime-ts-hygiene-deferred.md。
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    telemetryRepository.readPerformanceSamples(sess.binaryFilePath)
+                }.getOrDefault(emptyList())
+            }.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 }
+        }
+    }
+
+    val derived = remember(crossings) { deriveDetailMetrics(crossings) }
+    val durationMs = session?.let { it.endTs - it.startTs }?.takeIf { it > 0L }
+    val distanceKm = track?.lengthKm?.let { it * derived.validLaps }?.takeIf { it > 0.0 }
+
+    val trackName = track?.name?.zh ?: "—"
+    val sessionDateLabel = session?.startTs?.let(::formatDateTime) ?: "—"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TrackTechColors.Background),
+    ) {
+        DetailHeader(
+            title = "Session",
+            onBack = { navController.popBackStack() },
+        )
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                OverviewSection(
+                    trackName = trackName,
+                    sessionDate = sessionDateLabel,
+                    bestLapMs = derived.bestLapMs,
+                    totalLaps = derived.totalLaps,
+                    validLaps = derived.validLaps,
+                    invalidLaps = derived.invalidLaps,
+                    durationMs = durationMs,
+                    topSpeedKmh = topSpeed,
+                    distanceKm = distanceKm,
+                )
+            }
+            item { LapRecordsHeader() }
+            if (derived.lapRecords.isEmpty()) {
+                item { EmptyLapRecordsHint() }
+            } else {
+                items(derived.lapRecords) { record ->
+                    LapRecordRow(record = record)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailHeader(
+    title: String,
+    onBack: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(TrackTechColors.Surface)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = TrackTechColors.TextPrimary,
+            )
+        }
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = title,
+            style = TrackTechTypography.RacingTitleMedium,
+            color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun OverviewSection(
+    trackName: String,
+    sessionDate: String,
+    bestLapMs: Long?,
+    totalLaps: Int,
+    validLaps: Int,
+    invalidLaps: Int,
+    durationMs: Long?,
+    topSpeedKmh: Double?,
+    distanceKm: Double?,
+) {
+    CutCornerPanel(
+        modifier = Modifier.fillMaxWidth(),
+        cutSize = 8.dp,
+        cutCorners = cutCornersAll,
+        contentPadding = 16.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverviewRow(label = "Track", value = trackName)
+            OverviewRow(label = "Session", value = sessionDate)
+
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MetricTile(
+                    label = "BEST LAP",
+                    value = formatLapTime(bestLapMs),
+                    modifier = Modifier.weight(1f),
+                    accentColor = TrackTechColors.Purple,
+                    valueSize = MetricSize.Medium,
+                    valueKind = MetricKind.Score,
+                )
+                MetricTile(
+                    label = "TOTAL LAPS",
+                    value = totalLaps.toString(),
+                    modifier = Modifier.weight(1f),
+                    accentColor = TrackTechColors.Cyan,
+                    valueSize = MetricSize.Medium,
+                    valueKind = MetricKind.Score,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MetricTile(
+                    label = "VALID LAPS",
+                    value = validLaps.toString(),
+                    modifier = Modifier.weight(1f),
+                    accentColor = TrackTechColors.Green,
+                    valueSize = MetricSize.Small,
+                    valueKind = MetricKind.Score,
+                )
+                MetricTile(
+                    label = "INVALID LAPS",
+                    value = invalidLaps.toString(),
+                    modifier = Modifier.weight(1f),
+                    accentColor = TrackTechColors.Red,
+                    valueSize = MetricSize.Small,
+                    valueKind = MetricKind.Score,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            // 辅助信息（Top speed / Duration / Distance）用 row 风格 label-value，避免三列均分时
+            // value+unit 字符长（如 "171.3 km/h"）撑爆单元格被截断
+            OverviewRow(
+                label = "Top speed",
+                value = topSpeedKmh?.let { "%.1f km/h".format(it) } ?: "--",
+            )
+            OverviewRow(
+                label = "Duration",
+                value = durationMs?.let(::formatDuration) ?: "--",
+            )
+            OverviewRow(
+                label = "Distance",
+                value = distanceKm?.let { "%.2f km".format(it) } ?: "--",
+            )
+        }
+    }
+}
+
+@Composable
+private fun OverviewRow(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = TrackTechTypography.UiTextLabel,
+            color = TrackTechColors.TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = value,
+            style = TrackTechTypography.UiTextBody,
+            color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun LapRecordsHeader() {
+    Text(
+        text = "Lap Records",
+        style = TrackTechTypography.UiTextLabel,
+        color = TrackTechColors.Cyan,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun EmptyLapRecordsHint() {
+    Text(
+        text = "No completed laps recorded.",
+        style = TrackTechTypography.UiTextSmall,
+        color = TrackTechColors.TextMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun LapRecordRow(record: UiLapRecord) {
+    val timeColor = when (record.status) {
+        UiLapStatus.BEST -> TrackTechColors.Purple
+        UiLapStatus.VALID -> TrackTechColors.TextPrimary
+        UiLapStatus.INVALID -> TrackTechColors.Red
+        UiLapStatus.INCOMPLETE -> TrackTechColors.TextMuted
+    }
+    val borderColor: Color = if (record.status == UiLapStatus.BEST) {
+        TrackTechColors.PurpleAlpha40
+    } else {
+        TrackTechColors.BorderAlpha60
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
+            .background(TrackTechColors.Surface)
+            .border(
+                width = 1.dp,
+                color = borderColor,
+                shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Lap ${record.lapNumber}",
+            style = TrackTechTypography.UiTextLabel,
+            color = TrackTechColors.TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(64.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = formatLapTime(record.timeMs),
+            style = TrackTechTypography.UiTextBody,
+            color = timeColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        StatusChip(record)
+        when (record.status) {
+            UiLapStatus.INVALID -> if (!record.reason.isNullOrBlank()) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = record.reason.uppercase(),
+                    style = TrackTechTypography.UiTextSmall,
+                    color = TrackTechColors.Red.copy(alpha = 0.8f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            UiLapStatus.VALID -> {
+                val diffText = formatDiff(record)
+                if (diffText.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = diffText,
+                        style = TrackTechTypography.UiTextSmall,
+                        color = TrackTechColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            UiLapStatus.BEST, UiLapStatus.INCOMPLETE -> Unit
+        }
+    }
+}
+
+@Composable
+private fun StatusChip(record: UiLapRecord) {
+    val (label, color) = when (record.status) {
+        UiLapStatus.BEST -> "BEST" to TrackTechColors.Purple
+        UiLapStatus.VALID -> return  // VALID 圈不显示 chip，时间字色已表达
+        UiLapStatus.INVALID -> "INVALID" to TrackTechColors.Red
+        UiLapStatus.INCOMPLETE -> "INCOMPLETE" to TrackTechColors.TextMuted
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(3.dp))
+            .background(color.copy(alpha = 0.18f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text = label,
+            style = TrackTechTypography.UiTextLabel.copy(fontSize = 10.sp),
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun formatDiff(record: UiLapRecord): String {
+    val ms = record.diffMs ?: return ""
+    if (ms == 0L) return ""
+    val sign = if (ms >= 0) "+" else "-"
+    return "%s%.3f s".format(sign, abs(ms) / 1000.0)
+}
+
+private fun formatLapTime(ms: Long?): String {
+    if (ms == null || ms <= 0L) return "--:--.---"
+    val totalSec = ms / 1000
+    val minutes = totalSec / 60
+    val seconds = totalSec % 60
+    val millis = ms % 1000
+    return "%d:%02d.%03d".format(minutes, seconds, millis)
+}
+
+private fun formatDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    val hours = totalSec / 3600
+    val minutes = (totalSec % 3600) / 60
+    val seconds = totalSec % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(minutes, seconds)
+    }
+}
+
+private fun formatDateTime(epochMs: Long): String {
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    return formatter.format(Date(epochMs))
+}
+
+private data class UiLapRecord(
+    val lapNumber: Int,
+    val timeMs: Long?,
+    val diffMs: Long?,
+    val status: UiLapStatus,
+    val reason: String?,
+)
+
+private enum class UiLapStatus { BEST, VALID, INVALID, INCOMPLETE }
+
+private data class DetailMetrics(
+    val totalLaps: Int,
+    val validLaps: Int,
+    val invalidLaps: Int,
+    val bestLapMs: Long?,
+    val lapRecords: List<UiLapRecord>,
+)
+
+private fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
+    val sf = crossings
+        .filter { it.gateType.equals("StartFinish", ignoreCase = true) }
+        .sortedBy { it.crossingTimestampMs }
+    val acceptedSF = sf.filter { it.accepted }
+    val rejectedSF = sf.filter { !it.accepted }
+
+    val durations = acceptedSF.zipWithNext { a, b ->
+        b.crossingTimestampMs - a.crossingTimestampMs
+    }
+    val bestLapMs = durations.minOrNull()
+
+    val records = mutableListOf<UiLapRecord>()
+    var bestAssigned = false
+    durations.forEachIndexed { idx, dur ->
+        val isBest = !bestAssigned && bestLapMs != null && dur == bestLapMs
+        if (isBest) bestAssigned = true
+        records += UiLapRecord(
+            lapNumber = idx + 1,
+            timeMs = dur,
+            diffMs = bestLapMs?.let { dur - it },
+            status = if (isBest) UiLapStatus.BEST else UiLapStatus.VALID,
+            reason = null,
+        )
+    }
+    rejectedSF.forEachIndexed { idx, c ->
+        records += UiLapRecord(
+            lapNumber = durations.size + idx + 1,
+            timeMs = null,
+            diffMs = null,
+            status = UiLapStatus.INVALID,
+            reason = c.reason,
+        )
+    }
+    return DetailMetrics(
+        totalLaps = acceptedSF.size,
+        validLaps = durations.size,
+        invalidLaps = rejectedSF.size,
+        bestLapMs = bestLapMs,
+        lapRecords = records,
+    )
+}

@@ -109,6 +109,32 @@ class TelemetryRepository(
     }
 
     /**
+     * 拉 session 内所有过线事件（含 INVALID）转换成 domain；UI 层用以派生 lap records / best / last。
+     *
+     * @author CC
+     * @description list crossings of a session as domain models
+     * @date 2026-05-01
+     */
+    suspend fun getCrossings(sessionId: String): List<TelemetryCrossingEvent> =
+        crossingDao.queryBySessionId(sessionId).map { it.toDomain() }
+
+    /**
+     * 拉最近 N 个 LAP_SESSION（按 startTs 倒序），供 Records LAPS SESSION HISTORY 列表消费。
+     *
+     * @author CC
+     * @description recent lap sessions for history list
+     * @date 2026-05-01
+     */
+    suspend fun getRecentLapSessions(limit: Int = 10): List<TelemetrySession> =
+        sessionDao.queryAll()
+            .asSequence()
+            .filter { it.sessionType == TelemetrySessionType.LAP_SESSION.name }
+            .sortedByDescending { it.startTs }
+            .take(limit)
+            .map { it.toDomain() }
+            .toList()
+
+    /**
      * 读加减速 session 全部 sample（顺序读整个 chunk file）。
      */
     fun readPerformanceSamples(filePath: String): List<TelemetrySample> =
@@ -131,5 +157,17 @@ class TelemetryRepository(
         binaryFilePath = binaryFilePath,
         lapCount = lapCount,
         bestLapMs = bestLapMs,
+    )
+
+    private fun CrossingEventEntity.toDomain() = TelemetryCrossingEvent(
+        sessionId = sessionId,
+        lapIndex = lapIndex,
+        crossingTimestampMs = crossingTimestampMs,
+        speedKmh = speedKmh,
+        gateId = gateId,
+        gateType = gateType,
+        accepted = accepted,
+        reason = reason,
+        directionScore = directionScore,
     )
 }

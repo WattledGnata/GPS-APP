@@ -13,7 +13,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-enum class MetricSize { Hero, Medium, Small }
+enum class MetricSize { Hero, Large, Medium, Small }
 
 enum class MetricKind { Mechanical, Score }
 
@@ -30,17 +30,20 @@ fun MetricNumber(
     val numberStyle: TextStyle = when (kind) {
         MetricKind.Mechanical -> when (size) {
             MetricSize.Hero -> TrackTechTypography.MechanicalHero
+            MetricSize.Large -> TrackTechTypography.MechanicalLarge
             MetricSize.Medium -> TrackTechTypography.MechanicalMedium
             MetricSize.Small -> TrackTechTypography.MechanicalSmall
         }
         MetricKind.Score -> when (size) {
             MetricSize.Hero -> TrackTechTypography.ScoreHero
+            MetricSize.Large -> TrackTechTypography.ScoreLarge
             MetricSize.Medium -> TrackTechTypography.ScoreMedium
             MetricSize.Small -> TrackTechTypography.ScoreSmall
         }
     }
     val unitStyle: TextStyle = when (size) {
         MetricSize.Hero -> TrackTechTypography.UiTextBody
+        MetricSize.Large -> TrackTechTypography.UiTextBody
         MetricSize.Medium -> TrackTechTypography.UiTextSmall
         MetricSize.Small -> TrackTechTypography.UiTextSmall
     }

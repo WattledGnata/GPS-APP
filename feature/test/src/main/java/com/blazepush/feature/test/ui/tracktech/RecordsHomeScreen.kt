@@ -27,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
@@ -35,9 +34,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,15 +53,25 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.blazepush.core.data.repository.TelemetryRepository
+import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun RecordsHomeScreen(
-    @Suppress("UNUSED_PARAMETER") navController: NavController,
+    navController: NavController,
     @Suppress("UNUSED_PARAMETER") onTabSelected: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var selectedSegment by remember { mutableStateOf("PERFORMANCE") }
+    // rememberSaveable：进入 detail 屏后返回，sub-tab 选中态保持。
+    var selectedSegment by rememberSaveable { mutableStateOf("PERFORMANCE") }
 
     Column(
         modifier = modifier
@@ -80,7 +92,7 @@ fun RecordsHomeScreen(
 
         when (selectedSegment) {
             "PERFORMANCE" -> PerformanceView(context = context)
-            "LAPS" -> LapsView(context = context)
+            "LAPS" -> LapsView(context = context, navController = navController)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -381,23 +393,39 @@ private fun SpeedCurveBubble(modifier: Modifier) {
 // =====================================================================
 
 @Composable
-private fun LapsView(context: Context) {
+private fun LapsView(
+    @Suppress("UNUSED_PARAMETER") context: Context,
+    navController: NavController,
+    testSessionViewModel: TestSessionViewModel = koinViewModel(),
+    telemetryRepository: TelemetryRepository = koinInject(),
+) {
+    val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
+    var sessionRows by remember { mutableStateOf<List<TelemetrySession>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        sessionRows = telemetryRepository.getRecentLapSessions(limit = 10)
+    }
+    val record = remember(currentTrack) {
+        // change `enhance-track-presentation` D9：trackName / length 派生自真实 currentTrack；
+        // bestLapTime / bestLapDate / direction / sessions / totalLaps 仍是占位 mock，
+        // 不在本 change 范围。
+        CurrentTrackRecord(
+            trackName = currentTrack?.name?.zh ?: "—",
+            bestLapTime = "1:32.457",
+            bestLapDate = "May 18, 2024",
+            length = currentTrack?.let { "%.3f km".format(it.lengthKm) } ?: "—",
+            direction = "Clockwise",
+            sessions = 8,
+            totalLaps = 56,
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        CurrentTrackRecordCard(track = placeholderTrackRecord)
-
-        TrackTechRow(
-            leadingIcon = Icons.Filled.LocationOn,
-            title = placeholderTrackRecord.trackName,
-            subtitle = "${placeholderTrackRecord.length} · ${placeholderTrackRecord.direction}",
-            onClick = {
-                Toast.makeText(context, "Track detail coming next round", Toast.LENGTH_SHORT).show()
-            },
-        )
+        CurrentTrackRecordCard(track = currentTrack, record = record)
 
         Row(
             modifier = Modifier
@@ -407,7 +435,7 @@ private fun LapsView(context: Context) {
         ) {
             MetricTile(
                 label = "BEST LAP",
-                value = placeholderTrackRecord.bestLapTime,
+                value = record.bestLapTime,
                 accentColor = TrackTechColors.Purple,
                 valueSize = MetricSize.Small,
                 modifier = Modifier
@@ -416,7 +444,7 @@ private fun LapsView(context: Context) {
             )
             MetricTile(
                 label = "SESSIONS",
-                value = placeholderTrackRecord.sessions.toString(),
+                value = record.sessions.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
                 modifier = Modifier
@@ -425,7 +453,7 @@ private fun LapsView(context: Context) {
             )
             MetricTile(
                 label = "TOTAL LAPS",
-                value = placeholderTrackRecord.totalLaps.toString(),
+                value = record.totalLaps.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
                 modifier = Modifier
@@ -450,20 +478,39 @@ private fun LapsView(context: Context) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        placeholderLapSessions.forEach { session ->
-            TrackTechRow(
-                leadingIcon = Icons.Filled.CalendarMonth,
-                title = "${session.date} · ${session.laps} Laps · Best ${session.bestLap}",
-                onClick = {
-                    Toast.makeText(context, "Session detail placeholder", Toast.LENGTH_SHORT).show()
-                },
+        if (sessionRows.isEmpty()) {
+            Text(
+                text = "No lap sessions yet.",
+                style = TrackTechTypography.UiTextSmall,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+        } else {
+            sessionRows.forEach { row ->
+                TrackTechRow(
+                    leadingIcon = Icons.Filled.CalendarMonth,
+                    title = formatLapSessionRowTitle(row),
+                    onClick = {
+                        navController.navigate("lap_session_detail/${row.sessionId}")
+                    },
+                )
+            }
         }
     }
 }
 
+private fun formatLapSessionRowTitle(session: TelemetrySession): String {
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    val date = formatter.format(Date(session.startTs))
+    val durationSec = ((session.endTs - session.startTs) / 1000).coerceAtLeast(0L)
+    val mins = durationSec / 60
+    val secs = durationSec % 60
+    return "$date · %d:%02d".format(mins, secs)
+}
+
 @Composable
-private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
+private fun CurrentTrackRecordCard(track: Track?, record: CurrentTrackRecord) {
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -489,7 +536,7 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = track.trackName,
+                        text = record.trackName,
                         style = TrackTechTypography.RacingTitleMedium,
                         color = TrackTechColors.TextPrimary,
                         maxLines = 1,
@@ -505,14 +552,14 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = track.bestLapTime,
+                        text = record.bestLapTime,
                         style = TrackTechTypography.ScoreMedium,
                         color = TrackTechColors.TextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = track.bestLapDate,
+                        text = record.bestLapDate,
                         style = TrackTechTypography.UiTextSmall,
                         color = TrackTechColors.TextSecondary,
                         maxLines = 1,
@@ -534,7 +581,8 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
                         .align(Alignment.TopEnd)
                         .size(20.dp),
                 )
-                TrackPreviewStub(
+                TrackThumbnail(
+                    assetPath = track?.thumbnailAssetPath,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 24.dp, bottom = 4.dp),
@@ -544,44 +592,8 @@ private fun CurrentTrackRecordCard(track: CurrentTrackRecord) {
     }
 }
 
-@Composable
-private fun TrackPreviewStub(modifier: Modifier) {
-    val strokeColor = TrackTechColors.Cyan
-    val markerColor = TrackTechColors.Cyan
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val path = Path()
-        // 不规则闭合环 stub：上海天马近似 8 字简化
-        val start = Offset(w * 0.18f, h * 0.55f)
-        path.moveTo(start.x, start.y)
-        path.cubicTo(
-            w * 0.05f, h * 0.10f,
-            w * 0.55f, h * -0.05f,
-            w * 0.70f, h * 0.30f,
-        )
-        path.cubicTo(
-            w * 0.95f, h * 0.55f,
-            w * 0.85f, h * 0.95f,
-            w * 0.55f, h * 0.85f,
-        )
-        path.cubicTo(
-            w * 0.30f, h * 0.78f,
-            w * 0.10f, h * 0.95f,
-            start.x, start.y,
-        )
-        drawPath(
-            path = path,
-            color = strokeColor,
-            style = Stroke(width = 2.dp.toPx()),
-        )
-        drawCircle(
-            color = markerColor,
-            radius = 4.dp.toPx(),
-            center = start,
-        )
-    }
-}
+// TrackPreviewStub removed by change `enhance-track-presentation` §11.7.
+// 资产接入入口现在统一走 ui/tracktech/TrackThumbnail.kt（消费 Track.thumbnailAssetPath）。
 
 // =====================================================================
 // SegmentedControl（baseline 视觉零回归，本 round 不改）
@@ -651,18 +663,6 @@ private val placeholderRecentRuns: List<RecentRun> = listOf(
     RecentRun("0-100 km/h", "4.21 s", "May 18, 2024", true),
 )
 
-private data class LapSessionRow(
-    val date: String,
-    val laps: Int,
-    val bestLap: String,
-)
-
-private val placeholderLapSessions: List<LapSessionRow> = listOf(
-    LapSessionRow("May 18, 2024", 4, "1:32.457"),
-    LapSessionRow("May 12, 2024", 6, "1:33.884"),
-    LapSessionRow("Apr 29, 2024", 5, "1:34.210"),
-)
-
 private data class CurrentTrackRecord(
     val trackName: String,
     val bestLapTime: String,
@@ -673,12 +673,7 @@ private data class CurrentTrackRecord(
     val totalLaps: Int,
 )
 
-private val placeholderTrackRecord = CurrentTrackRecord(
-    trackName = "Shanghai Tianma",
-    bestLapTime = "1:32.457",
-    bestLapDate = "May 18, 2024",
-    length = "3.063 km",
-    direction = "Clockwise",
-    sessions = 8,
-    totalLaps = 56,
-)
+// placeholderTrackRecord top-level val removed by change
+// `enhance-track-presentation` §11.1：trackName / length 现在从 LapsView 内部
+// 派生自 currentSelectedTrack，其他 mock 字段已并入 LapsView 内部
+// remember(currentTrack) { CurrentTrackRecord(...) } 块。

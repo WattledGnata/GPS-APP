@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -19,10 +23,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -70,11 +76,28 @@ fun TrackTechAppShell() {
             }
         }
 
+        // HOLD TO END 完成后 LapLiveScreen popBackStack 立刻回 home，
+        // Snackbar 在 Shell scope 显示（不阻塞 Live 屏退出）。
+        val snackbarHostState = remember { SnackbarHostState() }
+        LaunchedEffect(Unit) {
+            LapSessionSaveBus.events.collect { result ->
+                val snackResult = snackbarHostState.showSnackbar(
+                    message = "Lap session saved · ${result.lapCount} laps",
+                    actionLabel = "View Record",
+                    duration = SnackbarDuration.Long,
+                )
+                if (snackResult == SnackbarResult.ActionPerformed) {
+                    navController.navigate("lap_session_detail/${result.sessionId}")
+                }
+            }
+        }
+
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
                 .background(TrackTechColors.Background),
             containerColor = TrackTechColors.Background,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 if (showBottomNav) {
                     TrackTechBottomNav(
@@ -134,6 +157,23 @@ fun TrackTechAppShell() {
                 }
                 composable("gps_details") {
                     GpsDetailsScreen(navController = navController)
+                }
+                composable("lap_live") {
+                    LapLiveScreen(
+                        navController = navController,
+                        sessionViewModel = sessionViewModel,
+                    )
+                }
+                composable(
+                    route = "lap_session_detail/{sessionId}",
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                    LapSessionDetailScreen(
+                        navController = navController,
+                        sessionId = sessionId,
+                        sessionViewModel = sessionViewModel,
+                    )
                 }
             }
         }

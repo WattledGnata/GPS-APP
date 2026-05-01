@@ -37,6 +37,7 @@ object TrackTechTypography {
         fontSize = 96.sp,
         letterSpacing = 0.em,
     )
+    val MechanicalLarge = MechanicalHero.copy(fontSize = 60.sp)
     val MechanicalMedium = MechanicalHero.copy(fontSize = 36.sp)
     val MechanicalSmall = MechanicalHero.copy(fontSize = 20.sp)
 
@@ -48,6 +49,7 @@ object TrackTechTypography {
         fontSize = 96.sp,
         letterSpacing = 0.02.em,
     )
+    val ScoreLarge = ScoreHero.copy(fontSize = 60.sp)
     val ScoreMedium = ScoreHero.copy(fontSize = 36.sp)
     val ScoreSmall = ScoreHero.copy(fontSize = 20.sp)
 

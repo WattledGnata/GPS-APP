@@ -3,6 +3,7 @@ package com.blazepush.feature.test.ui.tracktech
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,18 +22,21 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.compose.koinInject
@@ -50,6 +54,8 @@ fun LapsHomeScreen(
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()
+    val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
+    var showSelectTrackSheet by remember { mutableStateOf(false) }
 
     val readiness = remember(connectionState, gpsData, dataQuality) {
         TabGatingPolicy.computeTabReadiness(connectionState, gpsData, dataQuality)
@@ -70,7 +76,7 @@ fun LapsHomeScreen(
         signalIsGood = signalGood,
     )
 
-    val currentTrackName = availableTracks.firstOrNull()?.name ?: "Shanghai Tianma"
+    val currentTrackLabel = currentTrack?.name?.zh ?: "—"
 
     Column(
         modifier = modifier
@@ -107,7 +113,10 @@ fun LapsHomeScreen(
             onClick = { onTabSelected(TabIndex.Device) },
         )
 
-        CurrentTrackPanel(trackName = currentTrackName)
+        CurrentTrackPanel(
+            track = currentTrack,
+            onClick = { showSelectTrackSheet = true },
+        )
 
         Column(
             modifier = Modifier
@@ -121,11 +130,11 @@ fun LapsHomeScreen(
                 leadingIcon = Icons.Filled.Flag,
                 onClick = {
                     if (readiness.canEnterTestFlow) {
-                        Toast.makeText(
-                            context,
-                            "Lap session entry — placeholder for future round",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        val track = testSessionViewModel.currentSelectedTrack.value
+                        if (track != null) {
+                            testSessionViewModel.selectLapDebugMode(track.id)
+                            navController.navigate("lap_live")
+                        }
                     } else {
                         Toast.makeText(
                             context,
@@ -141,16 +150,10 @@ fun LapsHomeScreen(
             )
             SecondaryActionPanel(
                 title = "CHANGE TRACK",
-                subtitle = "BROWSE PRESETS",
+                subtitle = "切换计时赛道",
                 leadingIcon = Icons.Filled.SwapHoriz,
                 accentColor = TrackTechColors.Cyan,
-                onClick = {
-                    Toast.makeText(
-                        context,
-                        "Track selection — placeholder for future round",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                },
+                onClick = { showSelectTrackSheet = true },
             )
         }
 
@@ -168,7 +171,7 @@ fun LapsHomeScreen(
                 overflow = TextOverflow.Ellipsis,
             )
             MetricTile(
-                label = currentTrackName.uppercase(),
+                label = currentTrackLabel.uppercase(),
                 value = "1:32.457",
                 status = "Personal Best · placeholder",
                 accentColor = TrackTechColors.Purple,
@@ -203,14 +206,25 @@ fun LapsHomeScreen(
 
         Spacer(Modifier.height(16.dp))
     }
+
+    if (showSelectTrackSheet) {
+        SelectTrackBottomSheet(
+            onDismiss = { showSelectTrackSheet = false },
+            tracks = availableTracks,
+            currentTrackId = currentTrack?.id,
+            onTrackSelected = { testSessionViewModel.selectTrack(it) },
+            // title 走默认值「设置计时赛道」—— 钉死 Laps "动作"语义
+        )
+    }
 }
 
 @Composable
-private fun CurrentTrackPanel(trackName: String) {
+private fun CurrentTrackPanel(track: Track?, onClick: () -> Unit) {
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .clickable { onClick() },
         cutSize = 16.dp,
         cutCorners = cutCornersDiagonal,
         contentPadding = 20.dp,
@@ -225,28 +239,27 @@ private fun CurrentTrackPanel(trackName: String) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = trackName,
+                text = track?.name?.zh ?: "NO TRACK SELECTED",
                 style = TrackTechTypography.RacingTitleMedium,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = track?.let { "%.3f km".format(it.lengthKm) } ?: "",
+                style = TrackTechTypography.UiTextSmall,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Spacer(Modifier.height(12.dp))
-            Box(
+            TrackThumbnail(
+                assetPath = track?.thumbnailAssetPath,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
-                    .background(TrackTechColors.SurfaceDark),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "TRACK PREVIEW · PLACEHOLDER",
-                    style = TrackTechTypography.UiTextSmall,
-                    color = TrackTechColors.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+                    .height(120.dp),
+            )
         }
     }
 }

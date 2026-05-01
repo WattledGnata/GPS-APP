@@ -1,4 +1,5 @@
 package com.blazepush.simulator.viewmodel
+// @IgnoreFormatCheck
 
 import android.Manifest
 import android.content.Context
@@ -49,7 +50,9 @@ data class SimulatorUiState(
     val speedMode: SpeedMode = SpeedMode.STATIC,
     val targetSpeed: Float = 60f,
     val speedAcceleration: Float = 2.0f,
-    val speedStatus: String = "静止 (0 km/h)"
+    val speedStatus: String = "静止 (0 km/h)",
+    // Replay 单次播放控制：true = 当前正在播放一段 replay；false = idle（等用户触发）
+    val isReplayPlaying: Boolean = false,
 )
 
 /**
@@ -79,19 +82,20 @@ class SimulatorViewModel : ViewModel() {
     companion object {
         private const val TAG = "SimulatorViewModel"
 
-        suspend fun playReplayFramesForever(
+        /**
+         * 单次播放 replay frames（不再 forever 循环，避免循环边界处反向穿线把 lap session 判 INVALID）。
+         * 跑完最后一帧自然返回；外部 caller 可重复调用触发重放。
+         */
+        suspend fun playReplayFramesOnce(
             frames: List<ReplayFrame>,
             emitFrame: suspend (ReplayFrame) -> Unit
         ) {
             if (frames.isEmpty()) return
-            while (kotlin.coroutines.coroutineContext.isActive) {
+            for (frame in frames) {
                 kotlin.coroutines.coroutineContext.ensureActive()
-                for (frame in frames) {
-                    kotlin.coroutines.coroutineContext.ensureActive()
-                    if (frame.delayMillis > 0) delay(frame.delayMillis)
-                    kotlin.coroutines.coroutineContext.ensureActive()
-                    emitFrame(frame)
-                }
+                if (frame.delayMillis > 0) delay(frame.delayMillis)
+                kotlin.coroutines.coroutineContext.ensureActive()
+                emitFrame(frame)
             }
         }
 
@@ -215,8 +219,9 @@ class SimulatorViewModel : ViewModel() {
         dataUpdateJob?.cancel()
         dataUpdateJob = null
 
+        // Replay 模式：advertising 启动后 **不**自动开始播放，等用户点 "PLAY ONCE" 按钮触发
+        // 单次播放（避免循环边界反向穿线把 lap session 判 INVALID）。
         if (_uiState.value.isReplayMode || _uiState.value.currentScenario == TestScenario.REAL_TRACK_REPLAY) {
-            startReplayDataUpdate()
             return
         }
 
@@ -261,7 +266,17 @@ class SimulatorViewModel : ViewModel() {
         }
     }
 
-    private fun startReplayDataUpdate() {
+    /**
+     * 用户点击 "PLAY ONCE" 触发：从头跑一次 replay frames，跑完自然停。
+     * 跑期间 isReplayPlaying = true，UI 按钮置灰；跑完 reset 为 false。
+     * 本方法幂等：已在播放时调用立即返回，不会叠加 job。
+     */
+    fun triggerReplayOnce() {
+        if (_uiState.value.isReplayPlaying) return
+        if (!_uiState.value.isReplayMode && _uiState.value.currentScenario != TestScenario.REAL_TRACK_REPLAY) return
+        if (!_uiState.value.isAdvertising) return
+
+        dataUpdateJob?.cancel()
         dataUpdateJob = viewModelScope.launch {
             val context = appContext ?: return@launch
             val generator = dataGenerator ?: return@launch
@@ -270,22 +285,27 @@ class SimulatorViewModel : ViewModel() {
             val replay = replayAssetLoader.loadReplayJson(replayJson)
             val frames = replayPlaybackPlanner.plan(replay.samples)
 
-            playReplayFramesForever(frames) { frame ->
-                generator.applyReplaySample(frame.sample)
-                Log.d(
-                    TAG,
-                    "Replay frame: ts=${frame.sample.timestampMillis}, lat=${frame.sample.latitude}, lon=${frame.sample.longitude}, speed=${frame.sample.speedKmh}, bearing=${frame.sample.bearingDegrees}, sats=${frame.sample.satellites}"
-                )
-                val mainData = generator.generateGpsMainData()
-                val timeData = generator.generateGpsTimeData()
-                manager.updateGpsData(mainData, timeData)
-                _uiState.value = _uiState.value.copy(
-                    currentSpeed = frame.sample.speedKmh.toFloat(),
-                    currentLatitude = frame.sample.latitude,
-                    currentLongitude = frame.sample.longitude,
-                    satellites = frame.sample.satellites,
-                    frequency = 5
-                )
+            _uiState.value = _uiState.value.copy(isReplayPlaying = true)
+            try {
+                playReplayFramesOnce(frames) { frame ->
+                    generator.applyReplaySample(frame.sample)
+                    Log.d(
+                        TAG,
+                        "Replay frame: ts=${frame.sample.timestampMillis}, lat=${frame.sample.latitude}, lon=${frame.sample.longitude}, speed=${frame.sample.speedKmh}, bearing=${frame.sample.bearingDegrees}, sats=${frame.sample.satellites}"
+                    )
+                    val mainData = generator.generateGpsMainData()
+                    val timeData = generator.generateGpsTimeData()
+                    manager.updateGpsData(mainData, timeData)
+                    _uiState.value = _uiState.value.copy(
+                        currentSpeed = frame.sample.speedKmh.toFloat(),
+                        currentLatitude = frame.sample.latitude,
+                        currentLongitude = frame.sample.longitude,
+                        satellites = frame.sample.satellites,
+                        frequency = 5
+                    )
+                }
+            } finally {
+                _uiState.value = _uiState.value.copy(isReplayPlaying = false)
             }
         }
     }

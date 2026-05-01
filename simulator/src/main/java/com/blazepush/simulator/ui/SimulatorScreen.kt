@@ -1,4 +1,5 @@
 package com.blazepush.simulator.ui
+// @IgnoreFormatCheck
 
 import android.bluetooth.BluetoothManager
 import android.content.Context
@@ -91,7 +92,10 @@ fun SimulatorScreen(
 
             ReplayEntryCard(
                 isReplayMode = uiState.isReplayMode,
-                onEnableReplay = { viewModel.enableReplayMode() }
+                isAdvertising = uiState.isAdvertising,
+                isReplayPlaying = uiState.isReplayPlaying,
+                onEnableReplay = { viewModel.enableReplayMode() },
+                onTriggerReplayOnce = { viewModel.triggerReplayOnce() },
             )
 
             // 速度控制
@@ -303,7 +307,10 @@ fun ScenarioCard(
 @Composable
 fun ReplayEntryCard(
     isReplayMode: Boolean,
-    onEnableReplay: () -> Unit
+    isAdvertising: Boolean,
+    isReplayPlaying: Boolean,
+    onEnableReplay: () -> Unit,
+    onTriggerReplayOnce: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -314,7 +321,12 @@ fun ReplayEntryCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (isReplayMode) "当前已切换到天府 5Hz 回放数据源" else "使用现有 replay 链路输出圈速模拟数据",
+                text = when {
+                    !isReplayMode -> "使用现有 replay 链路输出圈速模拟数据"
+                    !isAdvertising -> "已启用圈速回放数据源 · 请先开始 BLE 广播"
+                    isReplayPlaying -> "正在单次播放 replay frames…"
+                    else -> "已启用 · 默认 idle，点 PLAY ONCE 单次播放一段"
+                },
                 style = MaterialTheme.typography.bodyMedium
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -324,6 +336,16 @@ fun ReplayEntryCard(
                 enabled = !isReplayMode
             ) {
                 Text(if (isReplayMode) "已启用圈速模拟回放" else "启用圈速模拟回放")
+            }
+            if (isReplayMode) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onTriggerReplayOnce,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isAdvertising && !isReplayPlaying,
+                ) {
+                    Text(if (isReplayPlaying) "PLAYING…" else "PLAY ONCE")
+                }
             }
         }
     }
