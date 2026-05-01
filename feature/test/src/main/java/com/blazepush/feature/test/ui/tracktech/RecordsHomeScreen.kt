@@ -501,12 +501,21 @@ private fun LapsView(
 }
 
 private fun formatLapSessionRowTitle(session: TelemetrySession): String {
+    // persist-session-summary-fields round 起：直读 entity 持久化的 lapCount / bestLapMs，
+    // 不再仅显示时间 + duration（baseline 行为）
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
     val date = formatter.format(Date(session.startTs))
-    val durationSec = ((session.endTs - session.startTs) / 1000).coerceAtLeast(0L)
-    val mins = durationSec / 60
-    val secs = durationSec % 60
-    return "$date · %d:%02d".format(mins, secs)
+    val lapCount = session.lapCount
+    val best = session.bestLapMs?.let { formatLapTimeMs(it) } ?: "--"
+    return "$date · $lapCount laps · best $best"
+}
+
+private fun formatLapTimeMs(ms: Long): String {
+    val totalSec = ms / 1000
+    val minutes = totalSec / 60
+    val seconds = totalSec % 60
+    val millis = ms % 1000
+    return "%d:%02d.%03d".format(minutes, seconds, millis)
 }
 
 @Composable

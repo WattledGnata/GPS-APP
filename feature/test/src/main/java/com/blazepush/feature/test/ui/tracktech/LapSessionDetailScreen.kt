@@ -41,9 +41,8 @@ import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
@@ -67,38 +66,46 @@ fun LapSessionDetailScreen(
     sessionId: String,
     telemetryRepository: TelemetryRepository = koinInject(),
     sessionViewModel: TestSessionViewModel = koinViewModel(),
+    trackCatalog: TrackCatalog = koinInject(),
 ) {
     var session by remember { mutableStateOf<TelemetrySession?>(null) }
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
-    var topSpeed by remember { mutableStateOf<Double?>(null) }
 
-    val track by sessionViewModel.currentSelectedTrack.collectAsState()
+    val currentTrack by sessionViewModel.currentSelectedTrack.collectAsState()
 
     LaunchedEffect(sessionId) {
-        val loadedSession = telemetryRepository.getSession(sessionId)
-        session = loadedSession
+        session = telemetryRepository.getSession(sessionId)
         crossings = telemetryRepository.getCrossings(sessionId)
-        // 读 binary samples 取赛道全程最高速度（不能用 crossings 派生 — crossings.speedKmh 仅为过线瞬间速度）
-        topSpeed = loadedSession?.let { sess ->
-            // 用 readPerformanceSamples（顺序读全文件，不按时间窗口过滤）派生全程 max。
-            // 不能用 readLapSamples 因为 baseline 写入时 tsDeltaMs = 协议ts - 真壁钟
-            // （混合时间轴），而 reader 的 absoluteTs = header.startTs(真壁钟) + tsDeltaMs
-            // = 协议ts，与 entity.startTs/endTs（真壁钟）做窗口比较时永远不在范围内 →
-            // readLapSamples 返回空。baseline 时间轴 hygiene 修复见
-            // docs/design/laptime-ts-hygiene-deferred.md。
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    telemetryRepository.readPerformanceSamples(sess.binaryFilePath)
-                }.getOrDefault(emptyList())
-            }.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 }
-        }
+        // persist-session-summary-fields round 起：topSpeedKmh 直接读 entity.topSpeedKmh，
+        // 不再每次进入 detail 屏全扫 binary（endSession 时已派生持久化）
     }
 
     val derived = remember(crossings) { deriveDetailMetrics(crossings) }
     val durationMs = session?.let { it.endTs - it.startTs }?.takeIf { it > 0L }
-    val distanceKm = track?.lengthKm?.let { it * derived.validLaps }?.takeIf { it > 0.0 }
+    val topSpeed = session?.topSpeedKmh
 
-    val trackName = track?.name?.zh ?: "—"
+    // track name 用 when 分支严格分流（spec D5：MUST NOT 用 elvis 链 fallback currentTrack）：
+    // - 优先级 1：trackNameSnapshot 非空（本 round 后所有新 session 都会有）
+    // - 优先级 2：snapshot 空 + trackId 非空 → catalog 解析；解析失败 → "—"（**不** fallback currentTrack）
+    // - 优先级 3：snapshot 与 trackId 都为 null（历史 session）→ currentTrack
+    val trackName = remember(session, currentTrack) {
+        val snapshot = session?.trackNameSnapshot
+        val sessionTrackId = session?.trackId
+        when {
+            !snapshot.isNullOrBlank() -> snapshot
+            sessionTrackId != null -> trackCatalog.getTrack(sessionTrackId)?.name?.zh ?: "—"
+            else -> currentTrack?.name?.zh ?: "—"
+        }
+    }
+    // distance 仅 catalog 解析成功时显示（不依赖 currentSelectedTrack 的 lengthKm 避免误读）
+    val distanceKm = remember(session, derived) {
+        session?.trackId
+            ?.let { trackCatalog.getTrack(it) }
+            ?.lengthKm
+            ?.let { it * derived.validLaps }
+            ?.takeIf { it > 0.0 }
+    }
+
     val sessionDateLabel = session?.startTs?.let(::formatDateTime) ?: "—"
 
     Column(

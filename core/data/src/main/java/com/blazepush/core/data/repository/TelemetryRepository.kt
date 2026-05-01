@@ -12,6 +12,8 @@ import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TelemetrySessionType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -31,11 +33,25 @@ class TelemetryRepository(
     private var activeWriter: BinaryTelemetryWriter? = null
     private var activeSessionId: String? = null
     private var activeSessionType: TelemetrySessionType = TelemetrySessionType.PERFORMANCE_TEST
+    // persist-session-summary-fields round 加：endSession 时需要 binary 文件路径扫 sample 派生 topSpeedKmh
+    private var activeFilePath: String? = null
 
     /**
-     * 开启新 session：生成 UUID + 写 metadata 入 Room + 启动 binary writer。
+     * 开启新 session：生成 UUID + 写 metadata（含可选 trackId / trackNameSnapshot）入 Room + 启动 binary writer。
+     *
+     * @param type session 类型（PERFORMANCE_TEST / LAP_SESSION）
+     * @param trackId 圈速场景下传 session 启动时的 trackId（加减速测试传 null 兼容默认值）
+     * @param trackNameSnapshot 圈速场景下传 startSession 时刻 catalog 解析的 trackName 快照（加减速测试传 null）
+     *
+     * @author CC
+     * @description start session with optional trackId / trackNameSnapshot persistence
+     * @date 2026-05-01
      */
-    suspend fun startSession(type: TelemetrySessionType): String {
+    suspend fun startSession(
+        type: TelemetrySessionType,
+        trackId: String? = null,
+        trackNameSnapshot: String? = null,
+    ): String {
         val sessionId = UUID.randomUUID().toString()
         val startTs = System.currentTimeMillis()
         val file = telemetryFile(sessionId)
@@ -47,6 +63,8 @@ class TelemetryRepository(
             startTs = startTs,
             endTs = startTs,
             binaryFilePath = file.absolutePath,
+            trackId = trackId,
+            trackNameSnapshot = trackNameSnapshot,
         )
         sessionDao.insert(entity)
 
@@ -55,6 +73,7 @@ class TelemetryRepository(
         activeWriter = writer
         activeSessionId = sessionId
         activeSessionType = type
+        activeFilePath = file.absolutePath
         return sessionId
     }
 
@@ -91,14 +110,55 @@ class TelemetryRepository(
     }
 
     /**
-     * 关闭 session：close writer + 更新 Room endTs。
+     * 关闭 session：close writer + 用 IO 调度扫 binary 派生 topSpeedKmh + 用 crossings 派生
+     * lapCount/bestLapMs（accepted SF crossing pairs 语义）+ updateSummary 一次写齐 4 字段。
+     *
+     * lapCount 派生语义：accepted=true && gateType="StartFinish" 的 crossing 相邻配对数量
+     * （= durations.size），与 LapSessionDetailScreen.deriveDetailMetrics 一致。
+     * **不**承诺 LapRecord.qualityFlags 过滤（crossing 表无该字段；与 Snackbar in-memory 路径
+     * 语义差异作为 follow-up `unify-lap-count-semantics`）。
+     *
+     * binary 文件不存在 / 为空 → topSpeedKmh = null；crossings 为空 → lapCount = 0 / bestLapMs = null。
+     * 不抛异常。
+     *
+     * @author CC
+     * @description close writer + derive summary + persist on endSession
+     * @date 2026-05-01
      */
     suspend fun endSession(sessionId: String) {
         val writer = activeWriter ?: return
+        val filePath = activeFilePath
         writer.close()
         activeWriter = null
         activeSessionId = null
-        sessionDao.updateEndTs(sessionId, System.currentTimeMillis())
+        activeFilePath = null
+        val endTs = System.currentTimeMillis()
+
+        // 用 IO 调度跑扫 binary + 查 crossings 派生（避免阻塞 caller 主线程）
+        val (topSpeedKmh, lapCount, bestLapMs) = withContext(Dispatchers.IO) {
+            val topSpeed = if (filePath != null) {
+                runCatching { PerformanceTestTelemetryReader.read(filePath) }
+                    .getOrDefault(emptyList())
+                    .maxOfOrNull { it.speedKmh }
+                    ?.takeIf { it > 0.0 }
+            } else {
+                null
+            }
+            val crossings = crossingDao.queryBySessionId(sessionId)
+            val acceptedSF = crossings
+                .filter { it.gateType.equals("StartFinish", ignoreCase = true) && it.accepted }
+                .sortedBy { it.crossingTimestampMs }
+            val durations = acceptedSF.zipWithNext { a, b -> b.crossingTimestampMs - a.crossingTimestampMs }
+            Triple(topSpeed, durations.size, durations.minOrNull())
+        }
+
+        sessionDao.updateSummary(
+            sessionId = sessionId,
+            endTs = endTs,
+            lapCount = lapCount,
+            bestLapMs = bestLapMs,
+            topSpeedKmh = topSpeedKmh,
+        )
     }
 
     /**
@@ -157,6 +217,9 @@ class TelemetryRepository(
         binaryFilePath = binaryFilePath,
         lapCount = lapCount,
         bestLapMs = bestLapMs,
+        topSpeedKmh = topSpeedKmh,
+        trackId = trackId,
+        trackNameSnapshot = trackNameSnapshot,
     )
 
     private fun CrossingEventEntity.toDomain() = TelemetryCrossingEvent(

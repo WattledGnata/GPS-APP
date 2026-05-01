@@ -566,7 +566,17 @@ class TestSessionViewModel(
         val lapAnchorTs = activeLapStartSystemTs
         if (lapAnchorTs != null) {
             if (activeLapSessionId == null) {
-                activeLapSessionId = telemetryRepository.startSession(TelemetrySessionType.LAP_SESSION)
+                // persist-session-summary-fields round（**与 round A `fix-lap-binary-ts-hygiene` 同函数潜在冲突**：
+                // A 改 line 562 附近 tsDeltaMs 公式；本 round 改本行 startSession 签名加 trackId+trackNameSnapshot）：
+                // - trackId 来自当前 LapRunConfig
+                // - trackNameSnapshot 是 startSession 时刻 catalog 解析的 zh display name 快照
+                //   （多赛道扩展后 catalog 删除赛道时 detail 屏 D5 仍能显示当时赛道名，不 fallback currentSelectedTrack）
+                val trackNameSnapshot = trackCatalog.getTrack(config.trackId)?.name?.zh
+                activeLapSessionId = telemetryRepository.startSession(
+                    type = TelemetrySessionType.LAP_SESSION,
+                    trackId = config.trackId,
+                    trackNameSnapshot = trackNameSnapshot,
+                )
             }
             telemetryRepository.writeSample(
                 TelemetrySample(

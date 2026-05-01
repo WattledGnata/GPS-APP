@@ -25,9 +25,29 @@ interface TelemetrySessionDao {
 
     /**
      * Session 结束时更新 endTs（startTs/binary 路径不变）。
+     * baseline A56 引入；persist-session-summary-fields round 保留兼容（其他 callsite 仍可用），
+     * 但 LAP_SESSION endSession 现在用 [updateSummary] 一次写齐 4 字段。
      */
     @Query("UPDATE telemetry_sessions SET endTs = :endTs WHERE sessionId = :sessionId")
     suspend fun updateEndTs(sessionId: String, endTs: Long)
+
+    /**
+     * Session 结束时一次写齐 4 个 summary 字段（endTs / lapCount / bestLapMs / topSpeedKmh）。
+     * 由 [com.blazepush.core.data.repository.TelemetryRepository.endSession] 调用。
+     * trackId / trackNameSnapshot 在 startSession 时已写，update 不动。
+     *
+     * @author CC
+     * @description bulk update of session summary fields on endSession
+     * @date 2026-05-01
+     */
+    @Query("UPDATE telemetry_sessions SET endTs = :endTs, lapCount = :lapCount, bestLapMs = :bestLapMs, topSpeedKmh = :topSpeedKmh WHERE sessionId = :sessionId")
+    suspend fun updateSummary(
+        sessionId: String,
+        endTs: Long,
+        lapCount: Int,
+        bestLapMs: Long?,
+        topSpeedKmh: Double?,
+    )
 
     /**
      * 按 sessionId 拿 metadata，未找到返回 null。

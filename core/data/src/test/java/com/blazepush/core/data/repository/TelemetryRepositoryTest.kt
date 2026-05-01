@@ -184,6 +184,25 @@ class TelemetryRepositoryTest {
             if (idx >= 0) sessions[idx] = sessions[idx].copy(endTs = endTs)
         }
 
+        // persist-session-summary-fields round 加：updateSummary 一次写齐 4 字段
+        override suspend fun updateSummary(
+            sessionId: String,
+            endTs: Long,
+            lapCount: Int,
+            bestLapMs: Long?,
+            topSpeedKmh: Double?,
+        ) {
+            val idx = sessions.indexOfFirst { it.sessionId == sessionId }
+            if (idx >= 0) {
+                sessions[idx] = sessions[idx].copy(
+                    endTs = endTs,
+                    lapCount = lapCount,
+                    bestLapMs = bestLapMs,
+                    topSpeedKmh = topSpeedKmh,
+                )
+            }
+        }
+
         override suspend fun queryBySessionId(sessionId: String) =
             sessions.find { it.sessionId == sessionId }
 

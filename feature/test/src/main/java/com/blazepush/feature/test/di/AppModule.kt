@@ -35,12 +35,19 @@ import org.koin.dsl.module
  */
 val databaseModule = module {
     single {
+        // persist-session-summary-fields round（schema v3 → v4）：
+        // - addMigrations(migration3To4) 注册 v3→v4 严格 migration（保护现役数据）
+        // - 全局 destructive fallback 已移除（防 v3→v4 失败时静默清库）
+        // - 路径 A 选定：窄范围 destructiveMigrationFrom(1, 2) 兜底 pre-A56 开发期 schema
+        //   （schema 历史确认：dc0c011 多模块重构创建 v2，d15a60c A56 升 v3，未见 v1；
+        //    v2 是 pre-A56 开发期 schema，对它 destructive 可接受 — 不存在 release tag 用户）
         Room.databaseBuilder(
             androidContext(),
             AppDatabase::class.java,
             "race_chrono_database"
         )
-            .fallbackToDestructiveMigration()
+            .addMigrations(AppDatabase.migration3To4)
+            .fallbackToDestructiveMigrationFrom(1, 2)
             .build()
     }
 

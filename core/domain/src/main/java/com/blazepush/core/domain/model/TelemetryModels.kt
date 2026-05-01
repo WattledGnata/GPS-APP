@@ -44,6 +44,9 @@ data class TelemetrySession(
     val binaryFilePath: String,
     val lapCount: Int = 0,
     val bestLapMs: Long? = null,
+    val topSpeedKmh: Double? = null,
+    val trackId: String? = null,
+    val trackNameSnapshot: String? = null,
 )
 
 /**
