@@ -55,6 +55,7 @@ fun LapsHomeScreen(
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
+    val recentTrackIds by testSessionViewModel.recentTrackIds.collectAsState()
     var showSelectTrackSheet by remember { mutableStateOf(false) }
 
     val readiness = remember(connectionState, gpsData, dataQuality) {
@@ -181,27 +182,24 @@ fun LapsHomeScreen(
 
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "NEARBY TRACKS",
+                text = "RECENT TRACKS",
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp),
             )
-            listOf("Shanghai Tianma", "TFIC LPCC", "Coming soon").forEach { name ->
-                TrackTechRow(
-                    leadingIcon = Icons.Filled.Flag,
-                    title = name.uppercase(),
-                    subtitle = "Preset · placeholder",
-                    onClick = {
-                        Toast.makeText(context, "Track detail placeholder", Toast.LENGTH_SHORT).show()
-                    },
-                )
-            }
+            RecentTracksStrip(
+                recentTrackIds = recentTrackIds,
+                availableTracks = availableTracks,
+                currentTrackId = currentTrack?.id,
+                onTrackClick = { testSessionViewModel.selectTrack(it) },
+                onViewAllClick = { showSelectTrackSheet = true },
+            )
         }
 
         Spacer(Modifier.height(16.dp))
