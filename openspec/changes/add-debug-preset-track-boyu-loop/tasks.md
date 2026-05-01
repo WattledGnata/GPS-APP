@@ -61,8 +61,9 @@
 
 ## 5. release 包零变更对照
 
-- [ ] 5.1 release apk 类与字符串扫描验证已在 §3.5 完成（apkanalyzer dex packages 验类、`strings classes*.dex` 验字符串），本 task 不重复扫描；§5 聚焦 base commit 行为对照。
-- [ ] 5.2 与本 round 实施前 git stash / 切回 base commit 重跑 `./gradlew :app:assembleRelease`，对比 release apk 中 `PresetTrackCatalog.getAllTracks()` 行为（preset 列表内容相同：仅 TFIC）；字节级因新增 `extraPresetTracks` 调用与 `ExtraPresetTracksReleaseKt` 类必然有源码 diff，本 task 锁定**行为等价**（spec scenario "release 构建产物零变更"对齐）；apk size 变化 ≤ O(数百字节) 视为预期范围内；如出现行为级差异或 size 变化超出预期范围，记录 follow-up 阻塞合回。
+- [x] 5.1 release apk 类与字符串扫描验证已在 §3.5 完成（apkanalyzer dex packages 验类、`strings classes*.dex` 验字符串），本 task 不重复扫描；§5 聚焦 base commit 行为对照。
+- [x] 5.2 与本 round 实施前 git stash / 切回 base commit 重跑 `./gradlew :app:assembleRelease`，对比 release apk 中 `PresetTrackCatalog.getAllTracks()` 行为（preset 列表内容相同：仅 TFIC）；字节级因新增 `extraPresetTracks` 调用与 `ExtraPresetTracksReleaseKt` 类必然有源码 diff，本 task 锁定**行为等价**（spec scenario "release 构建产物零变更"对齐）；apk size 变化 ≤ O(数百字节) 视为预期范围内；如出现行为级差异或 size 变化超出预期范围，记录 follow-up 阻塞合回。
+  - **实测（2026-05-01）**：用 `git worktree add /tmp/gps-app-base-build ae58830^` 隔离构建 base commit `237ec09`（round 之前 HEAD），结果：base release apk 47,069,703 bytes、current release apk 47,070,259 bytes，**diff = +556 bytes**（O(数百字节) 内 ✓）；两份 apk dex 字符串扫描均**只含** `preset-tfic-lpcc`、**不含** `preset-boyu-loop`，行为完全等价。worktree 已清理。
 
 ## 6. 真机验证 gate（默认设备 8KE0219522008434，串行执行需用户授权）
 
