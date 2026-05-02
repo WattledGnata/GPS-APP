@@ -52,6 +52,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
@@ -505,6 +506,36 @@ class TestSessionViewModel(
         activeLapStartSystemTs = null
         lastWrittenCrossingCount = 0
         viewModelScope.launch { telemetryRepository.endSession(sessionId) }
+    }
+
+    /**
+     * Records → PERFORMANCE 子页 RecentRuns 长按删除入口（add-history-deletion round）。
+     * 删除测试记录 + cascade 清 binary 文件（`/telemetry/` 路径白名单防御在 repository 层）。
+     * 删除完 Room Flow 自动 emit，UI 列表无需手动刷新。
+     *
+     * @author CC
+     * @description delete test record by id (cascade binary cleanup)
+     * @date 2026-05-02
+     */
+    fun deleteTestRecord(recordId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            testResultRepository.deleteResultById(recordId)
+        }
+    }
+
+    /**
+     * Records → LAPS 子页 SESSION HISTORY 长按删除入口（add-history-deletion round）。
+     * 删除 lap session entity + cascade 清 crossing_events 关联行 + binary 文件
+     * （`/telemetry/` 路径白名单防御在 repository 层）。
+     *
+     * @author CC
+     * @description delete lap session by id (cascade crossings + binary cleanup)
+     * @date 2026-05-02
+     */
+    fun deleteLapSession(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            telemetryRepository.deleteSession(sessionId)
+        }
     }
 
     /**

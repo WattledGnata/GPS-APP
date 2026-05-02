@@ -121,7 +121,11 @@ class TestSessionViewModelTrackLoadingTest {
 
     /**
      * A37 spec R4 Scenario "launch 不指定 Dispatchers.IO"：源码断言。
-     * ViewModel 不应预设 dispatcher（IO 边界唯一防线在 catalog 实现侧）。
+     * ViewModel 不应在 track 加载路径预设 dispatcher（IO 边界唯一防线在 catalog 实现侧）。
+     *
+     * round add-history-deletion（2026-05-02）将断言从"整文件"收紧为"`_availableTracks`
+     * 赋值附近窗口"，避免跟同文件其它合理 IO 路径（如 `deleteTestRecord`/`deleteLapSession`
+     * 调 File.delete）误命中。spec R4 的内涵——track 加载不要走 Dispatchers.IO——保留。
      */
     @Test
     fun testSessionViewModel_sourceDoesNotSpecifyDispatchersIOForTrackLoading() {
@@ -129,12 +133,26 @@ class TestSessionViewModelTrackLoadingTest {
             projectRoot(),
             "feature/test/src/main/java/com/blazepush/feature/test/viewmodel/TestSessionViewModel.kt",
         ).readText()
-        // 禁止 `viewModelScope.launch(Dispatchers.IO)` 在 _availableTracks 加载路径
-        // 简化：整文件禁止 `launch(Dispatchers.IO)`（当前 TestSessionViewModel 也确实未使用）
+        val region = extractTrackLoadingRegion(source)
         assertTrue(
-            "TestSessionViewModel 不应为 track 加载指定 Dispatchers.IO（IO 边界在 catalog 实现侧）",
-            !source.contains("viewModelScope.launch(Dispatchers.IO)"),
+            "TestSessionViewModel 不应为 track 加载指定 Dispatchers.IO（IO 边界在 catalog 实现侧）；" +
+                "命中区间：\n$region",
+            !region.contains("launch(Dispatchers.IO)"),
         )
+    }
+
+    /**
+     * 抓取 `_availableTracks.value = loaded` 赋值附近的窗口（前 800 字符 + 后 200 字符），
+     * 涵盖 init block / loadAvailableTracks 函数体级别的 launch 包装。
+     */
+    private fun extractTrackLoadingRegion(source: String): String {
+        val anchor = source.indexOf("_availableTracks.value =")
+        if (anchor < 0) {
+            error("source MUST contain `_availableTracks.value =` (track loading anchor)")
+        }
+        val start = (anchor - 800).coerceAtLeast(0)
+        val end = (anchor + 200).coerceAtMost(source.length)
+        return source.substring(start, end)
     }
 
     private fun createViewModel(
