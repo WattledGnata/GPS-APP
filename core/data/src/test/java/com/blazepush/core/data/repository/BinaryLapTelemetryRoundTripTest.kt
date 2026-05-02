@@ -233,6 +233,66 @@ class BinaryLapTelemetryRoundTripTest {
     }
 
     /**
+     * case H（Codex review §1 修订）：源码 grep gate，防御 ViewModel 写入公式回退。
+     *
+     * 起源：A-G 7 cases 都用手工构造的 lapSample(i × 40L)，验证的是 repository / writer / reader
+     * 同源链路。如果未来有人把 TestSessionViewModel.bridgeGpsToLapTiming 公式回退成
+     * `gpsData.timestamp - lapAnchorTs`（跨时钟域）或 `currentTimeMillis - lapAnchorTs`（anchor
+     * 错位），A-G 仍然全绿，bug 重新引入。
+     *
+     * 修法：用源码 grep 作为 architecture test，禁止两类违规减法模式出现在任何 lap binary
+     * 写入入口。该 gate 不止保护 bridgeGpsToLapTiming，也保护未来新增的任何 lap binary 入口
+     * （只要遵守"不在 ViewModel 内对 timestamp 字段做这种减法"惯例）。
+     *
+     * 与 spec.md 第 5 个 Scenario "时钟域单源 grep 自检" 对齐——把 apply 期手工跑的 §4 grep
+     * 自动化为单测断言。
+     */
+    @Test
+    fun `case H - source grep gate forbids cross-clock and misaligned-anchor formulas`() {
+        val viewModelFile = locateTestSessionViewModelFile()
+        val source = viewModelFile.readText()
+
+        val crossClockPattern =
+            Regex("""gpsData\.timestamp\s*-\s*(lapAnchorTs|sessionStartTs|activeLapStartSystemTs)""")
+        val crossClockMatches = crossClockPattern.findAll(source).map { it.value }.toList()
+        assertTrue(
+            "禁止的跨时钟域减法（协议时间 - 真壁钟 anchor）出现在 TestSessionViewModel.kt：\n" +
+                crossClockMatches.joinToString("\n") { "  $it" } +
+                "\n正确公式应为 `currentTimeMillis() - repository.activeSessionStartTs`",
+            crossClockMatches.isEmpty(),
+        )
+
+        val misalignedAnchorPattern =
+            Regex("""System\.currentTimeMillis\(\)\s*-\s*(lapAnchorTs|activeLapStartSystemTs)""")
+        val misalignedMatches = misalignedAnchorPattern.findAll(source).map { it.value }.toList()
+        assertTrue(
+            "禁止的 anchor 错位减法（lapAnchorTs/activeLapStartSystemTs 是 UI 进入瞬间，与 header.startTs 错位）" +
+                "出现在 TestSessionViewModel.kt：\n" +
+                misalignedMatches.joinToString("\n") { "  $it" } +
+                "\nanchor 必须用 `repository.activeSessionStartTs`（与 header.startTs 同源）",
+            misalignedMatches.isEmpty(),
+        )
+    }
+
+    /**
+     * 跨模块定位 TestSessionViewModel.kt 源文件。Gradle 跑 `:core:data:testDebugUnitTest`
+     * 时 cwd 为 core/data/，但本地直接 ./gradlew 也可能在 repo root；用候选路径列表兜底。
+     */
+    private fun locateTestSessionViewModelFile(): File {
+        val relPath = "feature/test/src/main/java/com/blazepush/feature/test/viewmodel/TestSessionViewModel.kt"
+        val candidates = listOf(
+            File("../$relPath"),       // cwd = core/data/
+            File("../../$relPath"),    // cwd = core/data/build/...
+            File(relPath),             // cwd = repo root
+        )
+        return candidates.firstOrNull { it.exists() }
+            ?: error(
+                "TestSessionViewModel.kt not found. Tried: ${candidates.map { it.absolutePath }.joinToString()}, " +
+                    "cwd=${System.getProperty("user.dir")}",
+            )
+    }
+
+    /**
      * §3.8 case G：writer flush 后未 close 即 read 仍正确返回，时钟域无错位。
      * 模拟 "session 进行中（未 close）" 时的中途读取场景，验证 reader 路径在该状态下仍可读出 N 帧 + absoluteTs 精确。
      * Floor 截断逻辑由 BinaryTelemetryWriterTest 已覆盖，本 case 不重复测。
