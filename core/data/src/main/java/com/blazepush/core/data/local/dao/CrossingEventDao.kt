@@ -30,4 +30,11 @@ interface CrossingEventDao {
      */
     @Query("SELECT * FROM crossing_events WHERE sessionId = :sessionId ORDER BY crossingTimestampMs ASC")
     suspend fun queryBySessionId(sessionId: String): List<CrossingEventEntity>
+
+    /**
+     * 按 sessionId 删除关联过线事件（add-history-deletion round 引入）。
+     * 由 [com.blazepush.core.data.repository.TelemetryRepository.deleteSession] cascade 调用。
+     */
+    @Query("DELETE FROM crossing_events WHERE sessionId = :sessionId")
+    suspend fun deleteCrossingsBySessionId(sessionId: String)
 }

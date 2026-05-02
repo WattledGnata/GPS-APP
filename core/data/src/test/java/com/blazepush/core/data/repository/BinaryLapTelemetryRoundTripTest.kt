@@ -377,6 +377,11 @@ class BinaryLapTelemetryRoundTripTest {
 
         override fun getRecentSessionsForTrack(trackId: String, limit: Int) =
             kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
+
+        // add-history-deletion round：同步 abstract 方法。本套件不消费删除路径，no-op。
+        override suspend fun deleteSession(entity: TelemetrySessionEntity) {
+            sessions.removeIf { it.sessionId == entity.sessionId }
+        }
     }
 
     private class FakeCrossingEventDao : CrossingEventDao {
@@ -388,5 +393,10 @@ class BinaryLapTelemetryRoundTripTest {
 
         override suspend fun queryBySessionId(sessionId: String) =
             crossings.filter { it.sessionId == sessionId }
+
+        // add-history-deletion round：同步 abstract 方法。本套件不消费删除路径，no-op。
+        override suspend fun deleteCrossingsBySessionId(sessionId: String) {
+            crossings.removeIf { it.sessionId == sessionId }
+        }
     }
 }

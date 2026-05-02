@@ -5,6 +5,7 @@
 package com.blazepush.core.data.local.dao
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -99,4 +100,12 @@ interface TelemetrySessionDao {
             "ORDER BY startTs DESC LIMIT :limit"
     )
     fun getRecentSessionsForTrack(trackId: String, limit: Int): Flow<List<TelemetrySessionEntity>>
+
+    /**
+     * 按 entity 删除单条 session metadata（add-history-deletion round 引入）。
+     * 由 [com.blazepush.core.data.repository.TelemetryRepository.deleteSession] 调用，
+     * 调用方负责先清 crossing_events 关联行 + binary 文件 cascade。
+     */
+    @Delete
+    suspend fun deleteSession(entity: TelemetrySessionEntity)
 }
