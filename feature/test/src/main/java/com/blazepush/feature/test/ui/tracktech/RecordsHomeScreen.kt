@@ -56,6 +56,8 @@ import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.ui.tracktech.components.DeleteCandidate
+import com.blazepush.feature.test.ui.tracktech.components.DeleteHistoryDialog
 import com.blazepush.feature.test.ui.tracktech.format.formatDate
 import com.blazepush.feature.test.ui.tracktech.format.formatLapMs
 import com.blazepush.feature.test.ui.tracktech.format.formatRunTimestamp
@@ -140,6 +142,9 @@ private fun PerformanceView(
     val bestBrake by testSessionViewModel.bestBraking100To0.collectAsState()
     val totalRuns by testSessionViewModel.totalRunCount.collectAsState()
     val recent by testSessionViewModel.recentRuns.collectAsState()
+    // round add-history-deletion §8.1：长按删除候选；本 round 用普通 remember
+    // （配置变化丢 state 是已知 trade-off，rememberSaveable 留 follow-up §12.4）
+    var deleteCandidate by remember { mutableStateOf<DeleteCandidate?>(null) }
 
     Column(
         modifier = Modifier
@@ -213,9 +218,28 @@ private fun PerformanceView(
                     onClick = {
                         navController.navigate("performance_result/${result.id}")
                     },
+                    onLongClick = {
+                        deleteCandidate = DeleteCandidate.TestRecord(
+                            id = result.id,
+                            titleHint = formatPerfDeleteHint(result),
+                        )
+                    },
                 )
             }
         }
+    }
+
+    deleteCandidate?.let { candidate ->
+        DeleteHistoryDialog(
+            candidate = candidate,
+            onConfirm = {
+                if (candidate is DeleteCandidate.TestRecord) {
+                    testSessionViewModel.deleteTestRecord(candidate.id)
+                }
+                deleteCandidate = null
+            },
+            onDismiss = { deleteCandidate = null },
+        )
     }
 }
 
@@ -443,6 +467,9 @@ private fun LapsView(
     val totalLapCount by testSessionViewModel.totalLapCountForCurrentTrack.collectAsState()
     val recentSessions by testSessionViewModel.recentSessionsForCurrentTrack.collectAsState()
     var showSelectTrackSheet by remember { mutableStateOf(false) }
+    // round add-history-deletion §8.2：LAPS 长按删除候选；本 round 用普通 remember
+    // （旋屏/配置变化丢 state 的 trade-off 跟 PERFORMANCE 一致，§12.4 follow-up）
+    var deleteCandidate by remember { mutableStateOf<DeleteCandidate?>(null) }
 
     val record = remember(currentTrack, bestLap, sessionCount, totalLapCount) {
         CurrentTrackRecord(
@@ -535,6 +562,12 @@ private fun LapsView(
                     onClick = {
                         navController.navigate("lap_session_detail/${session.sessionId}")
                     },
+                    onLongClick = {
+                        deleteCandidate = DeleteCandidate.LapSession(
+                            id = session.sessionId,
+                            titleHint = formatLapDeleteHint(session),
+                        )
+                    },
                 )
             }
         }
@@ -548,9 +581,51 @@ private fun LapsView(
             onTrackSelected = { testSessionViewModel.selectTrack(it) },
         )
     }
+
+    deleteCandidate?.let { candidate ->
+        DeleteHistoryDialog(
+            candidate = candidate,
+            onConfirm = {
+                if (candidate is DeleteCandidate.LapSession) {
+                    testSessionViewModel.deleteLapSession(candidate.id)
+                }
+                deleteCandidate = null
+            },
+            onDismiss = { deleteCandidate = null },
+        )
+    }
 }
 
 private fun formatLapSessionRowTitle(session: TelemetrySession): String {
+    val date = formatDate(session.startTs)
+    val best = session.bestLapMs?.let { formatLapMs(it) } ?: "--"
+    return "$date · ${session.lapCount} Laps · Best $best"
+}
+
+/**
+ * round add-history-deletion §8.4：PERFORMANCE row 长按删除 dialog 副标 hint
+ * （格式："0-100 km/h · 4.21 s · Today 10:35"），复用 [recentRunRowContent] 的派生口径。
+ */
+private fun formatPerfDeleteHint(result: TestResultSummary): String {
+    val type = when (result.testTemplateId) {
+        "acc_0_100" -> "0-100 km/h"
+        "brake_100_0" -> "100-0 km/h"
+        else -> result.testTemplateId
+    }
+    val value = when (result.testTemplateId) {
+        "acc_0_100" -> "%.2f s".format(result.totalTime)
+        "brake_100_0" -> "%.1f m".format(result.totalDistance)
+        else -> "—"
+    }
+    val time = formatRunTimestamp(result.timestamp)
+    return "$type · $value · $time"
+}
+
+/**
+ * round add-history-deletion §8.4：LAPS row 长按删除 dialog 副标 hint
+ * （格式："5/2 23:48 · 4 Laps · Best 1:32.457"），复用 [formatLapSessionRowTitle] 同款字段。
+ */
+private fun formatLapDeleteHint(session: TelemetrySession): String {
     val date = formatDate(session.startTs)
     val best = session.bestLapMs?.let { formatLapMs(it) } ?: "--"
     return "$date · ${session.lapCount} Laps · Best $best"

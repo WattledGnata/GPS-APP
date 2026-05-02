@@ -1,9 +1,10 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,10 +28,14 @@ import androidx.compose.ui.unit.dp
 /**
  * Device Home 的 GPS Details / Diagnostics / Settings 入口行 + BLE Scan device 行复用。
  *
+ * round add-history-deletion：追加可选 [onLongClick]（默认 null 行为等价旧 clickable，零改动调用方）。
+ * 长按≥500ms 触发 [onLongClick]，用于 Records → PERFORMANCE / LAPS 列表行长按删除入口。
+ *
  * @author CC
- * @description 通用入口行（icon + title + subtitle + chevron）
+ * @description 通用入口行（icon + title + subtitle + chevron），支持可选长按
  * @date 2026-05-01
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackTechRow(
     leadingIcon: ImageVector,
@@ -38,6 +43,7 @@ fun TrackTechRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll)
     Box(
@@ -46,7 +52,7 @@ fun TrackTechRow(
             .clip(shape)
             .background(TrackTechColors.Surface, shape)
             .border(1.dp, TrackTechColors.BorderAlpha60, shape)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(
