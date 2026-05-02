@@ -1573,4 +1573,116 @@ class GpsDataFilterTest {
             0.1
         )
     }
+
+    // ==================== smooth-perftest-acceleration-curve §5：acceleration 用 outputSpeed ====================
+
+    /**
+     * SP01: acceleration 与 speed 同源 — frames[i].acceleration 必须等于 (frames[i].speed - frames[i-1].speed) / 3.6 / dt
+     * （spec.md `Requirement: GpsDataFilter 实时加速度 MUST 基于 outputSpeed` Scenario "速度与加速度同源"）
+     */
+    @Test
+    fun SP01_accelerationSpeedSameSource_steadyState() {
+        val localFilter = GpsDataFilter()
+        // 12 帧 25Hz 匀加速 0 → 30 km/h（避开 windowSize=9 的 warmup 期）
+        val frames = (0 until 12).map { i ->
+            localFilter.process(
+                createGpsData(timestamp = i * 40L, speed = i * 30.0 / 11.0),
+            )
+        }
+        // 检查窗口已稳态（i >= 9）后任意两帧 acceleration 与 speed 关系
+        for (i in 10..11) {
+            val expectedDv = (frames[i].speed - frames[i - 1].speed) / 3.6
+            val dt = (frames[i].timestamp - frames[i - 1].timestamp) / 1000.0
+            val expectedAccel = expectedDv / dt
+            assertEquals(
+                "frames[$i] acceleration 必须基于 outputSpeed 差分（同源）",
+                expectedAccel,
+                frames[i].acceleration,
+                1e-6,
+            )
+        }
+    }
+
+    /**
+     * SP02: dt > 200ms 重置时 previousOutputSpeed 同步清空 — 该帧 acceleration = 0；
+     * 之后再连续处理 9 帧后缓存重新填充，acceleration 非 0
+     * （A12 invariant 对称扩展，spec scenario "dt > 200ms 重置时 previousOutputSpeed 一并清空"）
+     */
+    @Test
+    fun SP02_dtGt200ms_resetsClearsPreviousOutputSpeed() {
+        val localFilter = GpsDataFilter()
+        // 10 帧稳态填窗口
+        repeat(10) { i ->
+            localFilter.process(createGpsData(timestamp = i * 40L, speed = 50.0))
+        }
+        // 第 11 帧 timestamp 跨 300ms（> 200ms 触发 A12 重置）
+        val gapped = localFilter.process(createGpsData(timestamp = 10 * 40L + 300L, speed = 50.0))
+        assertEquals(
+            "A12 重置后该帧 acceleration MUST = 0（previousOutputSpeed 已清空，dv 无法计算）",
+            0.0,
+            gapped.acceleration,
+            1e-9,
+        )
+
+        // 缓存重新填充：再连续 9 帧匀加速（speed 50 → 70 km/h），acceleration 应非 0
+        val recoveryFrames = (0 until 9).map { j ->
+            localFilter.process(
+                createGpsData(timestamp = 10 * 40L + 300L + (j + 1) * 40L, speed = 50.0 + j * 2.5),
+            )
+        }
+        assertNotEquals(
+            "A12 重置后缓存重新填充 9 帧，acceleration MUST 非 0",
+            0.0,
+            recoveryFrames.last().acceleration,
+            1e-3,
+        )
+    }
+
+    /**
+     * SP03: 异常帧 invariant — 异常帧不更新 previousOutputSpeed，
+     * 异常帧之后的正常帧 acceleration 跨越异常帧时段计算；
+     * 异常帧后连续 5 帧持续稳定 + 异常帧本身 acceleration 不是 NaN/Inf 防御。
+     * （A13 invariant 对称扩展，spec scenario "异常帧 MUST NOT 更新 previousOutputSpeed"）
+     */
+    @Test
+    fun SP03_anomalyFrameDoesNotUpdatePreviousOutputSpeed() {
+        val localFilter = GpsDataFilter()
+        // 10 帧稳态匀速 50 km/h 填窗口
+        val baseline = (0 until 10).map { i ->
+            localFilter.process(createGpsData(timestamp = i * 40L, speed = 50.0))
+        }
+        val baselineSpeed = baseline.last().speed
+
+        // 异常帧：speed 跳到 200 km/h（dv=150 > maxDelta=90×0.04=3.6 触发 isAnomaly）
+        val spike = localFilter.process(createGpsData(timestamp = 10 * 40L, speed = 200.0))
+        assertTrue("SP03 前置：spike 帧 isAnomaly=true", spike.isAnomaly)
+        // 异常帧本身 acceleration 防御：不能是 NaN/Inf（A14 让 spike 不进 window，median 仍 = 50）
+        assertFalse("SP03：spike 帧 acceleration MUST NOT 是 NaN", spike.acceleration.isNaN())
+        assertFalse("SP03：spike 帧 acceleration MUST NOT 是 Infinity", spike.acceleration.isInfinite())
+
+        // 恢复帧：speed=50，若异常帧未污染 previousOutputSpeed，dv 应严格 = 0
+        // dt 跨越异常帧时段：previousRaw 仍是 baseline 最后一帧（timestamp = 9*40），
+        // 当前 timestamp = 11*40，dt = 80ms。outputSpeed 严格 = 50 km/h（A14 让 spike 不进 window，
+        // median([50×9]) = 50）。期望 dv = (50 - 50) / 3.6 = 0，acceleration 严格 = 0。
+        val recovered = localFilter.process(createGpsData(timestamp = 11 * 40L, speed = 50.0))
+        assertEquals(
+            "SP03：异常帧后正常帧 acceleration 严格 = 0（A14 + median 让 outputSpeed 不被 spike 污染）",
+            0.0,
+            recovered.acceleration,
+            1e-9,
+        )
+
+        // 异常帧后连续 5 帧匀速 50 km/h，acceleration 持续稳定接近 0
+        val recoveryStream = (1..5).map { j ->
+            localFilter.process(createGpsData(timestamp = (11 + j) * 40L, speed = 50.0))
+        }
+        recoveryStream.forEachIndexed { idx, f ->
+            assertTrue(
+                "SP03：恢复期 +${idx + 1} 帧 acceleration |a| < 0.1（匀速基线）实际 = ${f.acceleration}",
+                kotlin.math.abs(f.acceleration) < 0.1,
+            )
+        }
+        @Suppress("UNUSED_VARIABLE")
+        val unusedBaselineSpeed = baselineSpeed // suppress unused warning
+    }
 }

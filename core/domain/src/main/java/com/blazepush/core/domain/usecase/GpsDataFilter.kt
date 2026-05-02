@@ -20,9 +20,23 @@ class GpsDataFilter(
     private val lonWindow = mutableListOf<Double>()       // 经度中位数滤波窗口
     private val bearingWindow = mutableListOf<Double>()  // 航向角中位数滤波窗口
 
-    // 上一个原始数据点（用于计算加速度）
+    // 上一个原始数据点（用于计算 dt、物理约束判定基准、位置一致性参考）
     private var previousRaw: GpsData? = null
     private var previousPosition: Pair<Double, Double>? = null  // lat, lon
+
+    /**
+     * 上一个非异常帧输出的 outputSpeed（9 点 median 后的速度），用于 acceleration 计算。
+     *
+     * round smooth-perftest-acceleration-curve `Requirement: GpsDataFilter 实时加速度 MUST 基于 outputSpeed`：
+     * 之前 calculateAcceleration 用 raw.speed 差分，与同一帧输出的 outputSpeed 不同源（输出 speed 平滑、
+     * 输出 acceleration 用 raw 噪声），是内部数据源不一致 bug。修后 acceleration 与 outputSpeed 同源。
+     *
+     * 与既有 A12 / A13 / A14 invariants 对称扩展：
+     * - A12 `dt > 200ms` 重置时同步清空（信号丢失重连兜底）
+     * - A13 异常帧（isAnomaly OR isPositionAnomaly）MUST NOT 更新（保持基准锁在最近非异常帧）
+     * - reset() 显式清空
+     */
+    private var previousOutputSpeed: Double? = null
 
     /**
      * 处理单个GPS数据点
@@ -60,15 +74,13 @@ class GpsDataFilter(
         if (dtFromPrevious > 0.2) {
             previousRaw = null
             previousPosition = null
+            previousOutputSpeed = null  // 与 previousRaw 同生命周期（A12 invariant 对称扩展）
         }
 
-        // 1. 计算加速度（previousRaw == null 时早退返回 0.0）
-        val acceleration = calculateAcceleration(raw)
-
-        // 2. 物理约束检查：检测速度跳变（previousRaw == null 时早退返回 false）
+        // 1. 物理约束检查：检测速度跳变（必须用 raw 不能用 outputSpeed —— 平滑会掩盖真实跳变）
         val isAnomaly = isPhysicalConstraintViolation(raw)
 
-        // 3. 位置-速度一致性检验（previousPosition == null 时早退返回 (1.0, false)）
+        // 2. 位置-速度一致性检验（previousPosition == null 时早退返回 (1.0, false)）
         val (consistencyFactor, isPositionAnomaly) = checkPositionVelocityConsistency(raw)
 
         // === A14：异常帧不进滤波窗口 ===
@@ -95,22 +107,27 @@ class GpsDataFilter(
             bearingWindow.removeAt(0)
         }
 
-        // 4. 计算输出（简化分支：不再按 isAnomaly 分流）
+        // 3. 计算输出（简化分支：不再按 isAnomaly 分流）
         val outputSpeed = if (speedWindow.size >= 3) speedWindow.median() else raw.speed
         val outputLat = if (latWindow.size >= 3) latWindow.median() else raw.latitude
         val outputLon = if (lonWindow.size >= 3) lonWindow.median() else raw.longitude
         val outputBearing = if (bearingWindow.size >= 3) bearingWindow.circularMean() else raw.bearing
 
+        // 4. 计算加速度（基于 outputSpeed，与同一帧输出 speed 同源）
+        val acceleration = calculateAcceleration(raw.timestamp, outputSpeed)
+
         // 5. 计算置信度
         val confidence = calculateConfidence(isAnomaly, raw.hdop, consistencyFactor)
 
-        // === A13：异常帧不更新 previousRaw / previousPosition ===
-        // （Requirement "异常帧 MUST NOT 更新 previousRaw / previousPosition"）
-        // 依赖 A12 的 dt > 200ms 重置兜底：若连续 N 帧异常，previousRaw 保持旧值不变
+        // === A13：异常帧不更新 previousRaw / previousPosition / previousOutputSpeed ===
+        // （Requirement "异常帧 MUST NOT 更新 previousRaw / previousPosition"，本 round 对 previousOutputSpeed
+        //   对称扩展，spec.md `Requirement: GpsDataFilter 实时加速度 MUST 基于 outputSpeed`）
+        // 依赖 A12 的 dt > 200ms 重置兜底：若连续 N 帧异常，三者保持旧值不变
         // 直到下一帧相对 previousRaw 的 dt 超过 200ms，A12 自动重置，避免永久锁死。
         if (!isAnomaly && !isPositionAnomaly) {
             previousRaw = raw
             previousPosition = raw.latitude to raw.longitude
+            previousOutputSpeed = outputSpeed
         }
 
         return FilteredGpsData(
@@ -139,21 +156,28 @@ class GpsDataFilter(
         bearingWindow.clear()
         previousRaw = null
         previousPosition = null
+        previousOutputSpeed = null
     }
 
     // ==================== 私有方法 ====================
 
     /**
-     * 计算纵向加速度 (m/s²)
+     * 计算纵向加速度 (m/s²)，基于本帧 outputSpeed 与上一非异常帧 outputSpeed 差分。
+     *
+     * round smooth-perftest-acceleration-curve `Requirement: GpsDataFilter 实时加速度 MUST 基于 outputSpeed`：
+     * 之前 dv = (raw - previousRaw.speed)，与同一帧输出 speed 不同源；现 dv = (outputSpeed - previousOutputSpeed)。
+     * dt 仍取 raw.timestamp 与 previousRaw.timestamp（时间戳来源不变；previousRaw 与 previousOutputSpeed
+     * 同生命周期，A12/A13 invariants 对称扩展，见字段文档）。
      */
-    private fun calculateAcceleration(current: GpsData): Double {
+    private fun calculateAcceleration(currentTimestamp: Long, currentOutputSpeed: Double): Double {
         val prev = previousRaw ?: return 0.0
+        val prevSpeed = previousOutputSpeed ?: return 0.0
 
-        val dt = (current.timestamp - prev.timestamp) / 1000.0 // 秒
+        val dt = (currentTimestamp - prev.timestamp) / 1000.0 // 秒
         if (dt <= 0) return 0.0
 
         // 速度差 (m/s) = Δv(km/h) / 3.6
-        val dv = (current.speed - prev.speed) / 3.6
+        val dv = (currentOutputSpeed - prevSpeed) / 3.6
 
         return dv / dt // m/s²
     }

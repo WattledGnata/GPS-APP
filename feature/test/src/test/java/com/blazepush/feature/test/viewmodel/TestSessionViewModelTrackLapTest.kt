@@ -617,11 +617,19 @@ class TestSessionViewModelTrackLapTest {
             //   (1) dv 必须 < maxDelta = maxAcceleration(25) × 3.6 × dt(0.04) = 3.6 km/h/帧
             //       否则触发 filter 的 isAnomaly，A14 把异常帧拦在 speedWindow 外，
             //       median 仍靠前 3 帧 speed=0.5 拉平。每帧 +2 km/h 满足 dv=2 < 3.6。
-            //   (2) 帧数必须 ≥ 6：静止帧→加速帧 timestamp 跳 920ms > 200ms，A12 重置
-            //       previousRaw 导致首个加速帧 acceleration=0（正确行为：信号丢失后首帧
-            //       不能凭旧 prev 算加速度），消耗一个触发计数；所以需要 5 + 1 = 6 帧累积
-            //       satisfied `consecutiveTriggerCount ≥ TRIGGER_CONFIRMATION_COUNT(5)`。
-            repeat(6) { i ->
+            //   (2) 帧数必须 ≥ 8：round smooth-perftest-acceleration-curve §5 切到 outputSpeed
+            //       路径后，speedWindow 含前置 3 帧 standstill 0.5 km/h（fixture line 597-616），
+            //       9 点 median 把前 2 个加速帧的 outputSpeed 拉到 < 1.0 km/h，让 isMoving 短路
+            //       (`filteredData.speed > 1.0`) 在 i=0/i=1 判 false → trigger 计数延后启动 2 帧。
+            //       trigger = isAccelerating || isMoving（OR 短路；阈值 ≥ 5 连续）：
+            //         i=0: median([0.5×3, 10])=0.5,            isMoving=false → count=0
+            //         i=1: median([0.5×3, 10, 12])=0.5,        isMoving=false → count=0
+            //         i=2: median([0.5×3, 10, 12, 14])=5.25,   isMoving=true  → count=1
+            //         i=3..i=6: median 单调升至 14, isMoving=true              → count=2..5
+            //         i=7: count=6 ≥ 5 → fire trigger
+            //       spec.md `Requirement 3` Scenario "实时 trigger 行为有限退化" 锁定偏差 ≤ 80ms
+            //       (2 帧)，warmup + standstill 耦合的物理来源。8 帧已经实测验证。
+            repeat(8) { i ->
                 gpsFlow.value = emptyGpsSample().copy(
                     timestamp = (i * 40).toLong() + 1_001_000L,
                     latitude = 30.49,
