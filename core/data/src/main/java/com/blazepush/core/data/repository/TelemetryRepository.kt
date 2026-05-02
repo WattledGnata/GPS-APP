@@ -224,6 +224,28 @@ class TelemetryRepository(
         sessionDao.getRecentSessionsForTrack(trackId, limit).map { list -> list.map { it.toDomain() } }
 
     /**
+     * 删除 lap session：cascade 清 crossing_events 关联行 + binary 文件
+     * （`/telemetry/` 路径白名单防穿越，与 [TestResultRepository.deleteResult] 同款安全策略）。
+     * 不存在的 sessionId 视为 no-op；binary 文件 delete 失败不抛（File.delete 返回 false）。
+     *
+     * @author CC
+     * @description cascade delete lap session entity + crossings + binary file
+     * @date 2026-05-02
+     */
+    suspend fun deleteSession(sessionId: String) {
+        val entity = sessionDao.queryBySessionId(sessionId) ?: return
+        crossingDao.deleteCrossingsBySessionId(sessionId)
+        sessionDao.deleteSession(entity)
+        val path = entity.binaryFilePath
+        if (path.isNotEmpty()) {
+            val file = File(path)
+            if (file.canonicalPath.contains("/telemetry/")) {
+                file.delete()
+            }
+        }
+    }
+
+    /**
      * 读加减速 session 全部 sample（顺序读整个 chunk file）。
      */
     fun readPerformanceSamples(filePath: String): List<TelemetrySample> =

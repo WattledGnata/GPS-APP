@@ -109,4 +109,20 @@ class TestResultRepository(
             }
         }
     }
+
+    /**
+     * 按 id 删除测试记录：先 query 再复用 [deleteResult] 的 cascade（含 /telemetry/ 白名单防御）。
+     * 不存在的 id 视为 no-op。
+     *
+     * 引入背景：UI / ViewModel 层只持有 recordId 字符串，不注入 DAO；
+     * 把 by-id 查询封装进 repository 避免 DAO 边界泄漏到 feature 层（add-history-deletion round）。
+     *
+     * @author CC
+     * @description by-id wrapper for delete cascade, used by ViewModel
+     * @date 2026-05-02
+     */
+    suspend fun deleteResultById(id: String) {
+        val entity = testRecordDao.getTestRecordById(id) ?: return
+        deleteResult(entity)
+    }
 }
