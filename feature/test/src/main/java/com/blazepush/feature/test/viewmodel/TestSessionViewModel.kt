@@ -790,15 +790,30 @@ class TestSessionViewModel(
                     trackNameSnapshot = trackNameSnapshot,
                 )
             }
-            telemetryRepository.writeSample(
-                TelemetrySample(
-                    tsDeltaMs = gpsData.timestamp - lapAnchorTs,
-                    lat = gpsData.latitude,
-                    lon = gpsData.longitude,
-                    speedKmh = gpsData.speed,
-                    bearingDeg = gpsData.bearing,
+            // fix-lap-binary-ts-hygiene round：anchor 必须等于 header.startTs（同时刻、同时钟域）。
+            // 拉 repository.activeSessionStartTs 作为 anchor（startSession 内部赋值与 header.startTs 同源）。
+            // sessionStartTs == null 是 invariant 破坏（startSession 刚返回 sessionId 时不该出现），
+            // 走 FileLogger.w 警告 + skip telemetry 写入；**不得 ?: return 提前结束 bridgeGpsToLapTiming**——
+            // 后面 lapTimingEngine.processSample / _lapSession.value 更新 / 过线事件写 Room 必须照常执行。
+            val sessionStartTs = telemetryRepository.activeSessionStartTs
+            if (sessionStartTs != null) {
+                telemetryRepository.writeSample(
+                    TelemetrySample(
+                        tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
+                        lat = gpsData.latitude,
+                        lon = gpsData.longitude,
+                        speedKmh = gpsData.speed,
+                        bearingDeg = gpsData.bearing,
+                    )
                 )
-            )
+            } else {
+                // FileLogger 只有 d/v/e；invariant 破坏（startSession 刚返回 sessionId 但 activeSessionStartTs
+                // 仍为 null）走 error 级合理但不致命，bridge 必须继续。
+                FileLogger.e(
+                    TAG,
+                    "bridgeGpsToLapTiming: missing activeSessionStartTs after startSession, skip telemetry write but engine continues"
+                )
+            }
         }
 
         val updatedSession = lapTimingEngine.processSample(

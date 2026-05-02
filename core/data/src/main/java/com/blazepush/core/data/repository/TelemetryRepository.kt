@@ -41,6 +41,11 @@ class TelemetryRepository(
     private var activeSessionType: TelemetrySessionType = TelemetrySessionType.PERFORMANCE_TEST
     // persist-session-summary-fields round 加：endSession 时需要 binary 文件路径扫 sample 派生 topSpeedKmh
     private var activeFilePath: String? = null
+    // fix-lap-binary-ts-hygiene round 加：与 header.startTs / entity.startTs 同源的 active session 起点真壁钟，
+    // 供 bridgeGpsToLapTiming 计算 sample.tsDeltaMs 的 anchor（不再用 lapAnchorTs，避免 anchor 错位）。
+    // public get + private set 实现"对外只读、内部 startSession 时赋值 / endSession 时清空"语义。
+    var activeSessionStartTs: Long? = null
+        private set
 
     /**
      * 开启新 session：生成 UUID + 写 metadata（含可选 trackId / trackNameSnapshot）入 Room + 启动 binary writer。
@@ -80,6 +85,7 @@ class TelemetryRepository(
         activeSessionId = sessionId
         activeSessionType = type
         activeFilePath = file.absolutePath
+        activeSessionStartTs = startTs
         return sessionId
     }
 
@@ -138,6 +144,7 @@ class TelemetryRepository(
         activeWriter = null
         activeSessionId = null
         activeFilePath = null
+        activeSessionStartTs = null
         val endTs = System.currentTimeMillis()
 
         // 用 IO 调度跑扫 binary + 查 crossings 派生（避免阻塞 caller 主线程）
