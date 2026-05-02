@@ -43,6 +43,9 @@ import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.usecase.LapLiveStateDeriver
 import com.blazepush.feature.test.usecase.LapTimingEngine
+import com.blazepush.feature.test.usecase.ReferenceLapIndex
+import com.blazepush.feature.test.usecase.buildReferenceLapIndex
+import com.blazepush.feature.test.usecase.projectDelta
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -79,6 +82,30 @@ data class LapSessionSaveResult(
 )
 
 /**
+ * 实时秒差跨帧状态聚合体。round add-realtime-lap-delta 引入：
+ * - reference：当前 best 圈预计算索引；null = 无 best（首圈进行中）
+ * - prevMatchedIdx：上一帧 polyline 投影命中 segment 起点 idx；-1 = 还未成功匹配过
+ * - prevDeltaMs：上一帧成功投影的 delta；失效时 UI 维持显示这个值
+ * - staleFrameCount：连续失效帧计数；累计 ≥ STALE_FRAME_THRESHOLD 时进 stale
+ * - outDeltaMs / outIsStale：本帧的最终 LapLiveState 输出值（在 update 同事务内派生，避免 race）
+ *
+ * 所有字段每帧 GPS data 来到时通过 [_realtimeDeltaState.value] atomic 替换更新；
+ * Deriver 通过订阅本 StateFlow 直接读 outDeltaMs / outIsStale 两个标量。
+ *
+ * @author CC
+ * @description cross-frame state for realtime lap delta projection
+ * @date 2026-05-02
+ */
+internal data class RealtimeDeltaState(
+    val reference: ReferenceLapIndex?,
+    val prevMatchedIdx: Int = -1,
+    val prevDeltaMs: Long? = null,
+    val staleFrameCount: Int = 0,
+    val outDeltaMs: Long? = null,
+    val outIsStale: Boolean = false,
+)
+
+/**
  * 测试会话ViewModel - 管理测试状态机
  */
 class TestSessionViewModel(
@@ -104,6 +131,13 @@ class TestSessionViewModel(
         private const val STANDSTILL_CONFIRMATION_COUNT = 3
         private const val LAP_LIVE_TICK_PERIOD_MS = 50L
         private const val LAP_LIVE_SUBSCRIPTION_TIMEOUT_MS = 5_000L
+
+        /**
+         * round add-realtime-lap-delta：连续失效帧门，到达此值后 UI 进 stale（字色降级 muted）。
+         * 5Hz GPS 下 5 帧 ≈ 1 秒，避免单帧 GPS 异常 / 短暂变线引起 UI 闪烁；
+         * 连续 1 秒持续失效才视为"真问题"。
+         */
+        private const val STALE_FRAME_THRESHOLD = 5
 
         /**
          * 开圈（prev==0 → updated>0）用新 index；闭圈和 sector 用旧 index。
@@ -189,28 +223,40 @@ class TestSessionViewModel(
     private val _lapSession = MutableStateFlow<LapSession?>(null)
     val lapSession: StateFlow<LapSession?> = _lapSession.asStateFlow()
 
+    /**
+     * round add-realtime-lap-delta：实时秒差跨帧状态。本 ViewModel 是 [projectDelta] 唯一调用方（Deriver 不调）。
+     * - reference 在 _lapSession.completedLaps 出现新 best 时同步重建（首圈完成立即建 / 后续 PB 刷新触发重建）
+     * - 每帧 gpsDataViewModel.gpsData 来到时调 [projectDelta]，atomic update 跨帧字段，同事务派生 outDeltaMs/outIsStale
+     * - lapLiveState 订阅本 StateFlow，把 outDeltaMs/outIsStale 喂给 [LapLiveStateDeriver.derive]
+     */
+    private val _realtimeDeltaState = MutableStateFlow(RealtimeDeltaState(reference = null))
+
     val lapLiveState: StateFlow<LapLiveState> = combine(
         _lapSession,
         gpsDataViewModel.gpsData,
         gpsDataViewModel.connectionState,
         gpsDataViewModel.dataQuality,
-        tickerFlow(LAP_LIVE_TICK_PERIOD_MS),
-    ) { session: LapSession?, gps: GpsData, conn: ConnectionState, quality: DataQuality, _: Unit ->
-        // currentTimeMs 用 GPS 时间轴（与 crossing.timestampMillis 同源），
-        // 但通过 elapsedRealtime 在 GPS 帧间隔内推进，让 ticker 50ms 驱动 timer 平滑滚动
+        // 把 _realtimeDeltaState 跟 ticker combine 成 inner flow：
+        // ticker 推进时（即使 deltaState 未变）也发射，保证 currentLapTimerMs 能跨 GPS 帧平滑外推。
+        combine(_realtimeDeltaState, tickerFlow(LAP_LIVE_TICK_PERIOD_MS)) { d, _ -> d },
+    ) { session: LapSession?, gps: GpsData, conn: ConnectionState, quality: DataQuality, deltaState: RealtimeDeltaState ->
+        // currentDisplayTimeMs：GPS 时间轴（与 crossing.timestampMillis 同源），
+        // 通过 elapsedRealtime 在 GPS 帧间隔内推进，让 ticker 50ms 驱动 CURRENT tile 平滑滚动
         // （不依赖 GPS 帧到达频率：5Hz replay 下 timer 仍 50ms 跳一次）。
         val anchorElapsed = lastReceivedAtElapsed
-        val currentMs = if (anchorElapsed > 0L) {
+        val currentDisplayTimeMs = if (anchorElapsed > 0L) {
             gps.timestamp + (SystemClock.elapsedRealtime() - anchorElapsed)
         } else {
             gps.timestamp
         }
         LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = currentMs,
+            currentDisplayTimeMs = currentDisplayTimeMs,
             gpsData = gps,
             connectionState = conn,
             dataQuality = quality,
+            deltaToBestMs = deltaState.outDeltaMs,
+            deltaIsStale = deltaState.outIsStale,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -220,6 +266,7 @@ class TestSessionViewModel(
             lastLapTimeMs = null,
             bestLapTimeMs = null,
             deltaToBestMs = null,
+            deltaIsStale = false,
             currentLapNumber = 1,
             abnormalState = null,
         ),
@@ -297,6 +344,106 @@ class TestSessionViewModel(
                 processFilteredData(filteredData)
 
                 bridgeGpsToLapTiming(gpsData)
+
+                // round add-realtime-lap-delta：每帧 GPS data 调一次 projectDelta，atomic update RealtimeDeltaState
+                updateRealtimeDelta(gpsData)
+            }
+        }
+
+        // round add-realtime-lap-delta：监听 _lapSession.completedLaps，
+        // 首圈完成立即建 reference / 后续 PB 刷新重建 reference
+        viewModelScope.launch {
+            _lapSession.collect { session ->
+                maybeRebuildReference(session)
+            }
+        }
+    }
+
+    /**
+     * round add-realtime-lap-delta：检测 session.completedLaps 是否需要重建 reference。
+     *
+     * 触发条件：
+     * - 首圈完成立即建：completedLaps 从空变 ≥ 1 + 当前 reference 为 null
+     * - PB 刷新重建：新 best 圈 durationMillis < 当前 reference.lapDurationMs
+     *
+     * 重建时 atomic update：reference = newRef, prevMatchedIdx = -1, staleFrameCount = 0；
+     * **prevDeltaMs 保留**（避免 stale 体验空白），outDeltaMs / outIsStale 待下一帧 update 重新派生。
+     *
+     * @author CC
+     * @description rebuild ReferenceLapIndex on first lap completion or PB refresh
+     * @date 2026-05-02
+     */
+    private fun maybeRebuildReference(session: LapSession?) {
+        val completedLaps = session?.completedLaps ?: return
+        if (completedLaps.isEmpty()) return
+        val newBest = completedLaps.minByOrNull { it.durationMillis } ?: return
+
+        val state = _realtimeDeltaState.value
+        val current = state.reference
+        val shouldRebuild = current == null || newBest.durationMillis < current.lapDurationMs
+        if (!shouldRebuild) return
+
+        val newRef = buildReferenceLapIndex(newBest) ?: return
+        _realtimeDeltaState.value = state.copy(
+            reference = newRef,
+            prevMatchedIdx = -1,
+            staleFrameCount = 0,
+        )
+    }
+
+    /**
+     * round add-realtime-lap-delta：每帧 GPS data 调用一次 projectDelta，atomic update RealtimeDeltaState。
+     *
+     * 路径：
+     * - reference 为 null（无 best） / lastAcceptedCrossing 为 null（首圈进行中）→ outDeltaMs = null
+     * - 调 projectDelta：
+     *   - 成功 → outDeltaMs = delta, outIsStale = false, prevMatchedIdx/prevDeltaMs/staleFrameCount 更新
+     *   - 失败 → staleFrameCount++；outDeltaMs = prevDeltaMs（维持上一帧），outIsStale 当 stale 帧门触发时为 true
+     *
+     * 时钟域：currentLapElapsedMs 用 `gps.timestamp - lastAcceptedCrossing.timestampMillis`，
+     * 两个 ts 都是 GPS sample 域同源相减（避免 wall clock / BLE 链路延迟污染）。
+     *
+     * @author CC
+     * @description per-frame projectDelta call updating cross-frame state for realtime lap delta
+     * @date 2026-05-02
+     */
+    private fun updateRealtimeDelta(gps: GpsData) {
+        val session = _lapSession.value
+        val lastCrossing = session?.crossingEvents
+            ?.lastOrNull { it.accepted && it.gateType == com.blazepush.feature.test.model.track.TimingGateType.StartFinish }
+
+        _realtimeDeltaState.value = run {
+            val state = _realtimeDeltaState.value
+            val ref = state.reference
+            if (ref == null || lastCrossing == null) {
+                state.copy(outDeltaMs = null, outIsStale = false)
+            } else {
+                val (curX, curY) = ref.toLocalMeters(gps.latitude, gps.longitude)
+                val currentLapElapsedMs = gps.timestamp - lastCrossing.timestampMillis
+                val projection = projectDelta(
+                    reference = ref,
+                    currentLapElapsedMs = currentLapElapsedMs,
+                    currentX = curX,
+                    currentY = curY,
+                    prevMatchedIdx = state.prevMatchedIdx,
+                )
+                if (projection != null) {
+                    state.copy(
+                        prevMatchedIdx = projection.matchedIdx,
+                        prevDeltaMs = projection.deltaMs,
+                        staleFrameCount = 0,
+                        outDeltaMs = projection.deltaMs,
+                        outIsStale = false,
+                    )
+                } else {
+                    val newStale = state.staleFrameCount + 1
+                    val isStale = state.prevDeltaMs != null && newStale >= STALE_FRAME_THRESHOLD
+                    state.copy(
+                        staleFrameCount = newStale,
+                        outDeltaMs = state.prevDeltaMs, // 维持上一帧；从未成功过则为 null
+                        outIsStale = isStale,
+                    )
+                }
             }
         }
     }

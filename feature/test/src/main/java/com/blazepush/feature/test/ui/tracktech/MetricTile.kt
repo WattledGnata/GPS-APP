@@ -28,6 +28,9 @@ fun MetricTile(
     accentColor: Color = TrackTechColors.Cyan,
     valueSize: MetricSize = MetricSize.Medium,
     valueKind: MetricKind = MetricKind.Score,
+    // round add-realtime-lap-delta：DELTA tile 需要数字本身按正/负染色（绿/红）。
+    // 默认 null 表示沿用 baseline 的 TextPrimary（白色），现有调用方零改动。
+    valueColor: Color? = null,
 ) {
     CutCornerPanel(
         modifier = modifier.fillMaxWidth(),
@@ -49,7 +52,7 @@ fun MetricTile(
                 unit = unit,
                 size = valueSize,
                 kind = valueKind,
-                valueColor = TrackTechColors.TextPrimary,
+                valueColor = valueColor ?: TrackTechColors.TextPrimary,
                 unitColor = TrackTechColors.TextSecondary,
             )
             if (!status.isNullOrEmpty()) {

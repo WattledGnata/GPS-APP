@@ -200,6 +200,9 @@ private fun Lap2x2Dashboard(
     val deltaText = formatDelta(state.deltaToBestMs)
     val deltaAccent = when {
         state.deltaToBestMs == null -> TrackTechColors.TextMuted
+        // round add-realtime-lap-delta：stale 时（连续失效 ≥ 5 帧 / 1 秒）字色降级，
+        // 数字仍显示上一帧 prevDeltaMs，但用户立刻看到"灰了 → 不可信"。
+        state.deltaIsStale -> TrackTechColors.TextMuted
         state.deltaToBestMs < 0 -> TrackTechColors.Green
         state.deltaToBestMs > 0 -> TrackTechColors.Red
         else -> TrackTechColors.TextPrimary
@@ -222,8 +225,11 @@ private fun Lap2x2Dashboard(
                     .weight(1f)
                     .fillMaxHeight(),
                 accentColor = deltaAccent,
-                valueSize = MetricSize.Hero,
+                // round add-realtime-lap-delta：Hero 字号下 `+1:23.456` 8 字符在 weight=1f 等分宽度的 tile 容易截断 →
+                // 降到 Large（视觉强度仍突出但更紧凑）。同时 valueColor 染数字本身（baseline 仅染 label）。
+                valueSize = MetricSize.Large,
                 valueKind = MetricKind.Score,
+                valueColor = deltaAccent,
             )
             MetricTile(
                 label = "CURRENT",
