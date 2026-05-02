@@ -27,10 +27,12 @@ class LapLiveStateDeriverTest {
     fun `session null returns all null fields and lapNumber 1`() {
         val state = LapLiveStateDeriver.derive(
             session = null,
-            currentTimeMs = 1_000L,
+            currentDisplayTimeMs = 1_000L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.currentLapTimerMs)
@@ -50,10 +52,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 1_500L,
+            currentDisplayTimeMs = 1_500L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.currentLapTimerMs)
@@ -69,10 +73,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 1_500L,
+            currentDisplayTimeMs = 1_500L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(500L, state.currentLapTimerMs)
@@ -94,16 +100,19 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_500L,
+            currentDisplayTimeMs = 2_500L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(300L, state.currentLapTimerMs)
         assertEquals(1_200L, state.lastLapTimeMs)
         assertEquals(1_200L, state.bestLapTimeMs)
-        assertEquals(-900L, state.deltaToBestMs)
+        // removed (round add-realtime-lap-delta)：baseline 错位减法 deltaToBestMs 已不再派生；
+        // derive 现在仅直传入参 deltaToBestMs / deltaIsStale，专门 delta 行为单测在 RealtimeDeltaCalculatorTest
         assertEquals(2, state.currentLapNumber)
     }
 
@@ -120,16 +129,18 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 3_400L,
+            currentDisplayTimeMs = 3_400L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(100L, state.currentLapTimerMs)
         assertEquals(1_100L, state.lastLapTimeMs)
         assertEquals(1_100L, state.bestLapTimeMs)
-        assertEquals(-1_000L, state.deltaToBestMs)
+        // removed (round add-realtime-lap-delta)：baseline 错位减法 deltaToBestMs 不再派生
         assertEquals(3, state.currentLapNumber)
     }
 
@@ -146,16 +157,18 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 3_600L,
+            currentDisplayTimeMs = 3_600L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(1_300L, state.lastLapTimeMs)
         assertEquals(1_200L, state.bestLapTimeMs)
         assertEquals(100L, state.currentLapTimerMs)
-        assertEquals(-1_100L, state.deltaToBestMs)
+        // removed (round add-realtime-lap-delta)：baseline 错位减法 deltaToBestMs 不再派生
     }
 
     @Test
@@ -170,15 +183,18 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_400L,
+            currentDisplayTimeMs = 2_400L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(1_300L, state.currentLapTimerMs)
         assertEquals(1_100L, state.bestLapTimeMs)
-        assertEquals(200L, state.deltaToBestMs)
+        // removed (round add-realtime-lap-delta)：baseline 错位减法 deltaToBestMs 已不再派生；
+        // derive 现在仅直传入参 deltaToBestMs / deltaIsStale，专门 delta 行为单测在 RealtimeDeltaCalculatorTest
     }
 
     @Test
@@ -198,10 +214,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 3_000L,
+            currentDisplayTimeMs = 3_000L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(1_200L, state.bestLapTimeMs)
@@ -235,10 +253,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_600L,
+            currentDisplayTimeMs = 2_600L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(AbnormalState.LAP_INVALIDATED, state.abnormalState)
@@ -265,10 +285,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_600L,
+            currentDisplayTimeMs = 2_600L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.abnormalState)
@@ -300,10 +322,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_600L,
+            currentDisplayTimeMs = 2_600L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         // latest at t=2500，window [1500, 2500] 内只有 t=1800 + t=2500 = 2 个，不足 3 → 不触发
@@ -314,10 +338,12 @@ class LapLiveStateDeriverTest {
     fun `ble disconnected wins highest priority abnormal state`() {
         val state = LapLiveStateDeriver.derive(
             session = null,
-            currentTimeMs = 0L,
+            currentDisplayTimeMs = 0L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.DISCONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(AbnormalState.BLE_DISCONNECTED, state.abnormalState)
@@ -327,10 +353,12 @@ class LapLiveStateDeriverTest {
     fun `gps signal lost when data age exceeds 1000ms`() {
         val state = LapLiveStateDeriver.derive(
             session = null,
-            currentTimeMs = 0L,
+            currentDisplayTimeMs = 0L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality().copy(dataAge = 1_500L),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(AbnormalState.GPS_SIGNAL_LOST, state.abnormalState)
@@ -340,10 +368,12 @@ class LapLiveStateDeriverTest {
     fun `waiting for gps lock when satellite count below 6`() {
         val state = LapLiveStateDeriver.derive(
             session = null,
-            currentTimeMs = 0L,
+            currentDisplayTimeMs = 0L,
             gpsData = goodGpsData().copy(satelliteCount = 4),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(AbnormalState.WAITING_FOR_GPS_LOCK, state.abnormalState)
@@ -353,10 +383,12 @@ class LapLiveStateDeriverTest {
     fun `normal state has null abnormal state`() {
         val state = LapLiveStateDeriver.derive(
             session = null,
-            currentTimeMs = 0L,
+            currentDisplayTimeMs = 0L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.abnormalState)
@@ -379,10 +411,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 2_600L,
+            currentDisplayTimeMs = 2_600L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.abnormalState)
@@ -402,10 +436,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 10_000L,  // 距 latest=1000 已 9 秒，超出 5 秒显示窗
+            currentDisplayTimeMs = 10_000L,  // 距 latest=1000 已 9 秒，超出 5 秒显示窗
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertNull(state.abnormalState)
@@ -420,10 +456,12 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentTimeMs = 5_400L,
+            currentDisplayTimeMs = 5_400L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
         )
 
         assertEquals(5, state.currentLapNumber)

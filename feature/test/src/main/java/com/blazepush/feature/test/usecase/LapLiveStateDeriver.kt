@@ -18,6 +18,7 @@ data class LapLiveState(
     val lastLapTimeMs: Long?,
     val bestLapTimeMs: Long?,
     val deltaToBestMs: Long?,
+    val deltaIsStale: Boolean,
     val currentLapNumber: Int,
     val abnormalState: AbnormalState?,
 )
@@ -65,19 +66,28 @@ object LapLiveStateDeriver {
     )
 
     /**
-     * 派生 LapLiveState：从 LapSession + GPS / BLE 状态计算 6 字段（current/last/best/delta/lapNumber/abnormal）。
+     * 派生 LapLiveState：从 LapSession + GPS / BLE 状态计算 7 字段（current/last/best/delta/deltaIsStale/lapNumber/abnormal）。
      * 纯函数 + 无副作用，单元测试直接覆盖。
      *
+     * round add-realtime-lap-delta 修订：
+     * - `currentTimeMs` 重命名语义为 `currentDisplayTimeMs`（由 ViewModel ticker / SystemClock.elapsedRealtime 推动），
+     *   保持 baseline 行为，CURRENT tile 在两个 GPS 帧之间也能平滑外推
+     * - 新增 `deltaToBestMs` / `deltaIsStale` 入参：由 ViewModel 调用 [projectDelta] 算好后传入；Deriver 不调
+     *   [projectDelta]、不读跨帧状态，仅做 LapLiveState 组装。算法责任完全在 ViewModel（参考 design.md Decision 6）
+     * - 删除 baseline 错位减法 `currentLapTimerMs - bestLapTimeMs`（量纲不一致，第二圈起一直显示绿色巨大负数）
+     *
      * @author CC
-     * @description derive lap live state from session + gps + ble signals
-     * @date 2026-05-01
+     * @description derive lap live state from session + gps + ble signals + viewmodel-computed delta
+     * @date 2026-05-02
      */
     fun derive(
         session: LapSession?,
-        currentTimeMs: Long,
+        currentDisplayTimeMs: Long,
         gpsData: GpsData,
         connectionState: ConnectionState,
         dataQuality: DataQuality,
+        deltaToBestMs: Long?,
+        deltaIsStale: Boolean,
     ): LapLiveState {
         val acceptedStartFinish = session?.crossingEvents
             ?.filter { it.accepted && it.gateType == TimingGateType.StartFinish }
@@ -85,7 +95,7 @@ object LapLiveStateDeriver {
             .orEmpty()
 
         val currentLapTimerMs = acceptedStartFinish.lastOrNull()
-            ?.let { currentTimeMs - it.timestampMillis }
+            ?.let { currentDisplayTimeMs - it.timestampMillis }
 
         val lapDurations = if (acceptedStartFinish.size >= 2) {
             acceptedStartFinish.zipWithNext { prev, next ->
@@ -97,17 +107,12 @@ object LapLiveStateDeriver {
 
         val lastLapTimeMs = lapDurations.lastOrNull()
         val bestLapTimeMs = lapDurations.minOrNull()
-        val deltaToBestMs = if (currentLapTimerMs != null && bestLapTimeMs != null) {
-            currentLapTimerMs - bestLapTimeMs
-        } else {
-            null
-        }
 
         val currentLapNumber = max(1, session?.currentLapIndex ?: 0)
 
         val abnormalState = deriveAbnormalState(
             session = session,
-            currentTimeMs = currentTimeMs,
+            currentTimeMs = currentDisplayTimeMs,
             gpsData = gpsData,
             connectionState = connectionState,
             dataQuality = dataQuality,
@@ -118,6 +123,7 @@ object LapLiveStateDeriver {
             lastLapTimeMs = lastLapTimeMs,
             bestLapTimeMs = bestLapTimeMs,
             deltaToBestMs = deltaToBestMs,
+            deltaIsStale = deltaIsStale,
             currentLapNumber = currentLapNumber,
             abnormalState = abnormalState,
         )
