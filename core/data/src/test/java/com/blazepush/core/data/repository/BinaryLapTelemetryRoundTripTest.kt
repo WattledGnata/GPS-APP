@@ -303,6 +303,20 @@ class BinaryLapTelemetryRoundTripTest {
             sessions.find { it.sessionId == sessionId }
 
         override suspend fun queryAll() = sessions.toList()
+
+        // round wire-real-data-to-records-and-laps-tabs §1.6 引入的 abstract 方法，
+        // 本套件不消费聚合行为，统一返回轻量空 flow（与现役 FakeTelemetrySessionDao 同款 stub）。
+        override fun getBestLapForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf<TelemetrySessionEntity?>(null)
+
+        override fun getSessionCountForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf(0)
+
+        override fun getTotalLapCountForTrack(trackId: String) =
+            kotlinx.coroutines.flow.flowOf(0)
+
+        override fun getRecentSessionsForTrack(trackId: String, limit: Int) =
+            kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
     }
 
     private class FakeCrossingEventDao : CrossingEventDao {
