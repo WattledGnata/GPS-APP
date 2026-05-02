@@ -24,19 +24,26 @@ class CalculateResultUseCase {
             return emptyResult(session, dataFilePath)
         }
 
-        // 1. 计时点修正：回溯历史数据找到精确的起始/结束点
+        // 1. 计算加速度（在 raw 等间距 dataPoints 上，**不能在 correctedPoints 上**：
+        //    correctTimingPoints 注入的 preciseStart / preciseEnd 锚点与邻居 dt 不等于 40ms，
+        //    会污染 5 点 SG 边界系数。spec.md "等间距假设 + 偏差 ≥ 20% 退化" 已锁定该约束。
+        val accelerationsMs2 = calculateAccelerations(dataPoints)
+        // avgAcceleration 维持 V1 兼容（abs 后均值，恒 ≥ 0）：spec 未规定 avg 拆分；
+        // 不维持 V1 会让 brake 测试 UI "AVG G" 显示负数（用户困惑回归）。
+        val avgAcceleration = if (accelerationsMs2.isNotEmpty()) {
+            accelerationsMs2.map { kotlin.math.abs(it) }.average() / GRAVITY_MS2
+        } else 0.0
+        val maxAcceleration = accelerationsMs2.filter { it > 0 }.maxOrNull()?.div(GRAVITY_MS2) ?: 0.0
+        val maxDeceleration = accelerationsMs2.filter { it < 0 }.minOrNull()?.let { -it / GRAVITY_MS2 } ?: 0.0
+
+        // 2. 计时点修正：回溯历史数据找到精确的起始/结束点（用于 totalTime / totalDistance / segments，不喂 SG）
         val correctedPoints = correctTimingPoints(dataPoints, session.template)
 
-        // 2. 计算总时间
+        // 3. 计算总时间
         val totalTime = correctedPoints.last().elapsedTime - correctedPoints.first().elapsedTime
 
-        // 3. 计算总距离
+        // 4. 计算总距离
         val totalDistance = calculateTotalDistance(correctedPoints)
-
-        // 4. 计算加速度
-        val accelerations = calculateAccelerations(correctedPoints)
-        val avgAcceleration = if (accelerations.isNotEmpty()) accelerations.average() else 0.0
-        val maxAcceleration = accelerations.maxOrNull() ?: 0.0
 
         // 5. 计算分段数据
         val segments = calculateSegments(correctedPoints, session.template)
@@ -51,11 +58,13 @@ class CalculateResultUseCase {
             totalDistance = totalDistance,
             avgAcceleration = avgAcceleration,
             maxAcceleration = maxAcceleration,
+            maxDeceleration = maxDeceleration,
             segments = segments,
             dataPoints = correctedPoints,
             dataFilePath = dataFilePath
         )
     }
+
 
     /**
      * 计时点修正：在数据明显越过阈值后，回溯历史数据找到精确的计时点
@@ -159,23 +168,24 @@ class CalculateResultUseCase {
         return earthRadius * c
     }
 
+    /**
+     * 加速度序列（单位 m/s²，正向加速 > 0、制动 < 0）。
+     *
+     * 走 [AccelerationSmoother] 5 点 Savitzky-Golay 中心差分；spec.md
+     * `Requirement: 离线 G 值统计与 UI 曲线 MUST 共用 AccelerationSmoother` 锁定共用入口。
+     *
+     * 输入 dataPoints[i].speed 已经是 outputSpeed（GpsDataFilter 9 点 median 后），
+     * binary 持久化路径同源（见 TestSessionViewModel 写入侧 filteredData.speed）。
+     */
     private fun calculateAccelerations(dataPoints: List<GpsDataPoint>): List<Double> {
-        val accelerations = mutableListOf<Double>()
-        for (i in 1 until dataPoints.size) {
-            val prev = dataPoints[i - 1]
-            val curr = dataPoints[i]
-            val dt = curr.elapsedTime - prev.elapsedTime
-            // 过滤异常数据：采样间隔太短(<10ms)或太长(>1s)会导致异常值
-            if (dt > 0.01 && dt < 1.0) {
-                val dv = (curr.speed - prev.speed) / 3.6  // 转换为 m/s
-                val accel = Math.abs(dv / dt) / 9.81       // 转换为 G
-                // 过滤物理上不可能的值：超过3G通常是GPS噪声
-                if (accel < 3.0) {
-                    accelerations.add(accel)
-                }
-            }
+        val samples = dataPoints.map { p ->
+            TimedSpeedSample(
+                // Math.round 避免 IEEE 754 浮点截断（如 8.04 * 1000.0 = 8039.999... → toLong=8039 漂 -1ms）
+                timestamp = Math.round(p.elapsedTime * 1000.0),
+                speedKmh = p.speed,
+            )
         }
-        return accelerations
+        return AccelerationSmoother.compute(samples)
     }
 
     private fun calculateSegments(
@@ -260,6 +270,7 @@ class CalculateResultUseCase {
         totalDistance = 0.0,
         avgAcceleration = 0.0,
         maxAcceleration = 0.0,
+        maxDeceleration = 0.0,
         segments = emptyList(),
         dataPoints = emptyList(),
         dataFilePath = dataFilePath

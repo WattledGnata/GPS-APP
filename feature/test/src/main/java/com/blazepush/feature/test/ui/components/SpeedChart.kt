@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -14,6 +15,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blazepush.core.domain.model.GpsDataPoint
+import com.blazepush.core.domain.usecase.AccelerationSmoother
+import com.blazepush.core.domain.usecase.GRAVITY_MS2
+import com.blazepush.core.domain.usecase.TimedSpeedSample
 import kotlin.math.abs
 
 /**
@@ -171,28 +175,28 @@ fun GForceChart(
         return
     }
 
-    // 计算G值（过滤异常值）- 使用与 CalculateResultUseCase 一致的过滤条件）
-    val gForcePoints = dataPoints.mapIndexedNotNull { index, point ->
-        if (index == 0) return@mapIndexedNotNull Pair(point.elapsedTime, 0.0)
-
-        val prev = dataPoints[index - 1]
-        val dt = point.elapsedTime - prev.elapsedTime
-
-        // 过滤异常采样间隔（与 CalculateResultUseCase 一致）
-        if (dt <= 0.01 || dt > 1.0) {
-            return@mapIndexedNotNull null
+    // G 值序列：调 AccelerationSmoother 5 点 SG（与 CalculateResultUseCase 共用入口，
+    // spec.md `Requirement: 离线 G 值统计与 UI 曲线 MUST 共用 AccelerationSmoother` 锁定）。
+    // |G| > 3 时 clip 到 ±3 而非 drop（spec.md `GForceChart 边界值 MUST clip 而非 drop`），
+    // 折线在边界处呈水平段（明显是"超出显示范围"的视觉信号），避免 drop 后相邻点直连产生 V 字断点。
+    // remember(dataPoints) 包裹避免 Compose 重组重算（性能）。
+    val gForcePoints = remember(
+        dataPoints.size,
+        dataPoints.firstOrNull()?.elapsedTime,
+        dataPoints.lastOrNull()?.elapsedTime,
+    ) {
+        val samples = dataPoints.map { p ->
+            TimedSpeedSample(
+                // Math.round 避免浮点截断（IEEE 754 下 8.04 * 1000.0 = 8039.999... → toLong=8039 漂 -1ms）
+                timestamp = Math.round(p.elapsedTime * 1000.0),
+                speedKmh = p.speed,
+            )
         }
-
-        // 计算G值：km/h → m/s → G
-        val dv = (point.speed - prev.speed) / 3.6    // Δv (m/s)
-        val gForce = dv / dt / 9.81                   // a (m/s²) / g
-
-        // 过滤物理上不可能的G值（与 CalculateResultUseCase 一致：< 3.0G）
-        if (abs(gForce) >= 3.0) {
-            return@mapIndexedNotNull null
+        val accelMs2 = AccelerationSmoother.compute(samples)
+        accelMs2.mapIndexed { i, a ->
+            val g = (a / GRAVITY_MS2).coerceIn(-3.0, 3.0)
+            Pair(dataPoints[i].elapsedTime, g)
         }
-
-        Pair(point.elapsedTime, gForce)
     }
 
     val maxTime = (dataPoints.maxOf { it.elapsedTime } * 1000).toInt()

@@ -80,12 +80,17 @@ fun TestResultScreen(
             }
         }
 
-        // G值曲线图
+        // G值曲线图：按 testTemplateId 二选一传 maxA/maxD（round smooth-perftest-acceleration-curve §4）
         if (dataPoints.isNotEmpty()) {
             item {
+                val template = TestTemplate.fromId(record.testTemplateId)
+                val maxGForChart = when (template) {
+                    is TestTemplate.Braking100To0 -> record.maxDeceleration
+                    else -> record.maxAcceleration
+                }
                 GForceChart(
                     dataPoints = dataPoints,
-                    maxAcceleration = record.maxAcceleration,
+                    maxAcceleration = maxGForChart,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -138,6 +143,22 @@ private fun ResultSummaryCard(record: TestRecordEntity) {
 
 @Composable
 private fun KeyMetricsCard(record: TestRecordEntity) {
+    // 按 testTemplateId 二选一渲染 PEAK G（round smooth-perftest-acceleration-curve §4）：
+    // - 加速测试 → "最大加速G值" + maxAcceleration
+    // - 制动测试 maxDeceleration > 0 → "最大制动G值" + maxDeceleration
+    // - 制动测试 maxDeceleration == 0（V1 / 异常）→ "—"，MUST NOT fallback 到 maxAcceleration（abs 污染）
+    val template = TestTemplate.fromId(record.testTemplateId)
+    data class PeakMetric(val label: String, val value: String, val subtitle: String? = null)
+    val peak = when (template) {
+        is TestTemplate.Braking100To0 -> if (record.maxDeceleration > 0.0) {
+            PeakMetric("最大制动G值", String.format("%.2f G", record.maxDeceleration))
+        } else {
+            // V1 abs 污染数据：brake 测试 maxD=0 但 maxA>0，显式 "—" + 副标 "V1 record"，
+            // MUST NOT fallback 到 maxA（语义错位会把刹车 G 显示为加速 G）。
+            PeakMetric("最大制动G值", "—", subtitle = "V1 record")
+        }
+        else -> PeakMetric("最大加速G值", String.format("%.2f G", record.maxAcceleration))
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("关键指标", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
@@ -145,17 +166,20 @@ private fun KeyMetricsCard(record: TestRecordEntity) {
                 MetricItem("总时间", String.format("%.2f s", record.totalTime))
                 MetricItem("总距离", String.format("%.1f m", record.totalDistance))
                 MetricItem("平均G值", String.format("%.2f G", record.avgAcceleration))
-                MetricItem("最大G值", String.format("%.2f G", record.maxAcceleration))
+                MetricItem(peak.label, peak.value, subtitle = peak.subtitle)
             }
         }
     }
 }
 
 @Composable
-private fun MetricItem(label: String, value: String) {
+private fun MetricItem(label: String, value: String, subtitle: String? = null) {
     Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
         Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        if (!subtitle.isNullOrEmpty()) {
+            Text(subtitle, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

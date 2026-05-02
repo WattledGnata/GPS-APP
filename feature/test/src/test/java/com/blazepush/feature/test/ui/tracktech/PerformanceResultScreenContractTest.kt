@@ -150,6 +150,10 @@ class PerformanceResultScreenContractTest {
             "\"DISTANCE\"",
             "\"TIME\"",
             "\"PEAK G\"",
+            // round smooth-perftest-acceleration-curve §4：PEAK G 按 testTemplateId 二选一渲染
+            "\"PEAK ACCEL G\"",
+            "\"PEAK BRAKE G\"",
+            "\"V1 record\"",
             "\"AVG G\"",
             "\"SPEED CURVE\"",
             "\"G-FORCE\"",

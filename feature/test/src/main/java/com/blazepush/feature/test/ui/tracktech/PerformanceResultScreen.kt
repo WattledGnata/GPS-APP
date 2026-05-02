@@ -102,6 +102,9 @@ fun PerformanceResultScreen(
             if (dataPoints.isEmpty() || template == null) emptyList()
             else calculateSegmentsFromPoints(dataPoints, template)
         }
+        // PEAK G 按 testTemplateId 二选一（acc → maxAcceleration、brake → maxDeceleration），
+        // V1 brake 记录（maxDeceleration == 0）走 "—" 降级；MetricRow 与 GForceChart Y 轴共用此值。
+        val peakG = derivePeakG(record, template)
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -109,10 +112,10 @@ fun PerformanceResultScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { HeroSection(record = record, template = template) }
-            item { MetricRow(record = record, template = template) }
+            item { MetricRow(record = record, template = template, peakG = peakG) }
             if (dataPoints.isNotEmpty()) {
                 item { SpeedCurveCard(dataPoints = dataPoints) }
-                item { GForceCurveCard(dataPoints = dataPoints, maxAcceleration = record.maxAcceleration) }
+                item { GForceCurveCard(dataPoints = dataPoints, maxAcceleration = peakG.gForceChartMaxG) }
             }
             item { SpeedSegmentsHeader() }
             if (segments.isEmpty()) {
@@ -213,6 +216,7 @@ private fun HeroSection(
 private fun MetricRow(
     record: TestRecordEntity,
     template: TestTemplate?,
+    peakG: PeakGTile,
 ) {
     val (firstLabel, firstValue, firstUnit) = deriveFirstMetric(record, template)
     Row(
@@ -229,9 +233,10 @@ private fun MetricRow(
             valueKind = MetricKind.Score,
         )
         MetricTile(
-            label = "PEAK G",
-            value = "%.2f".format(record.maxAcceleration),
-            unit = "G",
+            label = peakG.label,
+            value = peakG.valueText,
+            unit = peakG.unit,
+            status = peakG.subtitle,
             modifier = Modifier.weight(1f),
             accentColor = TrackTechColors.Red,
             valueSize = MetricSize.Medium,
@@ -414,6 +419,60 @@ private fun deriveFirstMetric(
     is TestTemplate.Braking100To0 -> Triple("TIME", "%.2f".format(record.totalTime), "s")
     // Acceleration0To100 + 未知模板都退到 DISTANCE 显示，避免空白
     else -> Triple("DISTANCE", "%.1f".format(record.totalDistance), "m")
+}
+
+/**
+ * 按测试模板二选一渲染 PEAK G tile（round smooth-perftest-acceleration-curve §4）：
+ * - acc_0_100 → PEAK ACCEL G，值 = record.maxAcceleration
+ * - brake_100_0 + maxDeceleration > 0 → PEAK BRAKE G，值 = record.maxDeceleration
+ * - brake_100_0 + maxDeceleration == 0（V1 / 异常数据）→ "—" + 副标 "V1 record"，
+ *   **MUST NOT fallback 到 maxAcceleration**（V1 abs 污染语义错位会把刹车 G 显示为加速 G）
+ *
+ * `gForceChartMaxG` 同时作为 GForceChart Y 轴 maxG 限定值传入，保持 metric tile 数字与曲线 Y 轴一致。
+ *
+ * `internal` 暴露给 `DerivePeakGTest` 单测断言四个分支（spec.md Requirement 4 全部 scenarios）。
+ */
+internal data class PeakGTile(
+    val label: String,
+    val valueText: String,
+    val unit: String?,
+    val gForceChartMaxG: Double,
+    /** V1 record 降级副标，正常分支为 null。spec scenario "100-0 制动存量记录 UI 显式降级 '—'" 锁定。 */
+    val subtitle: String? = null,
+)
+
+internal fun derivePeakG(
+    record: TestRecordEntity,
+    template: TestTemplate?,
+): PeakGTile = when (template) {
+    is TestTemplate.Acceleration0To100 -> PeakGTile(
+        label = "PEAK ACCEL G",
+        valueText = "%.2f".format(record.maxAcceleration),
+        unit = "G",
+        gForceChartMaxG = record.maxAcceleration,
+    )
+    is TestTemplate.Braking100To0 -> if (record.maxDeceleration > 0.0) {
+        PeakGTile(
+            label = "PEAK BRAKE G",
+            valueText = "%.2f".format(record.maxDeceleration),
+            unit = "G",
+            gForceChartMaxG = record.maxDeceleration,
+        )
+    } else {
+        PeakGTile(
+            label = "PEAK BRAKE G",
+            valueText = "—",
+            unit = null,
+            gForceChartMaxG = 0.0,
+            subtitle = "V1 record",
+        )
+    }
+    else -> PeakGTile(
+        label = "PEAK G",
+        valueText = "%.2f".format(record.maxAcceleration),
+        unit = "G",
+        gForceChartMaxG = record.maxAcceleration,
+    )
 }
 
 private fun calculateSegmentsFromPoints(

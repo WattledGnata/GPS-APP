@@ -179,8 +179,15 @@ data class TestResult(
     val timestamp: Long,
     val totalTime: Double,          // 秒
     val totalDistance: Double,      // 米
-    val avgAcceleration: Double,    // G
-    val maxAcceleration: Double,    // G
+    val avgAcceleration: Double,    // G（绝对值平均，恒 ≥ 0；维持 V1 兼容）
+    /** 正向最大加速 G（dv/dt > 0 区间内最大）。0-100 acc 测试有正值；100-0 brake 测试为 0.0。 */
+    val maxAcceleration: Double,
+    /**
+     * 负向最大制动 G 的绝对值（dv/dt < 0 区间内 |min|）。100-0 brake 测试有正值；0-100 acc 测试为 0.0。
+     * round smooth-perftest-acceleration-curve 引入：之前 maxAcceleration 用 Math.abs 把刹车 -1.2G
+     * 也算成 +1.2G，统计混乱；本字段拆分后语义清晰。
+     */
+    val maxDeceleration: Double = 0.0,
     val segments: List<SpeedSegment>,
     val dataPoints: List<GpsDataPoint>,
     val dataFilePath: String        // 原始数据文件路径
