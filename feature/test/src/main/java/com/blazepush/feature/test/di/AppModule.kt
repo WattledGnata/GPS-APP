@@ -49,7 +49,18 @@ val databaseModule = module {
             "race_chrono_database"
         )
             .addMigrations(AppDatabase.migration3To4)
-            .fallbackToDestructiveMigrationFrom(1, 2)
+            // smooth-perftest-acceleration-curve round：test_records 加 maxDeceleration 列触发
+            // schema v4 → v5。debug 阶段不写 strict migration，无参 fallbackToDestructiveMigration()
+            // 兜底所有 missing migration（含 v1/v2/v4 → v5）。strict migration（migration3To4）仍优先生效，
+            // missing migration 才走 destructive 重建表。
+            //
+            // 注意：MUST NOT 用 fallbackToDestructiveMigrationFrom(... 4) —— Room 检测
+            // migration3To4.endVersion=4 与 fallbackFrom 列表 4 冲突，build() 时抛
+            // IllegalArgumentException "Inconsistency detected"（已踩坑 2026-05-03）。
+            //
+            // 影响：装新包时存量 V1 测试记录会被清空（destructive 重建 test_records 表）。
+            // 上线前 follow-up：补回严格 migration（见 backlog §8.9 restore-strict-migrations-pre-release）。
+            .fallbackToDestructiveMigration()
             .build()
     }
 

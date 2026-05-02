@@ -88,4 +88,8 @@ class AppDatabaseMigrationSqlTest {
             AppDatabase.migration3To4.endVersion
         )
     }
+
+    // smooth-perftest-acceleration-curve round 注：v4 → v5 不写 strict migration，
+    // 走 fallbackToDestructiveMigrationFrom(4) destructive fallback（debug 阶段决策）。
+    // 故本套测试不新增 v4→v5 SQL 断言。上线前补回严格 migration 时一并补单测。
 }

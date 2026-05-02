@@ -47,6 +47,7 @@ class TestResultRepository(
             totalDistance = result.totalDistance,
             avgAcceleration = result.avgAcceleration,
             maxAcceleration = result.maxAcceleration,
+            maxDeceleration = result.maxDeceleration,
             dataFilePath = result.dataFilePath,
         )
         testRecordDao.insertTestRecord(entity)

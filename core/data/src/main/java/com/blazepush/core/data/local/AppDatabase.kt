@@ -26,7 +26,7 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
         TelemetrySessionEntity::class,
         CrossingEventEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 /**
