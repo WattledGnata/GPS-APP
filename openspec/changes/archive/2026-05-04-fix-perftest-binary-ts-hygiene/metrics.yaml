@@ -1,0 +1,48 @@
+# fix-perftest-binary-ts-hygiene round metrics
+# Phase 0 数据层闭合最后一个 round
+# 2026-05-03 立项 → 2026-05-04 归档（含 L1 review 3 轮 + L2 单线 1 轮）
+
+estimated_days: 0.5
+actual_days: 0.7
+
+# Review 总轮数（small 复杂度 CLAUDE.md 建议 1-2 轮，实际 L1 跑了 3 轮）
+review_rounds_l1: 3   # v1 / v2 / v3
+review_rounds_l2: 1   # 本期 Opus 子 agent 单线（Codex 3 天不可用）
+
+review_findings_l1:
+  - "P0: FileLogger.w 不存在 → 改 .e（v1，9 处工件 + 错误分支日志全替换）"
+  - "P0: design 决策 1 误述 processFilteredData 自递归 → 改 shouldEnd/finishTest 描述（v1，澄清 Running 分支末尾 if 块）"
+  - "P0: case G mock-based 测试不可执行 → 改 grep gate 形态对齐（v1，processFilteredData private + activeSessionStartTs final var private set + FileLogger object 单例 → 不可 mock）"
+  - "P0: 形态 C 数字 == 2 错（A round line 845 已 1 处） → 收紧 grep pattern 到本 round scope（v2，加 (processFilteredData|startTest preTrigger backfill) 函数前缀 anchor）"
+  - "P0: case H regex 假设直接赋值实际两步赋值 → 改两段 grep（v2，第一段 val anchorTs = ... + 第二段 activeTestStartTs = anchorTs ≤ 3 行内）"
+  - "P1: spec Scenario 2 反例 assert == 100 → 改 == 0（v1，反例语义清晰化）"
+  - "P1: spec Scenario 5 第 3 个 grep pattern trivially pass（baseline 0 命中）→ 删除（v1）"
+  - "P1: spec Scenario 6 grep root 解析未明 + 文件数下界未锁死 → 加 helper 描述 + ≥30（v1）"
+  - "P1: deferred memo 与工件不同步（旧函数名 bridgeGpsToTelemetry）→ 全文替换为 processFilteredData + 加 2026-05-04 校对注（v1）"
+  - "P1: case D Thread.sleep / 合成时戳二选一悬空 → BinaryTelemetryWriter 直写 deterministic（v2）"
+  - "P1: case G 30 行内实现 hint 缺失 → 加 Regex.findAll + 行号距离断言 hint（v2）"
+  - "P1: shouldEnd 漏判 dead spec 残留（fallback 分支无单测覆盖）→ 加 P4 grep gate 锁死 shouldEnd 行号 > P3 + 1（v3，防 bare return regression）"
+  - "P2: 多项细节改进（决策 4 真机 caveat / 真机 §7 caveat / case E 命中数 ≥ 2 → == 3 精确锁定 / case F apply 期 verify hint / TelemetryRepository.startSession 内 currentTimeMillis 同源 verify）"
+
+review_findings_l2:
+  - "P2: 看板 §7 Phase 0 节状态描述滞后（line 187 仍写'待 L1 review + apply'，归档 commit 同步为已归档）"
+  - "P2: proposal.md line 21 仍写 4 case，commit 实际 8 case（design/spec/tasks 已对齐，归档前修订）"
+  - "P2: 工件 .md 未进 76a2735（受 .git/info/exclude *.md 排除规则；归档 commit body 引用 76a2735 + 列工件路径方便 Codex 跨 commit 拼接 review 视图）"
+  - "P0/P1: 0 项 — commit 与工件全对齐（§A 11/11 项验证到位）；单测主区合回态 8/8 全绿（强制重跑）+ grep gates 全过；fresh eyes 无新设计层 / 实施层缺陷"
+
+divergence_reason: |
+  L1 期工件初稿引用 deferred memo 旧函数名 + FileLogger API 误用 + grep pattern
+  形态对齐 A round 历史命中数干扰复合，导致 review 多跑 1 轮（small 复杂度建议
+  1-2 轮，实际 3 轮）。L2 单线 Opus 无 Codex 二线交叉——归档已放行但 Codex 3
+  天后恢复时仍由 user 触发独立 review 兜底；若发现 P0/P1 局部 1-3 行修复直接
+  patch / 设计级问题建新 round 走完整流程。
+
+phase: "Phase 0"
+model_apply: "opus"   # 主会话直跑（small 复杂度无需 sonnet 子 agent 实施）
+
+# 后续 Phase 0 Exit Review 任务（本 round 归档后立即触发）
+phase_exit_followup:
+  - "盘点 7 个 Phase 0 期间产生的 deferred memo disposition：laptime-ts-hygiene（A 起源）/ lap-crossing-clock-hygiene（A v2 收紧产物，已闭环）/ perftest-binary-ts-hygiene（本 round 起源，已闭环）/ laptime-gps-filter-integration（B round）/ speed-curve-real-data-persistence（F round）/ perftest-cascade-orphan-cleanup（J round）/ records-by-track-filter（UI/查询 layer）"
+  - "生成 chore(phase): Phase 0 exit review commit"
+  - "看板 §7 Phase 0 节追加 exit commit 引用 + 状态改 done"
+  - "project memory 加 'Phase 0 已闭合（2026-05-04 onwards）'，下个 phase 立项时引用"
