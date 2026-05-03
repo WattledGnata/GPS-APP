@@ -888,11 +888,17 @@ class TestSessionViewModel(
                 val toWrite = newCrossings.subList(prevCount, newCrossings.size)
                 lastWrittenCrossingCount = newCrossings.size
                 toWrite.forEach { crossing ->
+                    // fix-lap-crossing-clock-hygiene round：过线事件触发的同一 ViewModel 协程上下文内
+                    // 立即取 currentTimeMillis 作为 wallClock，与 binary samples absoluteTs 同时钟域，
+                    // 供未来 per-lap segment readLapSamples 窗口截取使用。
+                    // **MUST 在此处构造表达式内同步取值**，不得通过 viewModelScope.launch / withContext
+                    // / delay 等异步路径间接计算（避免引入 binary writer queue 延迟到 wallClock 上）。
                     telemetryRepository.writeCrossing(
                         TelemetryCrossingEvent(
                             sessionId = lapSessionId,
                             lapIndex = lapIndexAtCrossing,
                             crossingTimestampMs = crossing.timestampMillis,
+                            crossingWallClockTimestampMs = System.currentTimeMillis(),
                             speedKmh = crossing.directionalSpeedMps?.let { it * 3.6 } ?: 0.0,
                             gateId = crossing.gateId,
                             gateType = crossing.gateType.name,

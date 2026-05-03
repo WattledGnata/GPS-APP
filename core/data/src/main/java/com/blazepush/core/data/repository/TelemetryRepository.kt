@@ -110,6 +110,7 @@ class TelemetryRepository(
             accepted = event.accepted,
             reason = event.reason,
             directionScore = event.directionScore,
+            crossingWallClockTimestampMs = event.crossingWallClockTimestampMs,
         )
         crossingDao.insertInTransaction(entity)
     }
@@ -277,6 +278,7 @@ class TelemetryRepository(
         sessionId = sessionId,
         lapIndex = lapIndex,
         crossingTimestampMs = crossingTimestampMs,
+        crossingWallClockTimestampMs = crossingWallClockTimestampMs,
         speedKmh = speedKmh,
         gateId = gateId,
         gateType = gateType,

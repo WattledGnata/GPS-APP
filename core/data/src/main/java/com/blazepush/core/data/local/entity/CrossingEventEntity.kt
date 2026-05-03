@@ -34,4 +34,9 @@ data class CrossingEventEntity(
     val accepted: Boolean,
     val reason: String,
     val directionScore: Double?,
+    // fix-lap-crossing-clock-hygiene round 加 v4→v5：接收侧真壁钟（与 binary samples
+    // absoluteTs 同源）。nullable —— 旧 row（v4→v5 migration 之前）该字段为 NULL，
+    // 调用方 MUST 显式判 null fallback 到全 session 路径（v3 review v3 §P1#1：避免 0 哨兵
+    // 让未来 UI 用旧数据时误命中全 session 帧）。
+    val crossingWallClockTimestampMs: Long? = null,
 )

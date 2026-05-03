@@ -61,6 +61,11 @@ data class TelemetryCrossingEvent(
     val sessionId: String,
     val lapIndex: Int,
     val crossingTimestampMs: Long,
+    // fix-lap-crossing-clock-hygiene round 加：接收侧真壁钟（与 binary samples absoluteTs 同源），
+    // 供未来 per-lap segment readLapSamples 窗口截取使用。nullable —— 旧数据 row（v4→v5
+    // migration 之前写入）该字段为 NULL，调用方 MUST 显式判 null fallback 到全 session 路径。
+    // 与现有 crossingTimestampMs（GPS 协议时间）双时钟域共存，UI 显示仍用 protocol time。
+    val crossingWallClockTimestampMs: Long? = null,
     val speedKmh: Double,
     val gateId: String,
     val gateType: String,
