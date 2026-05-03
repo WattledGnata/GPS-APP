@@ -636,16 +636,21 @@ class TestSessionViewModel(
                 // 会溢出污染 0-100 用时等结果计算。Preparing / Running 两分支必须对称守卫。
                 if (!filteredData.raw.isTimeSynced) return
                 state.session.addFilteredDataPoint(filteredData)
-                val anchorTs = activeTestStartTs
-                if (anchorTs != null) {
+                val sessionStartTs = telemetryRepository.activeSessionStartTs
+                if (sessionStartTs != null) {
                     telemetryRepository.writeSample(
                         TelemetrySample(
-                            tsDeltaMs = filteredData.timestamp - anchorTs,
+                            tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
                             lat = filteredData.latitude,
                             lon = filteredData.longitude,
                             speedKmh = filteredData.speed,
                             bearingDeg = filteredData.bearing,
                         )
+                    )
+                } else {
+                    FileLogger.e(
+                        TAG,
+                        "processFilteredData: missing activeSessionStartTs, skip telemetry write but test pipeline continues"
                     )
                 }
                 if (state.session.template.shouldEnd(filteredData.raw)) {
@@ -722,15 +727,23 @@ class TestSessionViewModel(
         activeTestStartTs = anchorTs
         val sessionId = telemetryRepository.startSession(TelemetrySessionType.PERFORMANCE_TEST)
         activeTestSessionId = sessionId
-        for (frame in lockedPreTriggerBuffer) {
-            telemetryRepository.writeSample(
-                TelemetrySample(
-                    tsDeltaMs = frame.timestamp - anchorTs,
-                    lat = frame.latitude,
-                    lon = frame.longitude,
-                    speedKmh = frame.speed,
-                    bearingDeg = frame.bearing,
+        val sessionStartTs = telemetryRepository.activeSessionStartTs
+        if (sessionStartTs != null) {
+            for (frame in lockedPreTriggerBuffer) {
+                telemetryRepository.writeSample(
+                    TelemetrySample(
+                        tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
+                        lat = frame.latitude,
+                        lon = frame.longitude,
+                        speedKmh = frame.speed,
+                        bearingDeg = frame.bearing,
+                    )
                 )
+            }
+        } else {
+            FileLogger.e(
+                TAG,
+                "startTest preTrigger backfill: missing activeSessionStartTs after startSession, skip telemetry write"
             )
         }
 
