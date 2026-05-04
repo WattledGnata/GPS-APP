@@ -1,0 +1,33 @@
+round_id: wire-laptime-to-gps-filter
+phase: "Phase 1"
+description: "B round - wire bridgeGpsToLapTiming through GpsDataFilter (speed/bearing only) + LAP_INVALIDATED_DEBOUNCE_MIN_COUNT 3→1"
+
+estimated_days: 0.5  # design 评估"半天 small"
+actual_days: null  # TODO(user): 实际投入工时（mimo 执行，CC 主会话未跟踪时长）
+
+review_rounds_l1: null  # TODO(user): 工件期 L1 adversarial review 轮数
+review_rounds_l2: null  # TODO(user): 实施期 L2 adversarial review 轮数（按 small round 模板默认 1，user 跳过则 0）
+
+review_findings_l1: []  # TODO(user): 若有 P0/P1/P2 findings 在此追加
+review_findings_l2: []  # TODO(user): 若有 P0/P1/P2 findings 在此追加
+
+divergence_reason: null  # 未发现明显发散；scope 与 design 预估一致
+
+model_apply: "mimo-v2.5-pro"  # TODO(user): 复查；按 Phase 1 W1-W4 mimo 执行约定推断
+
+commit_merge: "e2f4417"
+branch: "feature/wire-laptime-to-gps-filter"
+merge_strategy: "ff-only"  # e2f4417 直接落于 feature/track-tech-v2，非 merge commit
+
+files_changed:
+  - "feature/test/.../usecase/LapLiveStateDeriver.kt (+5/-2: 阈值常量 + 注释)"
+  - "feature/test/.../viewmodel/TestSessionViewModel.kt (+11/-2: cleaned 副本注入 collect block)"
+  - "feature/test/src/test/.../usecase/LapFilterIntegrationTest.kt (new, 414 行, 5 cases)"
+  - "feature/test/src/test/.../usecase/LapLiveStateDeriverTest.kt (+25/-24: 调整去抖 expected 值)"
+
+test_results: "5/5 passed (LapFilterIntegrationTest) + 既有 LapLiveStateDeriverTest 全绿"  # commit 落地推断；user 可补具体耗时
+
+archive_note: |
+  归档断点说明：原 /opsx:archive 流程在 cp 工件到 archive 后中断（未生成 metrics.yaml、未提交、未删 changes 原目录），
+  本次为补归档：tasks.md 勾选回填 + metrics.yaml 补 + changes 原目录清理 + 一次性归档 commit。
+  follow-up：等待 user 拍板 Codex L2 review + push 顺序 + worktree 清理。
