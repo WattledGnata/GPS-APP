@@ -55,9 +55,10 @@ object LapLiveStateDeriver {
     // 设计依据：baseline detector 只在 prev→cur 线段与 gate 线段相交瞬间才产生 invalidating event，
     // 单帧 GPS jitter 撞 gate 最多产生 1 个；真反向冲线持续多帧通过 gate 会产生 ≥ 3 个。
     // 此去抖让单帧 jitter 不触发 banner，但保留真反向冲线的反馈语义。
-    // GPS 数据接入 GpsDataFilter 是独立 follow-up round，与本去抖正交（filter 接通后阈值可降至 1）。
+    // wire-laptime-to-gps-filter round 闭环后 filter 接通，jitter 已从数据流根因消除，
+    // 阈值降至 1，单次真 invalidating event 即触发 banner 恢复实时反馈语义。
     private const val LAP_INVALIDATED_DEBOUNCE_WINDOW_MS = 1_000L
-    private const val LAP_INVALIDATED_DEBOUNCE_MIN_COUNT = 3
+    private const val LAP_INVALIDATED_DEBOUNCE_MIN_COUNT = 1
 
     private val invalidatingReasons = setOf(
         CrossingReason.WrongDirection,

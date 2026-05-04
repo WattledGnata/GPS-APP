@@ -344,7 +344,16 @@ class TestSessionViewModel(
                 updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
 
-                bridgeGpsToLapTiming(gpsData)
+                // round wire-laptime-to-gps-filter：圈速通道接通 GpsDataFilter，
+                // 仅替换 speed/bearing 两个字段：filter 的 bearing median 消除单帧 jitter
+                // 导致的 WrongDirection 误判；lat/lon 保持 raw 不滤，因为 filter 的
+                // isPositionAnomaly 判定会把 gate 过线时的位置跳变误标为异常，导致
+                // crossing detector 看不到 gate 两侧的真实 GPS 点。
+                val cleaned = gpsData.copy(
+                    speed = filteredData.speed,
+                    bearing = filteredData.bearing,
+                )
+                bridgeGpsToLapTiming(cleaned)
 
                 // round add-realtime-lap-delta：每帧 GPS data 调一次 projectDelta，atomic update RealtimeDeltaState
                 updateRealtimeDelta(gpsData)

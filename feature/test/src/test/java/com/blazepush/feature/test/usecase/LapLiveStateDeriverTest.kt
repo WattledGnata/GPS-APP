@@ -198,7 +198,7 @@ class LapLiveStateDeriverTest {
     }
 
     @Test
-    fun `invalid lap rejected crossing is skipped from best computation but does not trigger banner alone`() {
+    fun `single invalidating crossing triggers banner and is skipped from best computation`() {
         val session = sessionWith(
             crossings = listOf(
                 crossing(timestampMs = 1_000L, accepted = true),
@@ -224,11 +224,13 @@ class LapLiveStateDeriverTest {
 
         assertEquals(1_200L, state.bestLapTimeMs)
         assertEquals(1_200L, state.lastLapTimeMs)
-        assertNull(state.abnormalState)  // 单帧 jitter 不触发 banner（去抖门）
+        assertEquals(AbnormalState.LAP_INVALIDATED, state.abnormalState)
+        // filter 接通后阈值降至 1，单次真 invalidating event 即触发 banner（恢复实时反馈语义）；
+        // 同时 reject crossing 不污染 best 派生
     }
 
     @Test
-    fun `three consecutive invalidating crossings trigger LAP_INVALIDATED banner`() {
+    fun `multiple invalidating crossings within window trigger LAP_INVALIDATED banner`() {
         val session = sessionWith(
             crossings = listOf(
                 crossing(timestampMs = 1_000L, accepted = true),
@@ -265,40 +267,10 @@ class LapLiveStateDeriverTest {
     }
 
     @Test
-    fun `two invalidating crossings within window do not trigger banner (debounce)`() {
-        val session = sessionWith(
-            crossings = listOf(
-                crossing(timestampMs = 1_000L, accepted = true),
-                crossing(
-                    timestampMs = 2_500L,
-                    accepted = false,
-                    reason = CrossingReason.WrongDirection,
-                ),
-                crossing(
-                    timestampMs = 2_540L,
-                    accepted = false,
-                    reason = CrossingReason.WrongDirection,
-                ),
-            ),
-            currentLapIndex = 1,
-        )
-
-        val state = LapLiveStateDeriver.derive(
-            session = session,
-            currentDisplayTimeMs = 2_600L,
-            gpsData = goodGpsData(),
-            connectionState = ConnectionState.CONNECTED,
-            dataQuality = goodDataQuality(),
-            deltaToBestMs = null,
-            deltaIsStale = false,
-        )
-
-        assertNull(state.abnormalState)
-    }
-
-    @Test
-    fun `three invalidating crossings spread beyond window do not trigger banner`() {
-        // 3 个 event 但跨度 1500ms，超出 1000ms 去抖窗口 → 不触发
+    fun `invalidating crossings beyond display window do not trigger banner`() {
+        // currentDisplayTimeMs=8000, latest=2500，距 latest 5500ms ≥ 5000ms 显示窗口
+        // → 走显示窗口 reject 路径不触发；阈值=1 下去抖窗口 trivially 通过（latest 自己 count=1 ≥ 1），
+        // 唯一合法 assertNull 路径是显示窗口外
         val session = sessionWith(
             crossings = listOf(
                 crossing(
@@ -322,7 +294,7 @@ class LapLiveStateDeriverTest {
 
         val state = LapLiveStateDeriver.derive(
             session = session,
-            currentDisplayTimeMs = 2_600L,
+            currentDisplayTimeMs = 8_000L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
             dataQuality = goodDataQuality(),
@@ -330,7 +302,6 @@ class LapLiveStateDeriverTest {
             deltaIsStale = false,
         )
 
-        // latest at t=2500，window [1500, 2500] 内只有 t=1800 + t=2500 = 2 个，不足 3 → 不触发
         assertNull(state.abnormalState)
     }
 
