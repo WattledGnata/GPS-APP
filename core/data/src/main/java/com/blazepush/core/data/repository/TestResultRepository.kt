@@ -11,10 +11,14 @@ import com.blazepush.core.data.local.entity.SpeedSegmentEntity
 import com.blazepush.core.data.local.entity.TestRecordEntity
 import com.blazepush.core.domain.model.SpeedSegment
 import com.blazepush.core.domain.model.TestResult
+import com.blazepush.core.domain.model.LapTelemetrySample
+import com.blazepush.core.domain.model.PerformanceTelemetry
 import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.core.domain.model.TestTemplate
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 /**
  * 加减速测试记录持久化（A56 后已不再用 JSON dataFilePath，改走 binary file path）。
@@ -26,6 +30,7 @@ import kotlinx.coroutines.flow.map
 class TestResultRepository(
     private val testRecordDao: TestRecordDao,
     private val speedSegmentDao: SpeedSegmentDao,
+    private val telemetryRepository: TelemetryRepository,
 ) {
     val testResultsFlow: Flow<List<TestRecordEntity>> =
         testRecordDao.getAllTestRecordsFlow()
@@ -125,5 +130,43 @@ class TestResultRepository(
     suspend fun deleteResultById(id: String) {
         val entity = testRecordDao.getTestRecordById(id) ?: return
         deleteResult(entity)
+    }
+
+    /**
+     * PERFORMANCE_TEST 完整 dataPoints 切片读取。
+     * testId 不存在 → null；dataFilePath="" → null；binary 缺失/异常 → null（不抛异常）。
+     *
+     * @author CC
+     * @description performance test complete data-points reader
+     * @date 2026-05-04
+     */
+    suspend fun getDataPointsForResult(testId: String): PerformanceTelemetry? {
+        val entity = testRecordDao.getTestRecordById(testId) ?: return null
+        if (entity.dataFilePath.isEmpty()) return null
+        val rawSamples = withContext(Dispatchers.IO) {
+            runCatching { telemetryRepository.readPerformanceSamples(entity.dataFilePath) }
+                .getOrDefault(emptyList())
+        }
+        if (rawSamples.isEmpty()) return null
+        val testStartWallClock = entity.timestamp
+        val testEndWallClock = entity.timestamp + (rawSamples.lastOrNull()?.tsDeltaMs ?: 0L)
+        val samples = rawSamples.map { sample ->
+            LapTelemetrySample(
+                absoluteTsMs = testStartWallClock + sample.tsDeltaMs,
+                elapsedMsInLap = sample.tsDeltaMs,
+                lat = sample.lat,
+                lon = sample.lon,
+                speedKmh = sample.speedKmh,
+                bearingDeg = sample.bearingDeg,
+                accelerationG = null,
+                flags = sample.flags,
+            )
+        }
+        return PerformanceTelemetry(
+            testId = testId,
+            testStartWallClock = testStartWallClock,
+            testEndWallClock = testEndWallClock,
+            samples = samples,
+        )
     }
 }

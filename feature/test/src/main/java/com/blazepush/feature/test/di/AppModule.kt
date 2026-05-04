@@ -86,7 +86,7 @@ val bluetoothModule = module {
  */
 val repositoryModule = module {
     single { GpsDataRepository(get()) }
-    single { TestResultRepository(get(), get()) }
+    single { TestResultRepository(get(), get(), get()) }
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
     single { TelemetryRepository(androidContext(), get(), get()) }

@@ -12,6 +12,8 @@ import com.blazepush.core.data.local.dao.CrossingEventDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
 import com.blazepush.core.data.local.entity.CrossingEventEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
+import com.blazepush.core.domain.model.LapTelemetry
+import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
@@ -257,6 +259,54 @@ class TelemetryRepository(
      */
     fun readLapSamples(filePath: String, lapStartTs: Long, lapEndTs: Long): List<TelemetrySample> =
         LapTelemetryReader.read(filePath, lapStartTs, lapEndTs)
+
+    /**
+     * 单圈完整 telemetry 切片读取。
+     * crossing wallClock=null → null（MUST NOT fallback 到 crossingTimestampMs）；
+     * lapIndex 越界 → null；binary 缺失/空 → null（不抛异常）。
+     *
+     * @author CC
+     * @description single-lap complete telemetry slice reader
+     * @date 2026-05-04
+     */
+    suspend fun getLapTelemetry(sessionId: String, lapIndex: Int): LapTelemetry? {
+        val entity = sessionDao.queryBySessionId(sessionId) ?: return null
+        val crossings = crossingDao.queryBySessionId(sessionId)
+        val acceptedSF = crossings
+            .filter { it.gateType.equals("StartFinish", ignoreCase = true) && it.accepted }
+            .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
+        if (lapIndex < 0 || lapIndex + 1 >= acceptedSF.size) return null
+        val lapStartWallClock = acceptedSF[lapIndex].crossingWallClockTimestampMs ?: return null
+        val lapEndWallClock = acceptedSF[lapIndex + 1].crossingWallClockTimestampMs ?: return null
+        val rawSamples = withContext(Dispatchers.IO) {
+            runCatching { LapTelemetryReader.read(entity.binaryFilePath, lapStartWallClock, lapEndWallClock) }
+                .getOrDefault(emptyList())
+        }
+        if (rawSamples.isEmpty()) return null
+        val samples = rawSamples.map { sample ->
+            LapTelemetrySample(
+                absoluteTsMs = entity.startTs + sample.tsDeltaMs,
+                elapsedMsInLap = entity.startTs + sample.tsDeltaMs - lapStartWallClock,
+                lat = sample.lat,
+                lon = sample.lon,
+                speedKmh = sample.speedKmh,
+                bearingDeg = sample.bearingDeg,
+                accelerationG = null,
+                flags = sample.flags,
+            )
+        }
+        return LapTelemetry(
+            sessionId = sessionId,
+            lapIndex = lapIndex,
+            lapStartWallClock = lapStartWallClock,
+            lapEndWallClock = lapEndWallClock,
+            lapDurationMs = lapEndWallClock - lapStartWallClock,
+            samples = samples,
+            sectorBoundaries = listOf(lapStartWallClock),
+            trackId = entity.trackId,
+            trackNameSnapshot = entity.trackNameSnapshot,
+        )
+    }
 
     private fun telemetryFile(sessionId: String): File =
         File(context.filesDir, "telemetry/$sessionId.bin")
