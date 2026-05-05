@@ -1,0 +1,19 @@
+estimated_days: 0.3
+actual_days: 0.2
+review_rounds_l1: 5
+review_rounds_l2: 0
+review_findings_l1:
+  - "P0: D6 ff-only merge 自相矛盾 → rebase conflict 流程重写"
+  - "P0: accelerationG 字段定位模糊 → D6 inline + OQ1"
+  - "P0: .empty() vs .EMPTY 不一致 → 统一"
+  - "P0: fallback absoluteTsMs 跨时钟域污染 → 重派生"
+  - "P0: helper 多余 guard → 简化"
+  - "P1: case E 数值矩阵不一致 → 统一 100 帧"
+  - "P1: D2 accelerationG (b1)/(b2) 漏更新"
+  - "P1: case F2 硬编码 → 派生表达式"
+  - "P1: 5→6 cases 同步漏网"
+  - "P1: spec testcase 计数 + proposal API surface 旧类型"
+review_findings_l2: []
+divergence_reason: "5 轮 L1 review 比预期多 2 轮（高频盲点：跨文件计数同步 + 签名格式）"
+phase: "Phase 1"
+model_apply: "opus"
