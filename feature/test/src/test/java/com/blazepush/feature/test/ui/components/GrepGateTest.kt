@@ -81,6 +81,31 @@ class GrepGateTest {
     }
 
     // §8.4: All bare Text( calls must have maxLines + Ellipsis (only new 4 components)
+    // L1 R1 P0/C2 修订：从 300 字符 contextWindow 滑窗（跨多 Text 块 trivially-pass 风险，v3 #7+#8 翻版）
+    // 改为 per-Text 块 paren balance 栈式匹配 — 锁定 Text( 起始 → 闭合 ) 区间内含 maxLines + Ellipsis。
+    // Caveat: paren balance 不处理 string literal / comment 内的 () — 当前 4 组件源文件无此情况
+    // （apply 期 grep 验证 4 文件无 Text 嵌套调用）。未来若引入嵌套 Text → 触发新 round 升级算法。
+    private fun findTextCallBlocks(content: String): List<IntRange> {
+        val textCalls = Regex("""(?<!\w)Text\s*\(""").findAll(content).toList()
+        val blocks = mutableListOf<IntRange>()
+        for (match in textCalls) {
+            val start = match.range.first
+            val openParenIdx = match.range.last  // '(' index
+            var parenDepth = 1
+            var idx = openParenIdx + 1
+            while (idx < content.length && parenDepth > 0) {
+                when (content[idx]) {
+                    '(' -> parenDepth++
+                    ')' -> parenDepth--
+                }
+                if (parenDepth == 0) break
+                idx++
+            }
+            if (parenDepth == 0) blocks.add(start..idx)
+        }
+        return blocks
+    }
+
     @Test
     fun `grep gate - all bare Text calls have maxLines and Ellipsis`() {
         val targetFiles = listOf("SpeedTimeChart.kt", "AccelTimeChart.kt", "SectorBar.kt", "TrackPolylineMap.kt")
@@ -88,17 +113,16 @@ class GrepGateTest {
             val file = findFile("feature/test/src/main/java/com/blazepush/feature/test/ui/components/$fileName")
             if (!file.exists()) return@forEach
             val content = file.readText()
-            val textCalls = Regex("""(?<!\w)Text\s*\(""").findAll(content).toList()
-            textCalls.forEach { match ->
-                val start = match.range.first
-                val contextWindow = content.substring(start, minOf(start + 300, content.length))
+            val blocks = findTextCallBlocks(content)
+            blocks.forEach { range ->
+                val textBlock = content.substring(range.first, range.last + 1)
                 assertTrue(
-                    "$fileName: bare Text( at offset $start must have maxLines",
-                    contextWindow.contains("maxLines")
+                    "$fileName: bare Text( at offset ${range.first} must have maxLines (per-Text paren-balanced block)",
+                    textBlock.contains("maxLines")
                 )
                 assertTrue(
-                    "$fileName: bare Text( at offset $start must have TextOverflow.Ellipsis",
-                    contextWindow.contains("TextOverflow.Ellipsis")
+                    "$fileName: bare Text( at offset ${range.first} must have TextOverflow.Ellipsis (per-Text paren-balanced block)",
+                    textBlock.contains("TextOverflow.Ellipsis")
                 )
             }
         }
@@ -143,6 +167,7 @@ class GrepGateTest {
             "val speedKmh: Double",
             "val bearingDeg: Double?",
             "val accelerationG: Double?",
+            "val flags: Int",  // L1 R1 P0/B1 修订 — W1 commit 3c2f2d9 追加 flags 字段；命中 1 次锁
         )
         fields.forEach { field ->
             val count = Regex(Regex.escape(field)).findAll(content).count()

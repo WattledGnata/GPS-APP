@@ -6,6 +6,11 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
+/**
+ * test-only LapTelemetry container. W1 round 合回后 follow-up round
+ * `wire-mock-telemetry-to-w1-real-classes` 切换到正式 LapTelemetry 类型。
+ * 当前在 `feature/test/src/test/` source set，生产 APK 不包含此类型。
+ */
 internal data class FakeLapTelemetry(
     val samples: List<LapTelemetrySample>,
     val sectorBoundaries: List<Long>,
@@ -21,11 +26,12 @@ private const val RADIUS = 0.005
 internal fun mockSingleLap(n: Int = 100, lapDurationMs: Long = 60_000): FakeLapTelemetry {
     val lapStart = BASE_WALL_CLOCK
     val lapEnd = lapStart + lapDurationMs
-    val intervalMs = if (n > 1) lapDurationMs / (n - 1).toLong() else lapDurationMs
 
     val samples = (0 until n).map { i ->
         val t = i.toDouble() / (n - 1).coerceAtLeast(1)
-        val elapsedMs = i * intervalMs
+        // L1 R1 P0-2 修订：spec 公式锁 sample[n-1].elapsedMsInLap == lapDurationMs 严格等于
+        // 整除写法 (lapDurationMs / (n-1)) * i 在 60_000 / 99 = 606 时 sample[99] = 59_994 ≠ 60_000 off-by-one
+        val elapsedMs = (i.toLong() * lapDurationMs) / (n - 1).coerceAtLeast(1).toLong()
         val speedKmh = 100.0 + 50.0 * sin(2.0 * PI * t)
         val lat = CENTER_LAT + RADIUS * sin(2.0 * PI * t)
         val lon = CENTER_LON + RADIUS * cos(2.0 * PI * t)
@@ -33,7 +39,7 @@ internal fun mockSingleLap(n: Int = 100, lapDurationMs: Long = 60_000): FakeLapT
         val accelerationG = if (i == 0 || i == n - 1) null else {
             val prevSpeed = 100.0 + 50.0 * sin(2.0 * PI * (i - 1.0) / (n - 1).coerceAtLeast(1))
             val nextSpeed = 100.0 + 50.0 * sin(2.0 * PI * (i + 1.0) / (n - 1).coerceAtLeast(1))
-            val dtSec = (intervalMs * 2) / 1000.0
+            val dtSec = 2.0 * lapDurationMs.toDouble() / ((n - 1).coerceAtLeast(1).toDouble() * 1000.0)
             val accelMs2 = (nextSpeed / 3.6 - prevSpeed / 3.6) / dtSec
             accelMs2 / 9.81
         }

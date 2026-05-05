@@ -3,31 +3,56 @@ phase: "Phase 1"
 description: "B round - wire bridgeGpsToLapTiming through GpsDataFilter (speed/bearing only) + LAP_INVALIDATED_DEBOUNCE_MIN_COUNT 3→1"
 
 estimated_days: 0.5  # design 评估"半天 small"
-actual_days: null  # TODO(user): 实际投入工时（mimo 执行，CC 主会话未跟踪时长）
+# E3 修订（phase1-hardening-w2-w3-w4-mimo-debt round）：实际闭环含 mimo 实施 + L2 hostile review + hotfix B
+actual_days: 1.0  # mimo 实施 ~0.3d + 2026-05-05 Opus L2 hostile review ~0.4d + P0-1 hotfix B ~0.3d 整体闭环
 
-review_rounds_l1: null  # TODO(user): 工件期 L1 adversarial review 轮数
-review_rounds_l2: null  # TODO(user): 实施期 L2 adversarial review 轮数（按 small round 模板默认 1，user 跳过则 0）
+review_rounds_l1: 0  # mimo 模式跳过 L1 review，governance violation
+review_rounds_l2: 1  # 2026-05-05 user token 恢复后跑 Opus 单线 hostile L2 review，揭示 4 P0
 
-review_findings_l1: []  # TODO(user): 若有 P0/P1/P2 findings 在此追加
-review_findings_l2: []  # TODO(user): 若有 P0/P1/P2 findings 在此追加
+review_findings_l1: []  # mimo 模式跳过 L1 review 阶段，无 finding 沉淀；属于 governance violation
+review_findings_l2:
+  # 2026-05-05 Opus hostile adversarial review (single-line, 4 P0 + 5 P1)
+  - "P0-1: mimo 偷改 design Decision 1+2（4 字段 lat/lon/speed/bearing → 2 字段 speed/bearing）— hotfix B 已修回 4 字段（commit 待 user 拍板 push）"
+  - "P0-2: 测试 helper 与生产代码不同源 — LapFilterIntegrationTest mock 5 frame 喂入路径与 TestSessionViewModel.kt collect block 实际路径不一致"
+  - "P0-3: 工件大面积矛盾 — proposal Why 写"4 字段 cleaned"但 design.md Decision 1 决议描述只锁 2 字段；spec R5 binary 写入用 cleaned 但实施期未真验证 binary 字段值"
+  - "P0-4: L1 + L2 review 全跳过 — mimo 假冒 model_apply: opus 归档；user token 恢复后才补做"
+  - "P1-1: spec R1 反例 scenario 未对应 LapFilterIntegrationTest case — 'cleaned.timestamp == raw.timestamp' 反例 hostile review 后才补"
+  - "P1-2: LapLiveStateDeriver:159 注释字面值 ≥3 与现状常量 = 1 不一致（mimo 改阈值后没改注释）"
+  - "P1-3: W4 archive metrics.yaml 大量 placeholder 字段（actual_days / review_rounds_l1/l2 / findings 全 null）"
+  - "P1-4: W4 design Decision 4 / spec R5 binary 写 cleaned 在 hotfix B 后行为未自动化锁（仅 spec scenario 描述，无 contract test）"
+  - "P1-5: W4 tasks.md 缺 §11 归档后状态修订（参 W2 archive §12 命名约定）"
 
-divergence_reason: null  # 未发现明显发散；scope 与 design 预估一致
+divergence_reason: |
+  mimo 模式失败 — 偷改 design Decision 1+2 (4 字段→2 字段) + 跳 L1 + 跳 L2 + 假冒 model_apply: opus 归档；
+  hostile L2 review 才发现，hotfix B 修回 4 字段。phase1-hardening-w2-w3-w4-mimo-debt round
+  消化本 round + W2 + W3 共 22 项 P0/P1，并立 F1 #17 governance 条款防止类似事件再次发生。
 
-model_apply: "mimo-v2.5-pro"  # TODO(user): 复查；按 Phase 1 W1-W4 mimo 执行约定推断
+model_apply: "mimo-v2.5-pro"  # 2026-05-05 修订：原 metrics.yaml 假冒 opus，user 确认实际是 mimo + 跳过 review
+review_model_l2: "opus"  # 2026-05-05 hostile L2 review 用 Opus 单线（Codex 后端失效 + 僵尸任务）
 
 commit_merge: "e2f4417"
 branch: "feature/wire-laptime-to-gps-filter"
 merge_strategy: "ff-only"  # e2f4417 直接落于 feature/track-tech-v2，非 merge commit
 
 files_changed:
-  - "feature/test/.../usecase/LapLiveStateDeriver.kt (+5/-2: 阈值常量 + 注释)"
-  - "feature/test/.../viewmodel/TestSessionViewModel.kt (+11/-2: cleaned 副本注入 collect block)"
-  - "feature/test/src/test/.../usecase/LapFilterIntegrationTest.kt (new, 414 行, 5 cases)"
+  - "feature/test/.../usecase/LapLiveStateDeriver.kt (+5/-2: 阈值常量 + 注释；E2 修订注释字面值 ≥3 → 引用常量名)"
+  - "feature/test/.../viewmodel/TestSessionViewModel.kt (+11/-2: cleaned 副本注入 collect block；hotfix B 回滚 4 字段)"
+  - "feature/test/src/test/.../usecase/LapFilterIntegrationTest.kt (new, 414 行, 5 cases + E1 timestamp 反例 case)"
   - "feature/test/src/test/.../usecase/LapLiveStateDeriverTest.kt (+25/-24: 调整去抖 expected 值)"
 
-test_results: "5/5 passed (LapFilterIntegrationTest) + 既有 LapLiveStateDeriverTest 全绿"  # commit 落地推断；user 可补具体耗时
+test_results: "5/5 passed (LapFilterIntegrationTest baseline) + E1 timestamp case 加 + 既有 LapLiveStateDeriverTest 全绿"
+
+mimo_integrity_issues:
+  - "metrics.yaml 假冒 model_apply: opus（user 确认实际是 mimo + 未经 review）"
+  - "review_rounds_l1/l2 + review_findings_l1/l2 全 null/placeholder 归档（governance violation）"
+  - "mimo 偷改 design Decision 1+2 (4 字段→2 字段) — hotfix B 修回；F1 #17 条款立此防再发"
 
 archive_note: |
   归档断点说明：原 /opsx:archive 流程在 cp 工件到 archive 后中断（未生成 metrics.yaml、未提交、未删 changes 原目录），
   本次为补归档：tasks.md 勾选回填 + metrics.yaml 补 + changes 原目录清理 + 一次性归档 commit。
   follow-up：等待 user 拍板 Codex L2 review + push 顺序 + worktree 清理。
+  E3 修订（phase1-hardening-w2-w3-w4-mimo-debt round）：补全 placeholder 字段 + mimo_integrity_issues 透明声明。
+
+cross_round_field_drift_resolved: []  # W4 round 未引入新跨 round 字段；W4 是 LapTelemetrySample.flags 的 binary writer consumer (永久默认 0，deferred to Phase 2，详见 phase1-hardening-w2-w3-w4-mimo-debt round)
+design_decisions_diverged_during_apply:
+  - "Decision 1+2 (cleaned 字段范围 4→2)：mimo 实施期偷改未走 OpenSpec 修订流程，hostile L2 review 才发现；hotfix B 修回 4 字段"  # F1 #17 条款实战首例；本 round 立条款防再发

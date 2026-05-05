@@ -67,6 +67,97 @@ class AccelTimeChartContractTest {
         }
         val coords = computeChartCoordinates(samples, Size(1000f, 500f), ChartAxis.ACCEL)
         assertEquals(10, coords.size)
-        // Null accelG samples get mapped with value 0.0 in computeChartCoordinates
+        // L1 R1 P0/C3 修订：用 computeAccelSegments 真断言 IntRange list（替代仅 size 断言）
+        // sample[0..2] 有值 + sample[3..6] null + sample[7..9] 有值 → 期望 [(0..2), (7..9)]
+        val segments = computeAccelSegments(samples)
+        assertEquals(2, segments.size)
+        assertEquals(0..2, segments[0])
+        assertEquals(7..9, segments[1])
+    }
+
+    // L1 R1 P0/A4+A5 修订：computeAccelSegments 纯函数 IntRange list 行为锁定（5 case）
+
+    @Test
+    fun `computeAccelSegments - all non-null returns single full range`() {
+        val samples = (0 until 10).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 100, elapsedMsInLap = i * 100L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = 0.5,
+            )
+        }
+        val segments = computeAccelSegments(samples)
+        assertEquals(1, segments.size)
+        assertEquals(0..9, segments[0])
+    }
+
+    @Test
+    fun `computeAccelSegments - all null returns empty list`() {
+        val samples = (0 until 10).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 100, elapsedMsInLap = i * 100L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = null,
+            )
+        }
+        val segments = computeAccelSegments(samples)
+        assertTrue(segments.isEmpty())
+    }
+
+    @Test
+    fun `computeAccelSegments - leading null returns single tail range`() {
+        val samples = (0 until 20).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 100, elapsedMsInLap = i * 100L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = if (i < 5) null else 0.5,
+            )
+        }
+        val segments = computeAccelSegments(samples)
+        assertEquals(1, segments.size)
+        assertEquals(5..19, segments[0])
+    }
+
+    @Test
+    fun `computeAccelSegments - trailing null returns single head range`() {
+        val samples = (0 until 20).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 100, elapsedMsInLap = i * 100L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = if (i >= 15) null else 0.5,
+            )
+        }
+        val segments = computeAccelSegments(samples)
+        assertEquals(1, segments.size)
+        assertEquals(0..14, segments[0])
+    }
+
+    @Test
+    fun `computeAccelSegments - alternating null returns multiple ranges`() {
+        val samples = (0 until 10).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 100, elapsedMsInLap = i * 100L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = when (i) {
+                    0, 1, 2 -> 0.5
+                    3 -> null
+                    4, 5, 6 -> 0.5
+                    7 -> null
+                    8, 9 -> 0.5
+                    else -> 0.5
+                },
+            )
+        }
+        val segments = computeAccelSegments(samples)
+        assertEquals(3, segments.size)
+        assertEquals(0..2, segments[0])
+        assertEquals(4..6, segments[1])
+        assertEquals(8..9, segments[2])
+    }
+
+    @Test
+    fun `computeAccelSegments - empty input returns empty list`() {
+        val segments = computeAccelSegments(emptyList())
+        assertTrue(segments.isEmpty())
     }
 }

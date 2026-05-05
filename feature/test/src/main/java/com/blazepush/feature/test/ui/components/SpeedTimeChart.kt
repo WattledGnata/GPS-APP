@@ -99,7 +99,11 @@ fun SpeedTimeChart(
     onCursorChange: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (samples.isEmpty()) {
+    // L1 R1 P0-1 / L1 R2 P0-R2-1 修订：扩展 isEmpty 守卫到 size <= 1，
+    // 一次性 cover 三条路径 — chart line drawPath / cursor line drawLine / 触摸 callback。
+    // n=1 时 lapDurationMs=1L → coords[0].x = elapsedMsInLap × canvasWidth / 1L 远超 canvas，
+    // 走占位分支避免 silent canvas 外渲染（与 isEmpty 同语义合并）。
+    if (samples.isEmpty() || samples.size == 1) {
         Box(modifier) {
             Text(
                 "NO DATA",
@@ -123,11 +127,13 @@ fun SpeedTimeChart(
                 .fillMaxSize()
                 .pointerInput(samples) {
                     detectDragGestures { change, _ ->
+                        // L1 R2 P0-R2-1 保险层：触摸 detector 内 size <= 1 守卫
+                        // （与 Composable 入口 early-return 双层保护，防 Composable 重组瞬态）
+                        if (samples.size <= 1) return@detectDragGestures
                         change.consume()
                         val touchX = change.position.x
-                        val lapDurationMs = if (samples.size >= 2) {
+                        val lapDurationMs =
                             samples.last().elapsedMsInLap - samples.first().elapsedMsInLap
-                        } else 1L
                         val touchElapsedMs = (touchX / size.width * lapDurationMs).toLong()
                             .coerceIn(0, lapDurationMs)
                         val idx = findNearestSampleIndex(samples, touchElapsedMs)
@@ -136,10 +142,10 @@ fun SpeedTimeChart(
                 }
                 .pointerInput(samples) {
                     detectTapGestures { offset ->
+                        if (samples.size <= 1) return@detectTapGestures
                         val touchX = offset.x
-                        val lapDurationMs = if (samples.size >= 2) {
+                        val lapDurationMs =
                             samples.last().elapsedMsInLap - samples.first().elapsedMsInLap
-                        } else 1L
                         val touchElapsedMs = (touchX / size.width * lapDurationMs).toLong()
                             .coerceIn(0, lapDurationMs)
                         val idx = findNearestSampleIndex(samples, touchElapsedMs)

@@ -351,4 +351,189 @@ class LapAlignmentTest {
             it.absoluteTsMs == laps[1].lapStartWallClock + it.elapsedMsInLap
         })
     }
+
+    // ---- Case G: flags 重采样最近邻 (B4 + L1 R1 P1-1 sub-G4/G5) ----
+    // 修复 v3 高频盲点 #16 实战首例 — LapTelemetrySample.flags 字段 W1 round 追加后
+    // W3 LapAlignment.interpolate / clamp / 精确命中路径需保留源 sample.flags
+
+    private fun lapWithFlags(
+        sampleFlags: List<Int>,
+        sampleLats: List<Double>? = null,
+        lapDurationMs: Long = 60000L,
+        lapStartWallClock: Long = 0L,
+    ): LapTelemetry {
+        val n = sampleFlags.size
+        val samples = (0 until n).map { i ->
+            val frac = if (n > 1) i.toDouble() / (n - 1) else 0.0
+            LapTelemetrySample(
+                absoluteTsMs = lapStartWallClock + (frac * lapDurationMs).toLong(),
+                elapsedMsInLap = (frac * lapDurationMs).toLong(),
+                lat = sampleLats?.get(i) ?: (0.0 + 0.009 * frac),
+                lon = 0.0,
+                speedKmh = 80.0,
+                bearingDeg = 0.0,
+                accelerationG = null,
+                flags = sampleFlags[i],
+            )
+        }
+        return LapTelemetry(
+            sessionId = "test",
+            lapIndex = 0,
+            lapStartWallClock = lapStartWallClock,
+            lapEndWallClock = lapStartWallClock + lapDurationMs,
+            lapDurationMs = lapDurationMs,
+            samples = samples,
+            sectorBoundaries = listOf(lapStartWallClock),
+            trackId = null,
+            trackNameSnapshot = null,
+        )
+    }
+
+    @Test
+    fun caseG1_flagsAlphaSmallTakesS0() {
+        // 构造 2-sample lap，s0.flags=1, s1.flags=0 → grid 点 distance 落 α≈0.3 应取 s0.flags=1
+        // lat 间距：0 → 0.009（约 1000m），grid step 5m → grid[300] 的 distance ≈ 1500 ≈ 1000 * 1.5 → α 落 sample 间隔
+        // 简化：用 5-sample lap，flags=[1, 1, 0, 0, 0]，grid step 让中间 sample 之间的 grid 点取最近邻
+        val refLap = lapWithFlags(sampleFlags = listOf(1, 1, 0, 0, 0))
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 5.0)
+        assertTrue(result.gridSize > 0)
+        // grid 第一个点 distance=0 → clamp 到 sample[0], flags=1
+        assertEquals(1, result.samplesPerLap[0][0].flags)
+        // 最后一个 grid 点 → clamp 到 sample[4], flags=0
+        assertEquals(0, result.samplesPerLap[0][result.gridSize - 1].flags)
+    }
+
+    @Test
+    fun caseG2_flagsAlphaLargeTakesS1WithValueZero() {
+        // s0.flags=1, s1.flags=2，α≥0.5 取 s1.flags=2，验证 default 0 vs explicit 2 不混淆
+        // 5-sample lap，sample distances 均匀分布；grid step 0.5 让 grid 落在 sample 之间
+        val refLap = lapWithFlags(sampleFlags = listOf(1, 2, 1, 2, 1))
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 50.0)
+        // 至少有一个 grid 点的 flags 为 2（不是默认 0）
+        assertTrue(
+            "case G2: at least one resampled sample.flags should be 2 (not default 0)",
+            result.samplesPerLap[0].any { it.flags == 2 }
+        )
+        // 所有 grid 点的 flags ∈ {1, 2}（无默认 0 哨兵泄漏）
+        assertTrue(
+            "case G2: all flags must be 1 or 2 (no default-0 sentinel)",
+            result.samplesPerLap[0].all { it.flags == 1 || it.flags == 2 }
+        )
+    }
+
+    @Test
+    fun caseG3_flagsDuplicateDistanceMinIndex() {
+        // 重复距离区间：sample[1..3] 同位置（fixedLat），flags=[0, 1, 2, 3, 0]
+        // grid 点落入重复区间应取最小 index sample 的 flags（即 sample[1].flags=1）
+        val sampleFlags = listOf(0, 1, 2, 3, 0)
+        val sampleLats = listOf(0.0, 0.001, 0.001, 0.001, 0.005)  // sample[1..3] 同位置
+        val refLap = lapWithFlags(sampleFlags = sampleFlags, sampleLats = sampleLats)
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 30.0)
+        // 找到 grid 点对应 sample[1..3] 的距离 → flags 应该是 1（最小 index）
+        // sample[1] 的累计距离 ≈ 111m（0.001 * 111000m）
+        // grid step 30m → grid[3] (90m) / grid[4] (120m) 应在 sample[1..3] 区域
+        val foundMinIndex = result.samplesPerLap[0].any { it.flags == 1 }
+        assertTrue("case G3: must find resampled sample with flags=1 (min index in duplicate)", foundMinIndex)
+    }
+
+    @Test
+    fun caseG4_flagsClampToFirstOrLast() {
+        // clamp 路径 — d* < d_0 直接 return samples[0] 含 flags
+        // 用 1-sample 圈 + grid step 让 grid[0] = 0 落 clamp 路径
+        // 实际构造 2-sample（n>=2 才能 alignByDistance），grid 第一/最后 clamp
+        val refLap = lapWithFlags(sampleFlags = listOf(7, 9))
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 5.0)
+        assertTrue(result.gridSize >= 2)
+        // grid[0] 的 distance=0 → clamp samples[0]
+        assertEquals(7, result.samplesPerLap[0][0].flags)
+        // grid[last] clamp samples[1]
+        assertEquals(9, result.samplesPerLap[0][result.gridSize - 1].flags)
+    }
+
+    @Test
+    fun caseG5_flagsExactMatchPreserveOriginal() {
+        // 精确命中分支 — d* == d_k binarySearch 返回 idx >= 0 → return samples[kMin]
+        // 重复距离区间起点的 flags 应保留
+        val sampleFlags = listOf(5, 5, 5, 5, 5)
+        val sampleLats = listOf(0.0, 0.001, 0.001, 0.001, 0.001)  // sample[1..4] 同位置
+        val refLap = lapWithFlags(sampleFlags = sampleFlags, sampleLats = sampleLats)
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 50.0)
+        // 所有 grid 点的 flags 应为 5（无默认 0 泄漏）
+        assertTrue(
+            "case G5: all resampled flags must be 5 (no default-0 sentinel)",
+            result.samplesPerLap[0].all { it.flags == 5 }
+        )
+    }
+
+    // ---- Case H: bearingDeg 跨 360° 边界最近邻 (D2) ----
+
+    @Test
+    fun caseH_bearingWrap360() {
+        // s0.bearingDeg=359°, s1.bearingDeg=1° (跨 0/360 边界)
+        // 用 2-sample 构造 + grid 间隔让 α 接近 0.7（取 s1.bearingDeg=1°）
+        val n = 2
+        val samples = (0 until n).map { i ->
+            val frac = i.toDouble() / (n - 1)
+            LapTelemetrySample(
+                absoluteTsMs = (frac * 60000L).toLong(),
+                elapsedMsInLap = (frac * 60000L).toLong(),
+                lat = 0.0 + 0.001 * frac,
+                lon = 0.0,
+                speedKmh = 80.0,
+                bearingDeg = if (i == 0) 359.0 else 1.0,
+                accelerationG = null,
+            )
+        }
+        val refLap = LapTelemetry(
+            sessionId = "test",
+            lapIndex = 0,
+            lapStartWallClock = 0L,
+            lapEndWallClock = 60000L,
+            lapDurationMs = 60000L,
+            samples = samples,
+            sectorBoundaries = listOf(0L),
+            trackId = null,
+            trackNameSnapshot = null,
+        )
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 30.0)
+        // 所有 grid 点 bearingDeg 应在 {359.0, 1.0}（最近邻取自源），不应平均到 180
+        assertTrue(
+            "case H: all bearingDeg must be 359.0 or 1.0 (nearest neighbor across 0/360 wrap)",
+            result.samplesPerLap[0].all { it.bearingDeg == 359.0 || it.bearingDeg == 1.0 }
+        )
+        // MUST NOT 平均到 180
+        assertTrue(
+            "case H: no bearingDeg should be averaged to 180",
+            result.samplesPerLap[0].none { it.bearingDeg == 180.0 }
+        )
+    }
+
+    // ---- Case I: elapsedMsInLap round 浮点边界 deterministic (D3) ----
+
+    @Test
+    fun caseI_elapsedFloatBoundary() {
+        // L1 R1 D3 修订（apply 期 spec drift 修正）：
+        // 现实代码 gridIndexFor 用 (d / step).toInt() truncation。在 step 整数倍（如 100.0 = 5.0*20）
+        // 边界两侧的浮点误差**不 deterministic 一致** — 99.999... truncation = 19，100.000... = 20。
+        // 真正要锁的是"同侧 ±1e-9 误差 deterministic"（同 step bucket 内的微小误差）。
+        val refLap = mockLap(sampleCount = 100, lapDurationMs = 60000L)
+        val result = LapAlignment.alignByDistance(listOf(refLap), 0, 5.0)
+
+        // 同侧 +1e-9 deterministic（同 step bucket [100.0, 105.0) 内）
+        val gridIdx1 = result.gridIndexFor(100.0)
+        val gridIdx2 = result.gridIndexFor(100.0 + 1e-9)
+        assertEquals(
+            "case I: gridIndexFor at +1e-9 must be deterministic (same step bucket)",
+            gridIdx1, gridIdx2
+        )
+
+        // 跨 step 边界 truncation 行为符合 expected（spec 加严锁定，避免未来重构改 round/floor）
+        // 99.999... < 100 → bucket 19；100.0 = 5*20 → bucket 20；100.000... > 100 → bucket 20
+        assertEquals("case I: 99.999... must truncate to 19", 19, result.gridIndexFor(99.999999999))
+        assertEquals("case I: 100.0 must equal 20", 20, result.gridIndexFor(100.0))
+        assertEquals("case I: 100.000... must truncate to 20", 20, result.gridIndexFor(100.000000001))
+
+        // 同输入幂等 deterministic（trivially pass 但锁定 pure function 语义）
+        assertEquals(result.gridIndexFor(105.0), result.gridIndexFor(105.0))
+    }
 }

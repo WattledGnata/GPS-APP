@@ -156,7 +156,8 @@ object LapLiveStateDeriver {
         // 显示时长门：banner 触发后只在 5 秒内显示
         if (currentTimeMs - latest.timestampMillis >= LAP_INVALIDATED_DISPLAY_WINDOW_MS) return null
 
-        // 去抖门：以 latest 为锚点，向前 1 秒窗口内 invalidating event 必须 ≥ 3 个
+        // 去抖门：以 latest 为锚点，向前 1 秒窗口内 invalidating event 必须 ≥ LAP_INVALIDATED_DEBOUNCE_MIN_COUNT 个
+        // (W4 wire-laptime-to-gps-filter round 后 MIN_COUNT = 1：filter 接通后 jitter 已从数据流根因消除)
         val windowStart = latest.timestampMillis - LAP_INVALIDATED_DEBOUNCE_WINDOW_MS
         val countInWindow = invalidatingEvents.count {
             it.timestampMillis in windowStart..latest.timestampMillis

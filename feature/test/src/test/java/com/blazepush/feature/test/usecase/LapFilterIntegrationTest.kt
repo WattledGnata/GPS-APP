@@ -411,4 +411,46 @@ class LapFilterIntegrationTest {
             9, processSampleCount
         )
     }
+
+    // E1 (L1 R1 修订)：cleaned.timestamp 字段保留 raw 反例 case
+    // 锁定 hotfix B 后 4 字段契约 — `cleaned = gpsData.copy(latitude=..., longitude=..., speed=..., bearing=...)`
+    // MUST NOT 替换 timestamp / isTimeSynced / 等元信息字段
+    @Test
+    fun `E1 - cleaned timestamp must equal raw timestamp (4 fields hotfix B contract)`() {
+        val filter = GpsDataFilter()
+        val rawTs = 1_700_000_000_000L
+        val raw = makeGpsData(
+            lat = 30.5,
+            lon = 104.4,
+            speed = 100.0,
+            bearing = 90.0,
+            ts = rawTs,
+            isTimeSynced = true,
+        )
+        // 喂入 filter 前先填几帧 warmup
+        repeat(9) { filter.process(makeGpsData(30.5, 104.4, 100.0, 90.0, ts = rawTs - 1000L * (9 - it))) }
+        val filteredData = filter.process(raw)
+
+        // hotfix B 后契约：cleaned 仅替换 4 字段
+        val cleaned = raw.copy(
+            latitude = filteredData.latitude,
+            longitude = filteredData.longitude,
+            speed = filteredData.speed,
+            bearing = filteredData.bearing,
+        )
+
+        assertEquals(
+            "cleaned.timestamp MUST equal raw.timestamp (NOT filteredData.timestamp)",
+            rawTs, cleaned.timestamp
+        )
+        assertEquals(
+            "cleaned.isTimeSynced MUST equal raw.isTimeSynced",
+            true, cleaned.isTimeSynced
+        )
+        // 4 字段是 cleaned (filtered)；timestamp + isTimeSynced 是 raw
+        assertEquals(filteredData.latitude, cleaned.latitude, 0.0)
+        assertEquals(filteredData.longitude, cleaned.longitude, 0.0)
+        assertEquals(filteredData.speed, cleaned.speed, 0.0)
+        assertEquals(filteredData.bearing, cleaned.bearing, 0.0)
+    }
 }

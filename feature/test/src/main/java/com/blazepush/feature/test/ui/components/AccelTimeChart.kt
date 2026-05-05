@@ -82,20 +82,11 @@ fun AccelTimeChart(
         ) {
             val coords = computeChartCoordinates(samples, size, ChartAxis.ACCEL)
 
-            // Draw segments, breaking at null accelerationG samples
-            var segmentStart = -1
-            for (i in samples.indices) {
-                if (samples[i].accelerationG != null) {
-                    if (segmentStart < 0) segmentStart = i
-                } else {
-                    if (segmentStart >= 0) {
-                        drawSegment(coords, segmentStart, i - 1)
-                        segmentStart = -1
-                    }
-                }
-            }
-            if (segmentStart >= 0) {
-                drawSegment(coords, segmentStart, samples.size - 1)
+            // L1 R1 P0/A4 修订：抽 computeAccelSegments 纯函数（替代 inline fold），
+            // 保持 spec scenario IntRange list 真断言 + 长期防回退 grep gate
+            val segments = computeAccelSegments(samples)
+            for (range in segments) {
+                drawSegment(coords, range.first, range.last)
             }
 
             if (cursorAbsoluteTs != null) {
@@ -131,4 +122,33 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSegment(
         }
     }
     drawPath(path, TrackTechSemantic.TelemetryLine, style = Stroke(width = 2f))
+}
+
+/**
+ * Pure function — 把 sample 列表按 accelerationG nullable 拆分为连续非 null 段的 IntRange list。
+ * 每个 IntRange 表示一段连续非 null sample 的索引范围 `startIdx..endIdx`。
+ * - 空列表 / 全 null 输入 → emptyList()
+ * - 全非 null 输入 → 单元素 list 含 `0..size-1`
+ * - 部分 null 输入 → 多 IntRange，每段 startIdx 到 endIdx 都是连续非 null
+ *
+ * Caller: AccelTimeChart Composable 体内拼装 path + AccelTimeChartContractTest 真断言。
+ * 不引入 androidx 依赖（pure Kotlin），便于 JVM unit test 直接调用。
+ */
+internal fun computeAccelSegments(samples: List<LapTelemetrySample>): List<IntRange> {
+    val result = mutableListOf<IntRange>()
+    var segmentStart = -1
+    for (i in samples.indices) {
+        if (samples[i].accelerationG != null) {
+            if (segmentStart < 0) segmentStart = i
+        } else {
+            if (segmentStart >= 0) {
+                result.add(segmentStart..(i - 1))
+                segmentStart = -1
+            }
+        }
+    }
+    if (segmentStart >= 0) {
+        result.add(segmentStart..(samples.size - 1))
+    }
+    return result
 }

@@ -64,7 +64,7 @@ object LapAlignment {
         val grid = DoubleArray(gridSize) { it * distanceStepMeters }
 
         val refResampled = resampleByGrid(
-            refLap.samples, refCumulative, grid, refLap.lapStartWallClock, null
+            refLap.samples, refCumulative, grid, refLap.lapStartWallClock
         )
 
         val samplesPerLap = ArrayList<List<LapTelemetrySample>>(laps.size)
@@ -80,7 +80,7 @@ object LapAlignment {
                     else -> {
                         val cumulative = computeCumulativeDistances(lap.samples, cosLat0)
                         resampleByGrid(
-                            lap.samples, cumulative, grid, lap.lapStartWallClock, null
+                            lap.samples, cumulative, grid, lap.lapStartWallClock
                         )
                     }
                 }
@@ -112,12 +112,13 @@ object LapAlignment {
         return result
     }
 
+    // D1 修订：删除死参数 fallbackRefSamples + 删除 @Suppress("UNUSED_PARAMETER")
+    // （v3 高频盲点 #15 + 卸责借口反对款；未实际使用的参数在 review trail 已 nail）
     private fun resampleByGrid(
         samples: List<LapTelemetrySample>,
         cumulative: DoubleArray,
         grid: DoubleArray,
         lapStartWallClock: Long,
-        @Suppress("UNUSED_PARAMETER") fallbackRefSamples: List<LapTelemetrySample>?,
     ): List<LapTelemetrySample> {
         val result = ArrayList<LapTelemetrySample>(grid.size)
         for (d in grid) {
@@ -139,6 +140,9 @@ object LapAlignment {
                 speedKmh = refSample.speedKmh,
                 bearingDeg = refSample.bearingDeg,
                 accelerationG = null,
+                // B2 修订：empty 圈 fallback 路径无源 sample 可参照，强制 flags = 0；
+                // UI 层 SHALL 通过 accelerationG == null 判断 fallback 状态，MUST NOT 用 flags 区分
+                flags = 0,
             )
         }
     }
@@ -187,6 +191,9 @@ object LapAlignment {
         val lon = s0.lon * (1 - alpha) + s1.lon * alpha
         val elapsedMsInLap = round(s0.elapsedMsInLap * (1 - alpha) + s1.elapsedMsInLap * alpha).toLong()
         val bearingDeg = if (alpha < 0.5) s0.bearingDeg else s1.bearingDeg
+        // B2 修订（v3 高频盲点 #16 实战首例）：flags 最近邻策略与 bearingDeg 一致；
+        // 默认 0 哨兵会让 UI 层 "flags != 0 表示标记" 判断全部错认，必须按最近邻取自源 sample
+        val flags = if (alpha < 0.5) s0.flags else s1.flags
 
         val accelerationG = interpolateNullable(s0.accelerationG, s1.accelerationG, alpha)
 
@@ -198,6 +205,7 @@ object LapAlignment {
             speedKmh = speedKmh,
             bearingDeg = bearingDeg,
             accelerationG = accelerationG,
+            flags = flags,
         )
     }
 
