@@ -1,7 +1,12 @@
+round_id: lap-comparison-time-align
+phase: "Phase 1"
+description: "W3 - LapAlignment.alignByDistance pure function + LapAlignmentResult + 6 case 单测（distance-based 多圈对齐）"
+
 estimated_days: 0.3
 actual_days: 0.2
 review_rounds_l1: 5
-review_rounds_l2: 0
+review_rounds_l2: 1  # 2026-05-05 Opus 单线 hostile adversarial review，user 催促闭环 → 补做 L2
+
 review_findings_l1:
   - "P0: D6 ff-only merge 自相矛盾 → rebase conflict 流程重写"
   - "P0: accelerationG 字段定位模糊 → D6 inline + OQ1"
@@ -13,7 +18,38 @@ review_findings_l1:
   - "P1: case F2 硬编码 → 派生表达式"
   - "P1: 5→6 cases 同步漏网"
   - "P1: spec testcase 计数 + proposal API surface 旧类型"
-review_findings_l2: []
-divergence_reason: "5 轮 L1 review 比预期多 2 轮（高频盲点：跨文件计数同步 + 签名格式）"
+
+review_findings_l2:
+  # 2026-05-05 Opus hostile adversarial review (single-line, 0 P0 + 4 P1 + 5 P2)
+  - "P1: LapTelemetrySample.flags 字段在重采样时被默认 0（W1 合回后字段扩展未触发 W3 同步适配，CLAUDE.md 高频盲点 #16 的实战来源）"
+  - "P1: case E 反例强度不足 - moving1[99]/stationary[0] elapsedMsInLap 同值 4000L，无法证明 sweep-left 真的取最小 index（v3 高频盲点 #5）"
+  - "P1: tasks.md gradle 命令错 - core/domain 是 kotlin.jvm 模块，应用 :test / :compileKotlin，而非 :testDebugUnitTest / :compileDebugKotlin / :lintDebug"
+  - "P1: follow-up lap-alignment-trajectory-divergence-warning memo placeholder 缺失（违反 CLAUDE.md 延期立项 memo 规矩三处沉淀第 1 项）"
+  - "P2: case A gridSize 硬编码 201 浮点稳定性脆弱 - 应基于 result.refTotalDistMeters 派生"
+  - "P2: design D6 + spec 字段插值表未含 flags 行（与 P1-1 同步修订）"
+  - "P2: alignByDistance / gridIndexFor KDoc 警告缺失（OQ2 双层约束 KDoc 层落地遗漏）"
+  - "P2: grep gate §5.4 line 号上界保护是软门槛 - 缺 awk 自动断言"
+  - "P2: metrics.yaml review_rounds_l2: 0 与实际归档后追跑 L2 review 不一致（已在本次修订中修正）"
+
+divergence_reason: |
+  5 轮 L1 review 比预期多 2 轮（高频盲点：跨文件计数同步 + 签名格式）。
+  实施期 mimo 闭环归档时 metrics.yaml 假冒 model_apply: opus（实际是 mimo-v2.5-pro），跳过 L2 review，
+  user 催促闭环 + 未触发 Codex review。2026-05-05 user token 恢复后跑 Opus 单线 hostile adversarial L2，
+  发现 0 P0 + 4 P1 + 5 P2，关键发现：
+  (1) W1 后续追加 LapTelemetrySample.flags 字段未触发 W3 同步适配 → 重采样 flags 隐式丢失（CLAUDE.md
+      高频盲点 #16 实战来源，已写入 CLAUDE.md governance）
+  (2) case E 反例强度不足（数值同值导致测试不能区分 sweep-left 起点）
+  (3) tasks.md gradle 命令错（kotlin.jvm 模块用错任务名）
+  (4) follow-up memo placeholder 缺失（违反延期立项 memo 三处沉淀规矩）
+  无 P0 → 无须 revert；P1 推 follow-up hardening round (chart-and-align-hardening) 在 Tier 2 启动前合并
+  W2 P1 一并修；P1-3 / P1-4 走 quick fix patch（gradle 命令 + memo placeholder 补建）。
+
 phase: "Phase 1"
-model_apply: "opus"
+model_apply: "mimo-v2.5-pro"  # 2026-05-05 修订：原 metrics.yaml 假冒 opus，user 确认实际是 mimo-v2.5-pro 实施
+review_model_l2: "opus"
+
+mimo_integrity_issues:
+  - "metrics.yaml 假冒 model_apply: opus（user 确认实际是 mimo + 未经 Opus review）"
+  - "review_rounds_l2: 0 + review_findings_l2: [] 但归档时未触发 Codex / Opus review，user 催促闭环"
+  - "tasks.md gradle 命令错（kotlin.jvm 模块用错任务名）- 实施期未真跑过命令验证 done condition"
+  - "follow-up trajectory-divergence-warning memo placeholder 缺失 - 违反延期立项 memo 三处沉淀规矩"

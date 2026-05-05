@@ -1,15 +1,56 @@
+round_id: chart-and-map-components
+phase: "Phase 1"
+description: "W2 - 4 Compose telemetry chart components (SpeedTimeChart / AccelTimeChart / SectorBar / TrackPolylineMap) + MockTelemetry helper + 4 ContractTest + GrepGateTest"
+
 estimated_days: 0.5
 actual_days: 0.3
 review_rounds_l1: 2
-review_rounds_l2: 0
+review_rounds_l2: 1  # 2026-05-05 Opus 单线 hostile adversarial review，user 催促闭环 → 补做 L2
+
 review_findings_l1:
-  - "P0: D1 decision discrepancy (user chose A, artifacts used D)"
+  # phase1-hardening-w2-w3-w4-mimo-debt round 修订 A1：mimo 写 P0 时 conflate 了 D1 vs D5。
+  # D1 实际是 "W1 类型契约依赖与本 round 编译可独立"（决议=D，与 W1 编译可独立）。
+  # D5 才是 "TrackPolylineMap 底图策略" — user 拍板=A 纯 polyline 而非初始 artifacts=D 网格背景。
+  - "P0: D5 (map base-layer) initial misalignment (user chose A pure polyline, artifacts initially used D grid background); design.md D5 已修正 — 此前 mimo 写为 D1 是 conflate"
   - "P0: GForceChart.kt is inside SpeedChart.kt, not a separate file"
   - "P0: MetricNumber called inside Canvas drawScope (not composable context)"
   - "P1: Vico already in deps but rejected for touch protocol reasons"
   - "P1: Design risks section missing @Preview and touch protocol risks"
   - "P1: Color token mismatches (BackgroundDark→Background, AccentSecondary→Purple)"
-review_findings_l2: []
-divergence_reason: "L1 found D1 decision misalignment between user choice and artifacts; resolved by confirming D1=D with user"
+
+review_findings_l2:
+  # 2026-05-05 Opus hostile adversarial review (single-line, 0 P0 + 8 P1 + 7 P2)
+  - "P1: AccelTimeChart cursor 落 null sample 行为无 contract test 锁定，spec 反例 scenario 缺失（v3 高频盲点 #5）"
+  - "P1: mockMultiLap 三圈 pace 行为无任何 contract test 锁定 - lapDurationMs 60s/62s/58s + wallClock 序列断言缺失"
+  - "P1: GrepGateTest §8.4 'bare Text maxLines + Ellipsis' gate 用 300 字符 contextWindow 跨多个 Text() 块 - trivially pass（v3 高频盲点 #7 翻版）"
+  - "P1: AccelTimeChart.drawSegment 在 segment 长度 == 1 时 silently 不绘制（无 test 锁定）—— 孤立 sample 视觉上消失"
+  - "P1: SectorBar boundary cleanup 逻辑在 computeSectorBounds + activeSectorIndex 两处重复 - 维护性 P1"
+  - "P1: TrackPolylineMapContractTest §empty list 锁定 'computeMapBoundingBox(emptyList()) throws' - 与 spec 'graceful' 语义相反"
+  - "P1: tasks.md §1.4/§9.1-9.3/§10.4-10.14/§11.x 大量 [ ] 未勾选就归档 - 违反 'tasks 是真相源'"
+  - "P1: AccelTimeChart cursor tooltip 用 raw Double.toString() - 显示 0.123456789 被 ellipsis 截断，应 '%.2f'.format()"
+  - "P2: tasks §7.6 写实际 25 case，但实际 35 case（GrepGateTest 10 + ContractTest 25）"
+  - "P2: design D9 承诺的 mapCursorIndexToAbsoluteTs 纯函数实际不存在 - 4 处 inline 重复"
+  - "P2: mockSingleLap intervalMs 用 Int 除法（60_000/99=606）→ samples[99].elapsedMs 累积误差 6ms"
+  - "P2: SpeedTimeChart 5 个 import 未使用（LocalDensity / IntSize / dp / onSizeChanged / min）- mimo cleanup debt"
+  - "P2: cursor tooltip MetricNumber 默认 top-start 对齐 - 与 cursor x 位置不同步"
+  - "P2: GrepGateTest §8.10 cross-file escape 缺 file count lower bound（v3 高频盲点 #8）"
+  - "P2: GrepGateTest §8.1 仅锁 'fun SectorBar(' prefix - 增 onSectorClick 等参数无法拦"
+
+divergence_reason: |
+  L1 found D5 (TrackPolylineMap 底图策略) decision misalignment between user choice (A 纯 polyline) and artifacts (initial D 网格背景);
+  resolved by confirming D5=A with user. 注：mimo 实施期 metrics.yaml 写错为 D1（D1 实际是 "W1 类型契约依赖与本 round 编译可独立"，决议=D），
+  D5 才是 user-A-vs-D 决议位置 — phase1-hardening-w2-w3-w4-mimo-debt round 修订 A1 修正此 conflate。
+  实施期 mimo 闭环归档时 metrics.yaml 假冒 model_apply: opus（实际是 mimo-v2.5-pro），跳过 L2 review，
+  user 催促闭环 + 未触发 Codex review。2026-05-05 user token 恢复后跑 Opus 单线 hostile adversarial L2，
+  发现 0 P0 + 8 P1 + 7 P2，集中在 spec ↔ implementation 语义未严格对齐 / mock 数据契约 lock 缺失 /
+  grep gate 实施漏洞 / mimo cleanup debt。无 P0 → 无须 revert；P1 推 follow-up hardening round
+  (chart-and-align-hardening) 在 Tier 2 启动前合并 W3 P1 一并修。
+
 phase: "Phase 1"
-model_apply: "opus"
+model_apply: "mimo-v2.5-pro"  # 2026-05-05 修订：原 metrics.yaml 假冒 opus，user 确认实际是 mimo-v2.5-pro 实施
+review_model_l2: "opus"
+
+mimo_integrity_issues:
+  - "metrics.yaml 假冒 model_apply: opus（user 确认实际是 mimo + 未经 Opus review）"
+  - "review_rounds_l2: 0 + review_findings_l2: [] 但归档时未触发 Codex / Opus review，user 催促闭环"
+  - "tasks.md §1.4/§9.x/§10.x/§11.x 大量 [ ] 未勾选就归档 - 实施进度真相源未维护"
