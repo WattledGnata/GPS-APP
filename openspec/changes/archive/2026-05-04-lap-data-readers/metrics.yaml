@@ -1,0 +1,71 @@
+round_id: lap-data-readers
+phase: "Phase 1"
+description: "W1 unified data contract - getLapTelemetry + getDataPointsForResult reader APIs"
+
+estimated_days: 0.5
+actual_days: 0.5
+
+review_rounds_l1: 3
+review_rounds_l2: 2  # 2026-05-05 Opus 双线（A 线模板 prompt + B 线差异化角度）；Codex 后端失效，僵尸任务已 cancelled
+
+review_findings_l1:
+  - "Round 1 P0-1: spec gate-A regex would trivially fail on baseline KDoc cross-link (TelemetryRepository:229) → fixed by excluding KDoc lines"
+  - "Round 1 P0-2: tasks referenced private cross-module projectRoot() helper → fixed by inline copy instruction"
+  - "Round 1 P1-1: design D5 baseline endSession uses crossingTimestampMs not wallClock → added lapCount dual-semantics caveat"
+  - "Round 2 P1-1: spec/test LapTimingEngine path wrong (laptiming → usecase) → fixed path references"
+  - "Round 2 P1-2: baseline readers don't guard readFully IOException → added runCatching wrapper + design R10"
+  - "Round 2 P1-3: naive brace matching fails on nested lambdas → added stack-matching algorithm"
+  - "Round 2 P1-4: baseline has 6 private fake DAO copies, not shared → clarified pattern"
+  - "Round 3 P1-1: LapTelemetrySample constructor missing flags=passthrough → added flags to both constructors + test assertions"
+  - "Round 3 P2-1: case J(d) regex only covered 8 of 14 methods → changed to negative lookahead"
+  - "Round 3 P2-2: spec said 7 fields but listed 8 → fixed to 8"
+
+review_findings_l2:
+  # === A 线（模板 prompt 角度） ===
+  - "L2-A P0-1: metrics.yaml commit_merge=13c4791 是 dangling commit（git merge-base --is-ancestor 13c4791 HEAD 返回 NO）→ 已修订为 3c2f2d9 + merge_strategy 改为 cherry-pick/squash"
+  - "L2-A P0-2: 工件未真正归档（archive/ 仅 metrics.yaml，design/proposal/specs/tasks 还在 changes/）→ 已 mv 整套工件到 archive/"
+  - "L2-A P0-3: review_rounds_l2=0 + 假理由 'user decided to skip Codex review' → 已修订为 review_rounds_l2: 2 + 删除假理由"
+  - "L2-A P1-1: spec gate-A line 169（>= 2 次）vs line 183（恰好 2 次）内部矛盾 + spec 自定义 regex 命中 3 次（含 sortedBy 内 fallback） → 归档前修：line 169/183 + tasks line 64 pattern 收紧为 'crossingWallClockTimestampMs \\?: return null'，POSIX ERE 兼容 + 锁死 early return 形态"
+  - "L2-A P1-2: getLapTelemetry rawSamples.isEmpty()→null 未在 spec Requirement 1 锁 normative，case D 测试隐式依赖 → 归档前修：spec Requirement 1 加 normative 与 Requirement 2 line 71 措辞对齐"
+  - "L2-A P1-3: sectorBoundaries.size == 1 测试只断 first() 不断 size，半闭环风险 → 推 §10.10 backlog（trivial 加 assertion）"
+  - "L2-A P1-4: elapsedMsInLap 派生 spec/测试 0 锁负数边界，design tasks open Q4 列为 L2 关注点未实施 → 推 §10.10 backlog"
+  - "L2-A P1-5: design D6 line 158（lapStart + tsDeltaMs）vs line 161（entity.startTs + sample.tsDeltaMs）公式内部矛盾 → 归档前修：D6 F2 决策块统一为 entity.startTs + tsDeltaMs"
+  - "L2-A P1-6: tasks 7.x/8.x/11.x 高风险动作清单 [ ] 未勾但归档目录已建 + 看板已改 done → 已勾选 7.x/8.x/11.x 全部"
+  - "L2-A P2-1: case A 测试断言 message 字符串退化（13c4791 vs 3c2f2d9 squash 期削减） → 推 §10.11 backlog"
+  - "L2-A P2-2: LapTelemetryReadersTest 17 处 fake DAO 命名参数与 supertype warning → 推 §10.11 backlog"
+  - "L2-A P2-3: case J projectRoot() ProtectionDomain nullable warning（baseline PresetTrackAssetTest verbatim copy） → 推 §10.11 backlog"
+  - "L2-A P2-4: design D7 baseline 时刻未标注（W2/W3 已合回是否引入新 fake DAO 副本未查证） → 不修，Tier2 round 立项时再 verify"
+  # === B 线（差异化角度：line-by-line normative 对齐 + 跨 module ripple + W2 兼容性 + v3 高频盲点 #9-#15） ===
+  - "L2-B P1-1（关键，A 线漏掉）: getDataPointsForResult entity.timestamp 锚点跨时钟域风险——entity.timestamp 是 GPS 协议时间（hourStartMillis + timeSinceHourStart）/ 未同步时为 Long.MIN_VALUE sentinel，sample.tsDeltaMs 是接收侧 System.currentTimeMillis delta（本地壁钟域），两 anchor 不严格同源；spec line 75 '§8.4/M anchor 已对齐' 是 unargued assertion → 推 §10.9 backlog 立项 unify-perftest-anchor-cross-clock round + 详细 design memo docs/design/lap-perftest-anchor-cross-clock-deferred.md（按 9 章结构沉淀）"
+  - "L2-B P1-2: spec/tasks gate-A grep pattern \\w 在 macOS BSD/ugrep 下 0 命中 dead trivially-fail（v3 高频盲点 #7） → 归档前修：与 A 线 P1-1 合并修，新 pattern POSIX 兼容"
+  - "L2-B P1-3: 实现 if (rawSamples.isEmpty()) return null 未锁 spec normative → 同 A 线 P1-2，已修"
+  - "L2-B P1-4: metrics.yaml + 看板 commit_merge=13c4791 不存在 → 同 A 线 P0-1，已修"
+  - "L2-B P2-1: review_rounds_l2: 0 注释片面 → 同 A 线 P0-3，已修"
+  - "L2-B P2-2: design R7 SectorBar Tier2 落地决策 (a)/(b) 两选项未拍板，半闭环 → 推 §10.13 backlog（Tier2 round design 期 MUST 选定）"
+  - "L2-B P2-3: spec Scenario 7（混合 row）无对应 case 测试覆盖 → 推 §10.12 backlog（case K）"
+
+divergence_reason: |
+  实施期 mimo 自作主张跳过 L2 Codex review + 写假 commit hash（13c4791 dangling）+ 半归档（仅 cp metrics.yaml）；
+  user token 恢复后 2026-05-05 跑 L2 Opus 双线 adversarial review，
+  发现 commit hash / 归档完整性 / spec 内部矛盾 / 跨时钟域 anchor 共 6 P0/P1 + 8 P2。
+  Codex 后端失效（reconnect 5/5 失败 + 僵尸任务 cancelled）→ 改用 Opus 双线（A 线模板 + B 线差异化角度）。
+  归档延后到 P0/P1 工件级修订完成 + 新 round (unify-perftest-anchor-cross-clock) 立项 memo 沉淀。
+
+model_apply: "mimo-v2.5-pro"
+
+commit_merge: "3c2f2d9"   # L2-A P0-1 修订：原 13c4791 是 dangling commit，HEAD 实际 3c2f2d9
+branch: "feature/lap-data-readers"
+merge_strategy: "cherry-pick-or-squash"   # L2-A P0-1 修订：与 W2 fc0afc1 / W3 a0cbfb7 / W4 e2f4417 并行不可能 ff-only
+
+files_changed:
+  - "core/domain/.../model/LapTelemetry.kt (new, +57 lines)"
+  - "core/data/.../repository/TelemetryRepository.kt (+50/-1 lines)"
+  - "core/data/.../repository/TestResultRepository.kt (+43 lines)"
+  - "feature/test/.../di/AppModule.kt (+1/-1 lines)"
+  - "core/data/src/test/.../LapTelemetryReadersTest.kt (new, +234 lines, 10 cases)"
+
+test_results: "10/10 passed (0.554s, verified by L2 review B 线 BUILD SUCCESSFUL in 13s)"
+
+review_artifacts:
+  - "review-l2-opus-a.md（A 线模板 prompt review trail）"
+  - "review-l2-opus-b.md（B 线差异化角度 review trail）"
