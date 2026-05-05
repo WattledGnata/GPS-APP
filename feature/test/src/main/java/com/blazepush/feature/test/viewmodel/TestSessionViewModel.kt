@@ -344,12 +344,14 @@ class TestSessionViewModel(
                 updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
 
-                // round wire-laptime-to-gps-filter：圈速通道接通 GpsDataFilter，
-                // 仅替换 speed/bearing 两个字段：filter 的 bearing median 消除单帧 jitter
-                // 导致的 WrongDirection 误判；lat/lon 保持 raw 不滤，因为 filter 的
-                // isPositionAnomaly 判定会把 gate 过线时的位置跳变误标为异常，导致
-                // crossing detector 看不到 gate 两侧的真实 GPS 点。
+                // round wire-laptime-to-gps-filter（2026-05-05 hotfix B 回滚）：
+                // 替换 4 字段 latitude/longitude/speed/bearing 与 design Decision 1+2 锁死契约一致。
+                // detector directionScore = movement · passUnit 由 prev/cur 的 lat/lon 差完全决定，
+                // 仅 lat/lon median 才能消除单帧 GPS jitter 导致 WrongDirection 误判。
+                // MUST NOT 替换 timestamp（detector 插值精度依赖 raw 时间戳）。
                 val cleaned = gpsData.copy(
+                    latitude = filteredData.latitude,
+                    longitude = filteredData.longitude,
                     speed = filteredData.speed,
                     bearing = filteredData.bearing,
                 )
