@@ -1,0 +1,120 @@
+round_id: phase1-hardening-w2-w3-w4-mimo-debt
+phase: "Phase 1"
+description: "Phase 1 W2/W3/W4 mimo debt 消化 + F1 governance #17 + LapTelemetrySample.flags drift (v3 #16 实战首例) + 22 项 P0/P1 修复"
+
+estimated_days: 1.0  # task context "1-1.5d"，按下界估算
+actual_days: 1.0  # 单 session 内 ff + L1 3 轮 + apply 21/22 + L2 1 轮 + 归档准备闭环（CC Opus 主会话单 turn 推进）
+
+review_rounds_l1: 3  # large 复杂度推荐 3-5 轮，3 轮 plateau（推荐下限）
+review_rounds_l2: 1  # 实施期 review，1 轮 Conditional 放行（修 P1-1 + P2-3 后归档）
+
+review_findings_l1:
+  # R1: 4 P0 + 8 P1 + 5 P2 = 17 项
+  - "P0 R1-1: C1 SpeedTimeChart silent canvas 外渲染基于错误前提（line 151 守卫已存在；真问题在 cursor 渲染分支 + 触摸路径）"
+  - "P0 R1-2: E5 W4 archive tasks.md §12 死路径（实际只 §1-§10，应新增 §11）"
+  - "P0 R1-3: B 类 flags grep gate 字面量 s_k/s_{k+1} 与生产代码 s0/s1 不一致 → grep 永远 0 命中"
+  - "P0 R1-4: F1 governance Decision 7 自互斥（仅靠 CC 自查 enforce，mimo 模式下 dead）"
+  - "P1 R1: 8 项（B 类 LapAlignment caller 漏 / spec 字段表其他字段未同步 / Decision 3 caller 错 / Decision 5 metadata 升格 / case 编号冲突 / cross_round schema 顺序 / Decision 7 enum 类型 / W4 binary writer 漏盘）"
+  - "P2 R1: 5 项（tasks 章节碎片化 / E1 反例重复 / C4 选项偷懒 / Risk 3 影响低估 / case 编号 anchor）"
+  # R2: 2 P0 + 5 P1 + 4 P2 = 11 项
+  - "P0 R2-1: cursor 渲染漏覆盖（R1 P0-1 修订 3 路径中只 cover 2 路径，cursor line drawLine 漏）"
+  - "P0 R2-2: design.md Decision 2 没同步 R1 P0-3 caveat（design ↔ spec 不一致；CLAUDE.md #15 实战）"
+  - "P1 R2: 5 项（spec 字段表其他字段连锁未同步 / R1 P1-8 升级 W4 binary writer 残漏 / case H/I 命名冲突 / tasks 1.1 grep 字面量过宽 / spec grep gate 未在 done condition 实施）"
+  - "P2 R2: 4 项（α=0.5 边界 case G2.5 / inline fold 删除 / proposal 修辞反差 / metrics enum）"
+  # R3: plateau (0 P0 + 1 P1 + 3 P2 = 4 项)
+  - "P0 R3: 0 项（plateau 达成）"
+  - "P1 R3: 1 项 (worktree workflow caveat 实施细节防错)"
+  - "P2 R3: 3 项（小修 + 文字润色级）"
+
+review_findings_l2:
+  # L2 实施期 review (Opus 子 agent，1 轮 Conditional 放行)
+  - "P0 L2: 0 项（L1 plateau 正确，L2 finding 全部集中实施细节防错，无设计层 P0 重审需求）"
+  - "P1-1 L2: task 11.1 (a/b) 未实施 — W3 archive tasks §10 缺 phase1-hardening 引用 + W1 archive design 缺 retroactive '消费 flags 字段已合回 round 列表' section"
+  - "P2-1 L2: A1 task done condition 路径漂移（描述 W2 archive proposal.md 但 conflate 实际在 metrics.yaml）"
+  - "P2-2 L2: F1 #17 边界含糊（design Decision drift 必走 mini-proposal vs spec normative 描述错误 inline 修复 — 缺区分 caveat）"
+  - "P2-3 L2: 本 round metrics.yaml 待写（task 8.3 顺序后写，预期但需 enforce）"
+  # apply 期 self-discovery（4 条透明声明）
+  - "self-discovery 1: spec D3 浮点边界 drift 修订（apply 期 caseI 测试 fail 揭示 spec '边界 ±1e-9 三种情况 deterministic' 错；inline 修订 spec 描述同侧 deterministic + 跨边界 expected truncation；不属 design Decision drift，无需 #17 mini-proposal）"
+  - "self-discovery 2 (mistake-1, 已恢复): apply 期 git stash 把 21 项改动 stash 走，git stash pop 全部恢复 ✓"
+  - "self-discovery 3 (mistake-2, user A 路径): 21 项 apply 改动全在主区 working tree（CC Edit 用 absolute path 改主区物理 .kt）；user 拍板接受现状（commit + push 时 sort out）；worktree 内仅 4 工件 + 3 review trail + metrics.yaml；详 tasks §10.6"
+  - "self-discovery 4 (baseline failing test): TestSessionViewModelTrackLapTest.lapDebugMode_secondStartFinishClosesLapEvenWhenSectorChainIsIncomplete baseline HEAD 4326e11 已 fail (W4 commit e2f4417 改 MIN_COUNT 3→1 副作用 + W4 mimo 缺漏 test 同步)；本 round 不顺手修，加 §10.5 backlog 独立立项 fix-lap-debug-mode-sector-chain-test-after-min-count-1"
+
+divergence_reason: |
+  estimated 1.0d ≈ actual 1.0d 但 scope 内含意外发现：
+  - apply 期 spec D3 drift（self-discovery 1）— 透明 inline 修订
+  - mistake-1 git stash mishap（self-discovery 2）— 立即恢复，0 工作丢失
+  - mistake-2 apply 落主区 working tree 而非 worktree（self-discovery 3）— user A 路径接受现状
+  - baseline failing test（self-discovery 4）— 揭示 W4 mimo 缺漏 P1 (test 同步)，不本 round scope 内修复
+  E4 binary contract test 推 Phase 2 follow-up（需 mock TelemetryRepository，脱离本 round scope）。
+  L1 R3 plateau 在 large 复杂度推荐下限（3 轮）；L2 1 轮 Conditional 放行。
+  本 round 是 F1 #17 governance 条款的立条款 round，不 self-demonstrate（Decision 7 选项 C 透明声明）；
+  W4 mimo 偷改 design Decision 1+2 是 #17 实战首例来源（hotfix B 已修回 4 字段）。
+
+phase: "Phase 1"
+model_apply: "opus"  # CC Opus 主会话单 turn 推进 ff + L1 3 轮 + apply + L2 + 归档准备
+review_model_l1: "opus"  # 3 轮 L1 子 agent 全 Opus
+review_model_l2: "opus"  # 1 轮 L2 子 agent Opus
+
+complexity: "large"  # 22 项 P0/P1 + 跨 3 capability + governance 条款 + 跨 round 共享字段 drift
+
+# F1 #17 governance 条款实战字段（CLAUDE.md L2 metrics.yaml schema 新增）
+design_decisions_diverged_during_apply: []
+# 本 round apply 期未触发 #17 条款（无 design Decision drift；spec D3 描述错位是 spec normative 修订非 Decision 修订；
+# mistake-2 是 worktree workflow drift 非 design drift）
+
+cross_round_field_drift_resolved:
+  - "LapTelemetrySample.flags: W1 producer (binary reader) + W2 grep gate consumer (this round B1) + W3 LapAlignment consumer (this round B2/B4); W4 binary writer permanent default 0 (unfixed, deferred to Phase 2 — flags signal source not yet defined in BLE GPS protocol)"
+# v3 高频盲点 #16 实战首例锚点；详见本 round design.md Decision 6 producer/consumer 表
+
+# Apply 落地的工件层修订（不进 git，本地 archive 修订）
+artifact_revisions_local:
+  - "openspec/changes/archive/2026-05-04-chart-and-map-components/{proposal.md, design.md} — A1 D1/D5 conflate 修正 + C4 性能 baseline 透明声明"
+  - "openspec/changes/archive/2026-05-04-lap-comparison-time-align/{design.md, specs/lap-comparison-alignment/spec.md, tasks.md §10.3} — B3 flags 行 + s0/s1 caveat + #16 修复引用"
+  - "openspec/changes/archive/2026-05-04-lap-data-readers/design.md — OQ6 #16 retroactive 'consumer round 列表' section（W2/W3/W4 三角色表）"
+  - "openspec/changes/archive/2026-05-05-wire-laptime-to-gps-filter/tasks.md §11 — E5 归档后状态修订（hotfix B + W4_DIAG strip 计划）"
+
+# Apply 落地的代码改动（git tracked，主区 working tree，user 拍板 commit + push 顺序）
+code_changes:
+  - "core/domain/src/main/java/com/blazepush/core/domain/usecase/LapAlignment.kt (B2 + D1: flags 最近邻 + 删 fallbackRefSamples)"
+  - "core/domain/src/test/java/com/blazepush/core/domain/usecase/LapAlignmentTest.kt (B4 + D2 + D3: case G 5 sub + case H + case I)"
+  - "feature/test/src/main/java/com/blazepush/feature/test/ui/components/SpeedTimeChart.kt (C1: isEmpty 扩到 size <= 1 + detector 保险)"
+  - "feature/test/src/main/java/com/blazepush/feature/test/ui/components/AccelTimeChart.kt (A4: computeAccelSegments 纯函数)"
+  - "feature/test/src/test/java/com/blazepush/feature/test/ui/components/MockTelemetry.kt (A2 + A3: elapsedMs 公式 + FakeLapTelemetry KDoc)"
+  - "feature/test/src/test/java/com/blazepush/feature/test/ui/components/AccelTimeChartContractTest.kt (A5 + C3: 5 case + partial-null 真断言)"
+  - "feature/test/src/test/java/com/blazepush/feature/test/ui/components/GrepGateTest.kt (B1 + C2: §8.7 flags + §8.4 paren balance)"
+  - "feature/test/src/main/java/com/blazepush/feature/test/usecase/LapLiveStateDeriver.kt (E2: 注释引用常量名)"
+  - "feature/test/src/test/java/com/blazepush/feature/test/usecase/LapFilterIntegrationTest.kt (E1: cleaned.timestamp 反例 case)"
+  - "openspec/changes/archive/2026-05-04-chart-and-map-components/metrics.yaml (A1: D1/D5 conflate 修正 review_findings_l1 + divergence_reason)"
+  - "openspec/changes/archive/2026-05-05-wire-laptime-to-gps-filter/metrics.yaml (E3: actual_days/review_rounds_l1/l2/findings/divergence_reason 补全)"
+  - "CLAUDE.md (F1: #17 条款 + actionable directive + #16 update note + L2 metrics yaml schema + cross-ref)"
+
+test_results:
+  core_domain_test: "21 case 全绿 (含 LapAlignmentTest case G 5 sub + case H + case I)"
+  feature_test_unit_test: "301 tests + 1 fail (TestSessionViewModelTrackLapTest baseline HEAD 4326e11 已 fail; 与本 round 21 项 apply 改动无关; 详 review_findings_l2 self-discovery 4)"
+  本_round_新加_case: "5 AccelTimeChart segment + 3 SpeedTimeChart n=1 守卫 + 5 LapAlignmentTest case G + 1 case H + 1 case I + 1 LapFilterIntegrationTest E1 = 16 个新 @Test 方法全绿"
+
+# 本 round F1 #17 governance 立条款（不 self-demonstrate）
+f1_governance_baseline_established:
+  - "CLAUDE.md '#17 实施期偏离 design 决策 MUST 暂停 apply 走 OpenSpec 修订流程' 条款 + 5 步 actionable directive (grep 自检 / 每完成 1 task 比对 / drift 暂停 / mini-proposal / L1 mini-review / resume) + governance 局限透明声明 (mimo 模式 dead) + 实战来源 (W4 mimo 偷改 Decision 1+2)"
+  - "CLAUDE.md L2 metrics.yaml schema 新增 design_decisions_diverged_during_apply (NONE / List) + cross_round_field_drift_resolved (originRound→consumerRound) 两字段"
+  - "本 round 自身 design Decision 7 透明声明: 不 self-demonstrate F1; F1 worked example 取决于后续 round 自然 trigger; root-cause 修复路径在 OQ5 (skill 工具化 + commit hook) deferred"
+
+# Follow-up backlog (本 round 沉淀，独立立项)
+follow_up_rounds:
+  - "fix-lap-debug-mode-sector-chain-test-after-min-count-1 (small): TestSessionViewModelTrackLapTest baseline fail (W4 mimo 缺漏 test 同步) — 需 user 拍板 'sector chain 不完整时 lap 是否仍闭环' lap business decision"
+  - "wire-mock-telemetry-to-w1-real-classes (small): W1 round 合回后把 W2 FakeLapTelemetry 切到正式 LapTelemetry 类型"
+  - "automate-design-drift-detection (medium, OQ5): /opsx:ff skill 自动注入 metrics.yaml schema 字段 + commit-time hook grep 自动抓 drift"
+  - "W4_DIAG log strip (trivial): TestSessionViewModel.kt:358 + GateCrossingDetector.kt:117 + LapLiveStateDeriver.kt:166 三处临时 log，user 真机 verify pass 后 CC 主会话独立 strip"
+  - "phase1-retrospective (trivial): Phase 1 W1-W4 + 本 round 闭环后跑 retrospective 聚合 mimo vs opus metrics 对比 → docs/retrospective/phase-1-mimo-vs-opus.md"
+
+archive_note: |
+  本 round 是 Phase 1 hardening round（消化 W2/W3/W4 mimo 债务 + 立 F1 #17 governance 条款 +
+  修 v3 高频盲点 #16 实战首例 LapTelemetrySample.flags drift）。
+
+  归档时（待 user push 拍板 + worktree 清理；真机视觉验证 2026-05-05 已取消）：
+  - metrics.yaml 进 git（本文件）
+  - proposal.md / design.md / specs/**/*.md / tasks.md / review-l1-opus-r1/r2/r3.md / review-l2-opus.md 全部 ignored（*.md 排除规则）
+  - 主区 archive 目录 cp 工件 md（本地）
+  - 主区 21 项 apply 代码改动 + user hotfix B + W4_DIAG 由 user 拍板 commit + push 顺序
+
+  push 顺序串行约束：远端 kt-format-checker 对 push 历史逐条验证；多 round 同时就绪由 user 拍板。
