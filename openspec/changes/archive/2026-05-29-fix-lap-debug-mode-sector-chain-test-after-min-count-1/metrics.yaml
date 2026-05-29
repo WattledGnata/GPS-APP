@@ -1,0 +1,27 @@
+estimated_days: 0.2
+actual_days: 0.1        # workflow 子 agent 实现 + 主会话整合/验证
+complexity: "small"     # 纯测试侧（1 测试文件 +46/-3），零生产代码改动
+review_mode: "road-test-first"  # 2026-05-29 user 授权批次：去 Codex + 去 Opus 子 agent，FileLogger + 真机攒批兜底
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []  # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1: []  # road-test-first 去 Opus 子 agent
+review_findings_l2: []
+divergence_reason: "无；business decision 由 user 2026-05-29 拍板（宽容闭合：起终点过线两次即一圈，sector 不完整仍闭圈）"
+phase: "Phase 1"        # 收尾 · 线B
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus
+design_decisions_diverged_during_apply: []  # 严格按 design Decision 1（手法 A+B）+ Decision 2（contains 断言），无偏离
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 模式落地 ---
+# 修 W4 接通 GpsDataFilter 后遗留的 fixture 回归：lapDebugMode_secondStartFinishClosesLapEvenWhenSectorChainIsIncomplete
+# baseline fail（expected:1 was:0）。根因：旧 fixture 用 emitCrossing 两帧大跨度合成跳变（~261km/h）触发
+# GpsDataFilter.isPositionAnomaly + 首次过线遗留脏 median 窗口 → 第二帧 outputLat/Lon 退化为同点 → NoIntersection
+# → 第二次过线不 accepted → 永远闭不了圈。修法（纯测试侧，design Decision 1 手法 A+B）：第二次过线改连续物理
+# 合理轨迹（稳态预热 9 帧刷新 median + dt=400ms/每帧 4m=36km/h 不触 anomaly），completedLaps==1 真实达成（非改 expected）。
+# 断言收紧（Decision 2）：qualityFlags.isNotEmpty() → contains(LapQualityFlag.IncompleteSectors)。
+# FileLogger：纯测试改动无运行时生产路径，无需埋点。
+# 验证：feature:test 全量整合后 321 test 0 fail（含本 test 转绿）；真机 SKIP（纯测试侧无 UI/运行时行为改动）。
+# follow-up（tasks §10）：wire-incomplete-sector-hint-to-ui（把 in-memory IncompleteSectors 信号接通实时
+#   banner/详情屏 chip，独立主题 medium，非本 round 派生债）。
