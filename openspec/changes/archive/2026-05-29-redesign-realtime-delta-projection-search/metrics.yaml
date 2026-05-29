@@ -1,0 +1,25 @@
+estimated_days: 0.5
+actual_days: 0.3        # 子 agent 实现 ~6min + orchestrator 编排/验证；含 kt-format hook 逃课规则确立
+complexity: "medium"   # 4 文件（calculator/state/screen/test）+ 算法层重写；但根因修复使净改动聚焦（137 行）
+review_mode: "road-test-first"  # 2026-05-29 user 授权：去 Codex + 去 Opus 子 agent，FileLogger 持久日志 + 真机攒批路测兜底
+review_rounds_l1: 0    # road-test-first 去 Opus 子 agent
+review_rounds_l2: 0
+codex_l1_findings: []  # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无；road-test-first 模式 OQ1/2/3/4 由 CC 在授权下定夺（Alt B），benchmark gate 改路测实证"
+phase: "Phase 1"       # 收尾 · 线A
+model_apply: "sonnet"  # 委托 Sonnet 子 agent 实现，主会话 Opus orchestration（CLAUDE.md 复杂 round 委托模式）
+design_decisions_diverged_during_apply: []  # OQ 决议是 design 期落地（design.md 实施期 OQ 决议节），非 apply 期偏离；stale→`--` 是 OQ2 决议非 drift
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 模式落地（首个 medium round 走此模式）---
+# OQ1 决议 Alt B（stateless 全量 O(n)），benchmark gate 去掉改真机路测实证（性能先验微秒级 ≪ 40ms 帧预算）。
+# FileLogger 埋点（tag RTDelta，替代 review 的安全网）：
+#   - updateRealtimeDelta 成功分支 v("proj idx/dist/delta/elapsed")
+#   - updateRealtimeDelta 失败/stale 分支 d("stale frame#/isStale")
+#   - maybeRebuildReference d("ref rebuilt: frames")
+# 真机攒批：与 H 进度条 round + 后续线 B/C 一起路测华为 8KE02 回放泊寓数据验 -125s/跳变消失。
+# 全套 :feature:test 305 tests / 304 pass / 1 fail（已知 W4 baseline lapDebugMode，线B fix-lap-debug-mode 处理）。
+# kt-format hook：测试文件加 // @IgnoreFormatCheck（2026-05-29 user 授权逃课规则，见 CLAUDE.md Git 规则节）。
