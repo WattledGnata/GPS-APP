@@ -1,0 +1,35 @@
+estimated_days: 0.3
+actual_days: 0.25       # workflow 规划+实现+1 轮对抗 review + 主会话 review 消化/P2 修订/合回/归档
+complexity: "medium"    # 代码量 small（22 行 1 生产文件）但 #16 共享契约（LapTelemetry.sectorBoundaries）填充语义扩展 → 强制升级 medium 流程 → user 显式要求跑 1 轮 L1 adversarial review
+review_mode: "road-test-first"  # road-test-first 批次，但 user 显式要求本 #16 契约改保留 1 轮 L1 对抗 review
+review_rounds_l1: 1     # user 显式要求的 1 轮 Opus 子 agent 对抗 review（verdict=pass，0 P0/P1）
+review_rounds_l2: 0     # road-test-first 去 L2
+codex_l1_findings: []   # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1:
+  - "P2: spec scenario GIVEN 用闭区间记号 [1000,5000] 但 normative/实现是半开 [lapStart,lapEnd)（样例值严格内部，无 bug）→ 已 inline 修订 scenario 记号统一半开"
+  - "P2: core/data 模块不依赖 FileLogger（在 feature/test，反向依赖违反分层）→ reader 无法埋点；诊断=返回值 self-describing（sectorBoundaries.size）+ 消费侧埋点 deferred 到 detail 屏 round；本 round 逻辑由 17 单测含 mutation 验证锁死，真机 SKIP 合理（纯数据层无 UI）"
+review_findings_l2: []
+divergence_reason: "无；实现严格按 design Decision 1-5（impl 自报 + review 独立核实零偏离）"
+phase: "Phase 1"        # 收尾 · M2 前置
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved:
+  - "LapTelemetry.sectorBoundaries (lap-data-readers→future-sector-derivation)"  # W1 加该字段恒单段，本 round 填充多段语义；消费方 SectorBar(W2,多段设计)/LapAlignment(W3,grep 0 命中不读)/MockTelemetry(W2,已3元素) 全核实良性扩展无破坏
+accelerated_escalation: null
+# --- road-test-first + 1 轮 L1 adversarial review 落地 ---
+# 调查结论（review 独立 grep 核实）：sector 过线**确有记录**（非数据源缺失）——TFIC 预置赛道定义 2 个
+#   TimingGateType.Sector 门、LapTimingEngine.handleSectorCrossing 检测并记 CrossingEvent(gateType=Sector)、
+#   TestSessionViewModel 无差别持久化全部 crossing 到 Room（带 crossingWallClockTimestampMs）、getLapTelemetry
+#   已用 queryBySessionId 把全部 crossing 读进内存——只是 L317 写死 listOf(lapStartWallClock) 没用 sector。
+# 改法：getLapTelemetry 从已读内存 crossings filter accepted Sector + 非空 wallClock + 落半开窗口
+#   [lapStart,lapEnd) + 去重 ==lapStart + 升序，前置 lapStart 组多段；空集回退单段（不回归 baseline）。
+#   复用内存零额外 DB 查询，core/domain 0 改动，不改 schema/engine/公共协议。时钟域统一 wallClock。
+# #16 drift（本 round 核心，review verdict=PASS）：sectorBoundaries 单段→多段是**良性扩展**——
+#   SectorBar(SectorBar.kt computeSectorBounds)本为多段设计、LapAlignment grep 0 命中不读该字段、
+#   W2 MockTelemetry 早已造 3 元素 → 本 round 实质消除"生产 reader 恒单段 vs W2 mock 多段"的契约漂移，
+#   首次在生产激活 SectorBar 多段路径。无任何已合回 round 假设 size==1。
+# 测试：LapTelemetryReadersTest 补 case M-R（多段/回退单段/窗口外排除反例/rejected+null排除/==lapStart去重/
+#   跨时钟域 guard 反例），17 test 全绿；mutation 验证 case O 删窗口过滤即 fail（真断言非假绿）。
+# FileLogger：见 review_findings_l1 P2（模块边界，诊断=返回值 self-describing，埋点 deferred 到 detail 屏 round）。
+# 真机 SKIP（纯数据层无 UI）；逻辑由单测兜底；可观测性缺口已透明声明。
