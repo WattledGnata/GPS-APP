@@ -9,6 +9,7 @@ import com.blazepush.feature.test.model.LapRunConfig
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
+import com.blazepush.feature.test.model.laptiming.LapQualityFlag
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.TimingGate
@@ -205,16 +206,58 @@ class TestSessionViewModelTrackLapTest {
             viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
             dispatcher.scheduler.advanceUntilIdle()
 
+            // 首次过线开圈（lap1）：复用 emitCrossing helper —— 此时 GpsDataFilter 的 median
+            // 窗口未被污染，两帧 outputLat 一北一南正确穿过 gate（与
+            // lapDebugMode_replayAlignedTrackCatalogProducesAcceptedStartFinishCrossing 同链路）。
             emitCrossing(track.startFinishGate, 1773477876490L, 1773477876690L)
             dispatcher.scheduler.advanceUntilIdle()
 
-            emitCrossing(track.startFinishGate, 1773478143490L, 1773478143690L)
-            dispatcher.scheduler.advanceUntilIdle()
+            // 第二次过线闭圈（lap1 → completedLaps）：本 round 修复点（round
+            // fix-lap-debug-mode-sector-chain-test-after-min-count-1）。
+            //
+            // W4 把 GpsDataFilter 接进 bridge 后，旧 fixture 用 emitCrossing 注入的两帧大跨度
+            // 合成跳变（~14m / 200ms ≈ 261 km/h，远超 reported speed 36 km/h）触发
+            // GpsDataFilter.checkPositionVelocityConsistency 的 isPositionAnomaly（ratio > 3.0），
+            // 第二帧被 A14 拦在 lat/lon median 窗口外；又因第一次过线遗留的 median 窗口未清空，
+            // detector 拿到的两帧 outputLat/outputLon 退化为同一个 median 值（线段退化为点 →
+            // NoIntersection），第二次过线判定不 accepted → 永远闭不了圈（baseline fail
+            // expected:1 但 was:0）。详见 design.md Decision 1 / proposal.md 关键事实 3。
+            //
+            // 修法（design Decision 1 手法 A+B 组合，纯测试侧、不改任何生产代码）：
+            //   1. 物理合理位移（手法 B）：dt=400ms + 每帧 4m（lat ≈ 0.000036°），
+            //      4m / 400ms = 10 m/s = 36 km/h 与 reported speed 一致 → 不触 isPositionAnomaly，
+            //      两帧都能进 median 窗口；
+            //   2. 稳态预热（手法 A）：先在 gate 北侧固定锚点喂 9 帧，把 GpsDataFilter 的 9 点
+            //      lat/lon median 窗口完全刷新收敛到北侧，洗掉第一次过线遗留的脏窗口；
+            //   3. 单次穿越保障：median 稳态后输出步长（≈4m）> gate 线带宽（lat 跨度 ~2.7m），
+            //      使 median 输出一帧跨过整个 gate 带 → 相邻帧对仅与 gate 线相交一次，
+            //      恰好闭 1 圈（completedLaps == 1 / currentLapIndex == 2，非多次重复闭圈）。
+            // passDirection ≈ (-lat) → 车向南（lat 递减）穿过东西向 gate 线，directionScore > 0。
+            val gate = track.startFinishGate
+            val centerLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
+            val centerLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
+            val northAnchorLat = centerLat + 0.00009   // gate 北侧 ~10m 预热锚点
+            val southStepLat = 0.0000360                // ~4m / 帧（与 36 km/h、dt=400ms 物理一致）
+            var secondCrossingTs = 1773478000000L
+            val secondCrossingTrajectory = buildList {
+                repeat(9) { add(northAnchorLat) }                              // 稳态预热：median 收敛北侧
+                repeat(8) { i -> add(northAnchorLat - (i + 1) * southStepLat) } // 单调南移穿过 gate + 南侧稳定
+            }
+            secondCrossingTrajectory.forEach { lat ->
+                emitGps(secondCrossingTs, lat, centerLon)
+                dispatcher.scheduler.advanceUntilIdle()
+                secondCrossingTs += 400L
+            }
 
             val session = requireNotNull(viewModel.lapSession.value)
             assertEquals(1, session.completedLaps.size)
             assertEquals(2, session.currentLapIndex)
-            assertTrue(session.completedLaps.first().qualityFlags.isNotEmpty())
+            // Decision 2：断言收紧到指名 IncompleteSectors（而非泛 isNotEmpty()），锁死
+            // "宽容闭合时该圈被打 sector 不完整标记" 这条提示语义的真实落点（in-memory 信号源）。
+            // contains 对该圈可能同时含的其他 flag（如 ProtocolDesyncGap）鲁棒。
+            assertTrue(
+                session.completedLaps.first().qualityFlags.contains(LapQualityFlag.IncompleteSectors)
+            )
         } finally {
             Dispatchers.resetMain()
         }
