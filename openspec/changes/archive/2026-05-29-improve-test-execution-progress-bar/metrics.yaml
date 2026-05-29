@@ -1,0 +1,28 @@
+estimated_days: 0.3
+actual_days: 0.4        # 加速通道首跑（早先 session）写代码 + 本次主会话补 commit/rebase/合回/归档（代码此前从未合回）
+complexity: "small"     # UI polish（1 生产文件 TrackTechTestExecutionScreen.kt +60/-20 + 1 测试文件 159 行）
+review_mode: "road-test-first"  # 原为加速通道首跑 round；本次在 2026-05-29 road-test-first 批次内完成合回+归档
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无"
+phase: "Phase 1"        # 线C（性能测试屏 UI polish，非圈速主体）
+model_apply: "opus"     # 代码由早先 session 加速通道首跑写就；本次主会话补 commit + rebase + 合回 + 归档
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- 关键状态注记（重要，勿丢）---
+# ⚠️ 本 round 代码此前一直以「未提交改动」滞留在 worktree（base 18666f2，落后主区 4 commit），**从未合回主区** ——
+#   路线图 §0.2 + 看板 line 145 都误记为「代码已合回主区」。后果：2026-05-29 路测的 vivo APK（从主区 HEAD 21809c7
+#   build）**根本不含本进度条改动**，那次路测对线C无效。本次主会话补 commit（aa81137）+ rebase 到主区（f3b4e04）
+#   + ff-only 合回。
+# ⚠️ 真机验证：尚未真正验证（上一批 APK 不含本改动）。MUST 在下一批路测重验：加速测试按 START → 车未起步
+#   （<3km/h）→ 起步 → 中后段；预期起步前进度条无 fill + 文案 "WAITING FOR LAUNCH"（cyan），过 3km/h 切回百分比。
+#   小屏 vivo V2405A gate 必走（V2 §4 文案单行不换行）。
+# 改动：computeProgressState pure function + LAUNCH_SPEED_THRESHOLD_KMH=3.0 + ProgressState data class +
+#   ProgressPanel waitingForLaunch 分支（fillMaxWidth(0f) + WAITING FOR LAUNCH cyan 文案）。
+# FileLogger：纯 UI 派生，未加埋点（road-test-first §4 聚焦状态转移/数据派生/错误路径；进度条派生可由真机直接观察）。
+# 验证：TrackTechTestExecutionProgressTest 全绿；feature:test 整合后 321 test 0 fail。
