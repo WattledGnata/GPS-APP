@@ -41,6 +41,7 @@ import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -81,6 +82,20 @@ fun LapSessionDetailScreen(
     }
 
     val derived = remember(crossings) { deriveDetailMetrics(crossings) }
+    // unify-lap-count-pairing-semantics round（road-test-first 强制埋点）：记录站点 B 圈列表
+    // 有效圈数 + null wallClock 计数 + 配对 key，真机点击前 adb pull 核对列表与 getLapTelemetry
+    // 可读圈一致（R2）。
+    LaunchedEffect(derived) {
+        val wallClockNull = crossings.count {
+            it.accepted &&
+                it.gateType.equals("StartFinish", ignoreCase = true) &&
+                it.crossingWallClockTimestampMs == null
+        }
+        FileLogger.d(
+            "LapPairing",
+            "detail sid=$sessionId validLaps=${derived.validLaps} wallClockNull=$wallClockNull key=wallClock",
+        )
+    }
     val durationMs = session?.let { it.endTs - it.startTs }?.takeIf { it > 0L }
     val topSpeed = session?.topSpeedKmh
 
@@ -450,7 +465,9 @@ private fun formatDateTime(epochMs: Long): String {
     return formatter.format(Date(epochMs))
 }
 
-private data class UiLapRecord(
+// unify-lap-count-pairing-semantics round：private → internal，使 deriveDetailMetrics 纯函数
+// 可被 module 内单测断言（不暴露为 public API）。
+internal data class UiLapRecord(
     val lapNumber: Int,
     val timeMs: Long?,
     val diffMs: Long?,
@@ -458,9 +475,9 @@ private data class UiLapRecord(
     val reason: String?,
 )
 
-private enum class UiLapStatus { BEST, VALID, INVALID, INCOMPLETE }
+internal enum class UiLapStatus { BEST, VALID, INVALID, INCOMPLETE }
 
-private data class DetailMetrics(
+internal data class DetailMetrics(
     val totalLaps: Int,
     val validLaps: Int,
     val invalidLaps: Int,
@@ -468,16 +485,25 @@ private data class DetailMetrics(
     val lapRecords: List<UiLapRecord>,
 )
 
-private fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
+internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
+    // unify-lap-count-pairing-semantics round：accepted SF 排序键 + duration 减法统一为
+    // crossingWallClockTimestampMs（与 endSession 站点 A / getLapTelemetry 站点 C 同源），
+    // 使 UiLapRecord.lapNumber=idx+1 严格对应 getLapTelemetry(sessionId, idx)（lapIndex=lapNumber-1）。
+    // MUST NOT 用 crossingTimestampMs（GPS 协议时钟跨整点回绕会与 wallClock 排序分歧 → 点击错圈）。
     val sf = crossings
         .filter { it.gateType.equals("StartFinish", ignoreCase = true) }
-        .sortedBy { it.crossingTimestampMs }
+        .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
     val acceptedSF = sf.filter { it.accepted }
     val rejectedSF = sf.filter { !it.accepted }
 
-    val durations = acceptedSF.zipWithNext { a, b ->
-        b.crossingTimestampMs - a.crossingTimestampMs
-    }
+    // duration 仅对"起止两 crossing wallClock 均非空"的相邻对计算（任一端 null 不计有效圈，
+    // 与 getLapTelemetry 对 null wallClock 圈返回 null 收敛）。
+    val durations = acceptedSF.zipWithNext { a, b -> a to b }
+        .mapNotNull { (a, b) ->
+            val sa = a.crossingWallClockTimestampMs
+            val sb = b.crossingWallClockTimestampMs
+            if (sa != null && sb != null) sb - sa else null
+        }
     val bestLapMs = durations.minOrNull()
 
     val records = mutableListOf<UiLapRecord>()

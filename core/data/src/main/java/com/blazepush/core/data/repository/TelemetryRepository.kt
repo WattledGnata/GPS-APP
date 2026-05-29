@@ -129,11 +129,18 @@ class TelemetryRepository(
      * lapCount/bestLapMs（accepted SF crossing pairs 语义）+ updateSummary 一次写齐 4 字段。
      *
      * lapCount 派生语义：accepted=true && gateType="StartFinish" 的 crossing 相邻配对数量
-     * （= durations.size），与 LapSessionDetailScreen.deriveDetailMetrics 一致。
-     * **不**承诺 LapRecord.qualityFlags 过滤（crossing 表无该字段；与 Snackbar in-memory 路径
-     * 语义差异作为 follow-up `unify-lap-count-semantics`）。
+     * （= durations.size），与 LapSessionDetailScreen.deriveDetailMetrics（站点 B）/ getLapTelemetry
+     * （站点 C）严格同源。配对键 unify-lap-count-pairing-semantics round 已统一为
+     * `crossingWallClockTimestampMs ?: Long.MAX_VALUE` 升序（与 getLapTelemetry 同款排序键，
+     * 接收侧真壁钟域，避免 GPS 协议时钟 mod 3,600,000 跨整点回绕导致的负 duration）。
+     * duration 仅对"起止两 crossing wallClock 均非空"的相邻对计算；任一端 null 的相邻对不计有效圈
+     * （与 getLapTelemetry 对 null wallClock 圈返回 null = "该圈不可读" 收敛）。
+     * **不**承诺 LapRecord.qualityFlags 过滤（crossing 表无该字段；与 Snackbar in-memory 路径计数
+     * 差异由 unify-lap-count-pairing-semantics spec ADDED requirement「Snackbar 实时计数归口为
+     * display-only」normative 锁定为有意保留的设计，非 bug）。
      *
-     * binary 文件不存在 / 为空 → topSpeedKmh = null；crossings 为空 → lapCount = 0 / bestLapMs = null。
+     * binary 文件不存在 / 为空 → topSpeedKmh = null；crossings 为空 → lapCount = 0 / bestLapMs = null；
+     * 全部 accepted SF crossing 的 wallClock 均为 null（§8.3 migration 之前历史 session）→ lapCount = 0。
      * 不抛异常。
      *
      * @author CC
@@ -163,8 +170,13 @@ class TelemetryRepository(
             val crossings = crossingDao.queryBySessionId(sessionId)
             val acceptedSF = crossings
                 .filter { it.gateType.equals("StartFinish", ignoreCase = true) && it.accepted }
-                .sortedBy { it.crossingTimestampMs }
-            val durations = acceptedSF.zipWithNext { a, b -> b.crossingTimestampMs - a.crossingTimestampMs }
+                .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
+            val durations = acceptedSF.zipWithNext { a, b -> a to b }
+                .mapNotNull { (a, b) ->
+                    val sa = a.crossingWallClockTimestampMs
+                    val sb = b.crossingWallClockTimestampMs
+                    if (sa != null && sb != null) sb - sa else null
+                }
             Triple(topSpeed, durations.size, durations.minOrNull())
         }
 

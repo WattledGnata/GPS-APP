@@ -33,6 +33,8 @@ import java.nio.file.Files
  * 3. endSession 派生 lapCount（accepted SF crossing pairs 语义；不读 LapRecord.qualityFlags）
  * 4. endSession 派生 bestLapMs（durations.minOrNull）
  * 5. binary 缺失 fallback null（topSpeedKmh = null，不抛异常）
+ * 6. endSession lapCount 用 crossingWallClockTimestampMs 排序配对（跨时钟域分歧时 MUST 用 wallClock 而非
+ *    GPS 协议时钟；含 null wallClock 的相邻对不计有效圈）—— unify-lap-count-pairing-semantics round
  *
  * @author CC
  * @description endSession derive + persist summary fields tests
@@ -130,6 +132,9 @@ class TelemetryRepositoryEndSessionPersistTest {
         )
 
         // 4 个 accepted StartFinish crossing → durations.size = 3 → lapCount = 3
+        // unify-lap-count-pairing-semantics round：endSession 配对键改 crossingWallClockTimestampMs。
+        // 既有 case MUST 补 wallClock 字段（与 crossingTimestampMs 同序同值），否则改 key 后
+        // wallClock 全 null → lapCount 退化为 0 假绿（R6）。
         listOf(1000L, 2200L, 3300L, 4400L).forEachIndexed { i, ts ->
             repo.writeCrossing(
                 TelemetryCrossingEvent(
@@ -142,6 +147,7 @@ class TelemetryRepositoryEndSessionPersistTest {
                     accepted = true,
                     reason = "Accepted",
                     directionScore = null,
+                    crossingWallClockTimestampMs = ts,
                 )
             )
         }
@@ -157,6 +163,7 @@ class TelemetryRepositoryEndSessionPersistTest {
                 accepted = false,
                 reason = "WrongDirection",
                 directionScore = -1.0,
+                crossingWallClockTimestampMs = 2700L,
             )
         )
         repo.endSession(sessionId)
@@ -173,7 +180,8 @@ class TelemetryRepositoryEndSessionPersistTest {
             trackNameSnapshot = "Test Track",
         )
 
-        // crossings t=1000/2200/3300/4400 → durations [1200, 1100, 1100] → min = 1100
+        // crossings wallClock=1000/2200/3300/4400 → durations [1200, 1100, 1100] → min = 1100
+        // 既有 case 补 wallClock 字段（同 crossingTimestampMs 序值），防 R6 假绿。
         listOf(1000L, 2200L, 3300L, 4400L).forEachIndexed { i, ts ->
             repo.writeCrossing(
                 TelemetryCrossingEvent(
@@ -186,12 +194,93 @@ class TelemetryRepositoryEndSessionPersistTest {
                     accepted = true,
                     reason = "Accepted",
                     directionScore = null,
+                    crossingWallClockTimestampMs = ts,
                 )
             )
         }
         repo.endSession(sessionId)
 
         val entity = requireNotNull(fakeSessionDao.queryBySessionId(sessionId))
+        assertEquals(1100L, requireNotNull(entity.bestLapMs))
+    }
+
+    @Test
+    fun `endSession lapCount uses wallClock ordering not gps clock`() = runTest {
+        val sessionId = repo.startSession(
+            type = TelemetrySessionType.LAP_SESSION,
+            trackId = "test-track",
+            trackNameSnapshot = "Test Track",
+        )
+
+        // 跨时钟域分歧：GPS 协议时钟序 c1<c2<c3，但 wallClock 序 c2<c3<c1。
+        // 若误用 crossingTimestampMs 排序 → durations 来自 (c1,c2),(c2,c3)；
+        // 正确用 wallClock 排序 → durations 来自 (c2,c3),(c3,c1)，min 不同 → 锁死 MUST 用 wallClock。
+        // wallClock 排序后：c2=1700000000100, c3=1700000000200, c1=1700000000300。
+        //   durations = [c3-c2=100, c1-c3=100]，min=100。
+        // 若误用 GPS 序（c1=100, c2=200, c3=300，按 crossingTimestampMs 排序后 wallClock 仍各自取）：
+        //   durations = [c2.wall-c1.wall = 1700000000100-1700000000300 = -200,
+        //                c3.wall-c2.wall = 1700000000200-1700000000100 = 100]，min=-200 ≠ 100。
+        data class C(val gpsTs: Long, val wallTs: Long)
+        listOf(
+            C(gpsTs = 100L, wallTs = 1700000000300L), // c1
+            C(gpsTs = 200L, wallTs = 1700000000100L), // c2
+            C(gpsTs = 300L, wallTs = 1700000000200L), // c3
+        ).forEachIndexed { i, c ->
+            repo.writeCrossing(
+                TelemetryCrossingEvent(
+                    sessionId = sessionId,
+                    lapIndex = i,
+                    crossingTimestampMs = c.gpsTs,
+                    speedKmh = 100.0,
+                    gateId = "sf",
+                    gateType = "StartFinish",
+                    accepted = true,
+                    reason = "Accepted",
+                    directionScore = null,
+                    crossingWallClockTimestampMs = c.wallTs,
+                )
+            )
+        }
+        repo.endSession(sessionId)
+
+        val entity = requireNotNull(fakeSessionDao.queryBySessionId(sessionId))
+        // wallClock 排序 (c2,c3,c1) → durations [100, 100] → lapCount=2, bestLapMs=100。
+        assertEquals(2, entity.lapCount)
+        assertEquals(100L, requireNotNull(entity.bestLapMs))
+    }
+
+    @Test
+    fun `endSession null wallClock pairs not counted`() = runTest {
+        val sessionId = repo.startSession(
+            type = TelemetrySessionType.LAP_SESSION,
+            trackId = "test-track",
+            trackNameSnapshot = "Test Track",
+        )
+
+        // 5 个 accepted SF：前 2 个 wallClock=null（旧 row），后 3 个非空 5000/6100/7200。
+        // wallClock 排序后非空 3 个在前、null 2 个排末尾（?: Long.MAX_VALUE）。
+        // 有效相邻对：(5000,6100),(6100,7200) = 2 对；含 null 端的相邻对不计 → lapCount=2。
+        val wallClocks = listOf<Long?>(null, null, 5000L, 6100L, 7200L)
+        wallClocks.forEachIndexed { i, wc ->
+            repo.writeCrossing(
+                TelemetryCrossingEvent(
+                    sessionId = sessionId,
+                    lapIndex = i,
+                    crossingTimestampMs = (i + 1) * 1000L,
+                    speedKmh = 100.0,
+                    gateId = "sf",
+                    gateType = "StartFinish",
+                    accepted = true,
+                    reason = "Accepted",
+                    directionScore = null,
+                    crossingWallClockTimestampMs = wc,
+                )
+            )
+        }
+        repo.endSession(sessionId)
+
+        val entity = requireNotNull(fakeSessionDao.queryBySessionId(sessionId))
+        assertEquals(2, entity.lapCount)
         assertEquals(1100L, requireNotNull(entity.bestLapMs))
     }
 

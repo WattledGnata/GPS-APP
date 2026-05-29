@@ -571,6 +571,15 @@ class TestSessionViewModel(
 
         telemetryRepository.endSession(sessionId)
 
+        // unify-lap-count-pairing-semantics round（road-test-first 强制埋点）：读回持久化 lapCount
+        // （站点 A，wallClock 配对身份数）与 Snackbar valid 计数（站点 D，qualityFlags 过滤）一并记录，
+        // 真机路测核对两口径差异（有作废圈时 expected 不同）+ 旧 session null wallClock 行为（R3/R5）。
+        val persistedLapCount = telemetryRepository.getSession(sessionId)?.lapCount
+        FileLogger.d(
+            "LapPairing",
+            "finishLap sid=$sessionId snackbarValid=$lapCount persistedLapCount=$persistedLapCount key=wallClock",
+        )
+
         activeLapSessionId = null
         activeLapStartSystemTs = null
         lastWrittenCrossingCount = 0
