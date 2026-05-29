@@ -1,0 +1,35 @@
+estimated_days: 0.3
+actual_days: 0.2        # workflow 子 agent 实现 + 主会话逐 diff review（production correctness 把关）+ 整合
+complexity: "small"     # 7 文件 +562/-31，但 production correctness（圈配对身份），主会话最仔细 review
+review_mode: "road-test-first"  # 2026-05-29 user 授权批次：去 Codex + 去 Opus 子 agent；主会话整合期逐 diff review 作为人工网
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []  # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1: []  # road-test-first 去 Opus 子 agent
+review_findings_l2: []
+divergence_reason: "无；4 个 design Decision 均未偏离"
+phase: "Phase 1"        # 收尾 · 线B（W1 §10.6）
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus
+design_decisions_diverged_during_apply: []  # gate 放宽属 spec 授权的消费方扩展，非 Decision 修订
+cross_round_field_drift_resolved:
+  - "crossingWallClockTimestampMs (fix-lap-crossing-clock-hygiene→unify-lap-count-pairing-semantics)"
+accelerated_escalation: null
+# --- road-test-first 模式落地 ---
+# 把圈配对身份的三站点排序键统一为 crossingWallClockTimestampMs（接收侧真壁钟）：
+#   站点 A endSession（core/data 持久化 lapCount）+ 站点 B deriveDetailMetrics（detail 屏圈列表）
+#   从 GPS 协议时钟 crossingTimestampMs 改为 wallClock（站点 C getLapTelemetry 已是 wallClock，不改）。
+# 主会话 review 核实：站点 C（TelemetryRepository.kt:277 sortedBy crossingWallClockTimestampMs）确认用 wallClock
+#   → A/B 对齐到 C 的逻辑正确（非搞错位）；getSession（line 183）存在，read-back 编译通过。
+# duration 仅对起止 wallClock 均非空的相邻对计算；任一端 null 不计有效圈（与 getLapTelemetry 对 null 圈返回 null 收敛）。
+# 行为变更（透明声明）：§8.3 migration 之前历史 session（crossing 无 wallClock）lapCount 现归 0——
+#   pre-release debug 数据可接受，且三站点一致（detail 屏/getLapTelemetry 同样对这些圈不可读）。
+# v3 #16 跨 round 共享字段 drift：wallClock 字段从写入端扩散到 detail 屏配对消费端 LapSessionDetailScreen，
+#   触发 archived round fix-lap-crossing-clock-hygiene 的 CrossingWallClockEscapeContractTest 逃逸 gate；
+#   判定为 spec 授权的合法消费方扩展（gate 原 KDoc 已预言），inline 把 LapSessionDetailScreen.kt 移入白名单
+#   （保留 ≥50 文件下界 + 写入端 MUST 命中 + 无关 UI 逃逸仍 fail 三层保护），commit message 透明声明。
+# FileLogger（tag=LapPairing）：finishActiveLapSession 记 snackbarValid/persistedLapCount；
+#   LapSessionDetailScreen LaunchedEffect 记 validLaps/wallClockNull——供真机攒批核对「点 Lap N 是否打开正确圈」。
+# 验证：core:data 78 test + feature:test 321 test 整合后 0 fail（新增 LapPairingCrossSiteConsistencyTest +
+#   LapDetailMetricsDeriveTest + TelemetryRepositoryEndSessionPersistTest 扩展，含跨时钟域反例锁死）。
+# 真机：可观测性低（详情屏未做），攒批到 lap-detail-screen-with-cursor round 一并验证 FileLogger LapPairing 日志。
