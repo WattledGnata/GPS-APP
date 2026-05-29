@@ -50,6 +50,43 @@ import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
+/**
+ * 加速测试起步阈值（km/h）：speed 低于此值时进度条进入 "WAITING FOR LAUNCH" 文案态。
+ * 3.0 选值理由：高于 GPS 静止噪声（0-2 km/h）+ 低于真起步初速（车踩油门 200-300ms 内跨过）。
+ * 调整：直接改本常量，无 settings UI / 兼容风险。详 design.md Decision 1。
+ */
+internal const val LAUNCH_SPEED_THRESHOLD_KMH = 3.0
+
+internal data class ProgressState(val progress: Float, val waitingForLaunch: Boolean)
+
+/**
+ * 从 testState / currentMode / speed 派生 progress + waitingForLaunch。
+ * 纯函数，无 Compose / ViewModel 依赖；JUnit4 单测覆盖关键边界见 TrackTechTestExecutionProgressTest。
+ */
+internal fun computeProgressState(
+    testState: TestState,
+    currentMode: TestMode,
+    speed: Double,
+    launchThresholdKmh: Double = LAUNCH_SPEED_THRESHOLD_KMH,
+): ProgressState {
+    val progress: Float = when (val s = testState) {
+        is TestState.Running -> when (currentMode) {
+            TestMode.Acceleration -> (speed / 100.0).toFloat().coerceIn(0f, 1f)
+            TestMode.Braking -> {
+                val start = s.session.dataPoints.firstOrNull()?.speed ?: 100.0
+                ((start - speed) / start.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f)
+            }
+            else -> 0f
+        }
+        is TestState.Completed -> 1f
+        else -> 0f
+    }
+    val waitingForLaunch = testState is TestState.Running &&
+        currentMode == TestMode.Acceleration &&
+        speed < launchThresholdKmh
+    return ProgressState(progress, waitingForLaunch)
+}
+
 @Composable
 fun TrackTechTestExecutionScreen(
     navController: NavController,
@@ -71,18 +108,8 @@ fun TrackTechTestExecutionScreen(
         is TestState.Completed -> s.result.totalTime
         else -> 0.0
     }
-    val progress: Float = when (val s = testState) {
-        is TestState.Running -> when (currentMode) {
-            TestMode.Acceleration -> (speed / 100.0).toFloat().coerceIn(0f, 1f)
-            TestMode.Braking -> {
-                val start = s.session.dataPoints.firstOrNull()?.speed ?: 100.0
-                ((start - speed) / start.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f)
-            }
-            else -> 0f
-        }
-        is TestState.Completed -> 1f
-        else -> 0f
-    }
+    val progressState = computeProgressState(testState, currentMode, speed)
+    val progress = progressState.progress
 
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT || dataQuality.overall == QualityLevel.GOOD
     val qualityLabel = when (dataQuality.overall) {
@@ -152,6 +179,7 @@ fun TrackTechTestExecutionScreen(
             progress = progress,
             currentMode = currentMode,
             displayPct = (progress * 100).toInt(),
+            waitingForLaunch = progressState.waitingForLaunch,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -471,8 +499,10 @@ private fun ProgressPanel(
     progress: Float,
     currentMode: TestMode,
     displayPct: Int,
+    waitingForLaunch: Boolean = false,
 ) {
     val targetLabel = if (currentMode == TestMode.Acceleration) "TO 100 km/h" else "TO 0 km/h"
+    val fillFraction = if (waitingForLaunch) 0f else progress.coerceIn(0f, 1f)
 
     Box(
         modifier = Modifier
@@ -492,7 +522,7 @@ private fun ProgressPanel(
         Box(
             modifier = Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(fraction = progress.coerceIn(0f, 1f)),
+                .fillMaxWidth(fraction = fillFraction),
         ) {
             Box(
                 modifier = Modifier
@@ -537,13 +567,23 @@ private fun ProgressPanel(
                 overflow = TextOverflow.Ellipsis,
             )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "$displayPct%",
-                    style = TrackTechTypography.RacingTitleMedium,
-                    color = TrackTechColors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (waitingForLaunch) {
+                    Text(
+                        text = "WAITING FOR LAUNCH",
+                        style = TrackTechTypography.UiTextLabel,
+                        color = TrackTechColors.Cyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        text = "$displayPct%",
+                        style = TrackTechTypography.RacingTitleMedium,
+                        color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
                     text = targetLabel,
                     style = TrackTechTypography.UiTextSmall,
