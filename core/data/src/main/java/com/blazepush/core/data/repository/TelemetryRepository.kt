@@ -277,6 +277,13 @@ class TelemetryRepository(
      * crossing wallClock=null → null（MUST NOT fallback 到 crossingTimestampMs）；
      * lapIndex 越界 → null；binary 缺失/空 → null（不抛异常）。
      *
+     * sectorBoundaries 派生语义（future-sector-derivation round）：
+     * 从 lap 窗口 [lapStartWallClock, lapEndWallClock) 内 accepted Sector 过线的
+     * crossingWallClockTimestampMs 升序前置 lapStartWallClock 组成；窗口内 == lapStart 的
+     * 退化项去重；无 accepted/非空 wallClock 的 sector 过线时回退单段 listOf(lapStartWallClock)。
+     * 窗口判定与取值统一用 wallClock（与 lapStart/lapEnd/binary absoluteTsMs 同时钟域），
+     * MUST NOT 用 crossingTimestampMs（GPS 协议时钟）做 sector 窗口判定/取值。
+     *
      * @author CC
      * @description single-lap complete telemetry slice reader
      * @date 2026-05-04
@@ -307,6 +314,19 @@ class TelemetryRepository(
                 flags = sample.flags,
             )
         }
+        // sectorBoundaries 派生（future-sector-derivation round）：复用上方已读 crossings，
+        // 取 lap 窗口 [lapStartWallClock, lapEndWallClock) 内 accepted Sector 过线 wallClock，
+        // 升序前置 lapStart 组成多段；空集回退单段（不回归 baseline 单段行为）。
+        val sectorWallClocks = crossings
+            .filter {
+                it.gateType.equals("Sector", ignoreCase = true) &&
+                    it.accepted &&
+                    it.crossingWallClockTimestampMs != null
+            }
+            .mapNotNull { it.crossingWallClockTimestampMs }
+            .filter { it >= lapStartWallClock && it < lapEndWallClock && it != lapStartWallClock }
+            .sorted()
+        val sectorBoundaries = listOf(lapStartWallClock) + sectorWallClocks
         return LapTelemetry(
             sessionId = sessionId,
             lapIndex = lapIndex,
@@ -314,7 +334,7 @@ class TelemetryRepository(
             lapEndWallClock = lapEndWallClock,
             lapDurationMs = lapEndWallClock - lapStartWallClock,
             samples = samples,
-            sectorBoundaries = listOf(lapStartWallClock),
+            sectorBoundaries = sectorBoundaries,
             trackId = entity.trackId,
             trackNameSnapshot = entity.trackNameSnapshot,
         )

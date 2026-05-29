@@ -31,6 +31,9 @@ import java.nio.file.Files
  * lap-data-readers round: getLapTelemetry + getDataPointsForResult reader API。
  * 11 cases (A-J + L) 覆盖 spec Requirement 1-5；case L 由 unify-perftest-anchor-cross-clock round
  * 追加（getDataPointsForResult sentinel entity.timestamp 跨时钟域 guard）。
+ * cases M-R 由 future-sector-derivation round 追加，覆盖 sectorBoundaries 派生契约：
+ *   M 多段派生 / N 无 sector 回退单段 / O 窗口外 sector 排除（反例）/ P rejected+null-wallClock 排除 /
+ *   Q sector wallClock 恰等 lapStart 去重 / R 跨时钟域 guard（MUST 用 wallClock 不用 GPS 协议钟，反例）。
  */
 class LapTelemetryReadersTest {
 
@@ -64,8 +67,15 @@ class LapTelemetryReadersTest {
     private fun lapSample(tsDeltaMs: Long, speedKmh: Double = 50.0, flags: Int = 0) =
         TelemetrySample(tsDeltaMs = tsDeltaMs, lat = 39.9042, lon = 116.4074, speedKmh = speedKmh, bearingDeg = 90.0, flags = flags)
 
-    private fun crossingEvent(sessionId: String, crossingWallClock: Long? = null, crossingTs: Long = 0L, accepted: Boolean = true) =
-        TelemetryCrossingEvent(sessionId = sessionId, lapIndex = 0, crossingTimestampMs = crossingTs, speedKmh = 100.0, gateId = "SF", gateType = "StartFinish", accepted = accepted, reason = "", directionScore = 1.0, crossingWallClockTimestampMs = crossingWallClock)
+    private fun crossingEvent(
+        sessionId: String,
+        crossingWallClock: Long? = null,
+        crossingTs: Long = 0L,
+        accepted: Boolean = true,
+        gateType: String = "StartFinish",
+        gateId: String = if (gateType.equals("Sector", ignoreCase = true)) "S" else "SF",
+    ) =
+        TelemetryCrossingEvent(sessionId = sessionId, lapIndex = 0, crossingTimestampMs = crossingTs, speedKmh = 100.0, gateId = gateId, gateType = gateType, accepted = accepted, reason = "", directionScore = 1.0, crossingWallClockTimestampMs = crossingWallClock)
 
     // --- case A ---
     @Test
@@ -216,6 +226,135 @@ class LapTelemetryReadersTest {
             dataFilePath = entity.binaryFilePath))
         val r = testResultRepo.getDataPointsForResult("t-sentinel")
         assertNull("sentinel entity.timestamp MUST 返回 null（即便 binary 完全可读）", r)
+    }
+
+    // --- case M：多 sector 派生多元素 sectorBoundaries（future-sector-derivation round）---
+    // 窗口 [wb, wb+2000)；2 个 accepted Sector wallClock = wb+500 / wb+1200 落窗口内。
+    @Test
+    fun `case M - multi sector derives multi-element sectorBoundaries`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        // binary samples 覆盖窗口 [wb, wb+2000] → tsDeltaMs in [1000, 3000]。
+        repeat(100) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        // 2 个 accepted StartFinish 配对出 lapIndex=0 窗口 [wb, wb+2000]。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        // 2 个 accepted Sector 落窗口内。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 500, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 1200, gateType = "Sector"))
+        val r = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r); r!!
+        assertEquals(listOf(wb, wb + 500, wb + 1200), r.sectorBoundaries)
+        assertEquals(wb, r.sectorBoundaries.first())
+        assertEquals(3, r.sectorBoundaries.size)
+    }
+
+    // --- case N：无 sector 回退单段（不回归 baseline）---
+    @Test
+    fun `case N - no sector falls back to single element`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        repeat(100) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        // 无任何 Sector crossing。
+        val r = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r); r!!
+        assertEquals(listOf(wb), r.sectorBoundaries)
+    }
+
+    // --- case O：窗口外 sector 排除（反例锁死窗口过滤）---
+    // 圈0 窗口 [wb, wb+2000)；圈1 窗口 [wb+2000, wb+4000)。
+    @Test
+    fun `case O - out of window sector excluded`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        // binary 覆盖两圈窗口 → tsDeltaMs in [1000, 5000]。
+        repeat(150) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        // 3 个 accepted SF → lapIndex=0 [wb, wb+2000]，lapIndex=1 [wb+2000, wb+4000]。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 4000))
+        // 2 个 sector 落圈0 / 2 个落圈1。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 500, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 1200, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2500, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 3300, gateType = "Sector"))
+        val r0 = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r0); r0!!
+        assertEquals(listOf(wb, wb + 500, wb + 1200), r0.sectorBoundaries)
+        // 圈1 的 sector MUST NOT 混入圈0。
+        assertTrue(!r0.sectorBoundaries.contains(wb + 2500))
+        assertTrue(!r0.sectorBoundaries.contains(wb + 3300))
+        val r1 = repo.getLapTelemetry(sessionId, 1)
+        assertNotNull(r1); r1!!
+        assertEquals(listOf(wb + 2000, wb + 2500, wb + 3300), r1.sectorBoundaries)
+    }
+
+    // --- case P：rejected 与 null-wallClock sector 排除 ---
+    @Test
+    fun `case P - rejected and null-wallClock sector excluded`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        repeat(100) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        // (a) accepted + wallClock 有效；(b) accepted=false；(c) wallClock=null。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 500, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 800, gateType = "Sector", accepted = false))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = null, gateType = "Sector"))
+        val r = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r); r!!
+        assertEquals(listOf(wb, wb + 500), r.sectorBoundaries)
+    }
+
+    // --- case Q：sector wallClock 恰等于 lapStart 去重 ---
+    @Test
+    fun `case Q - sector wallClock equal to lapStart deduped`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        repeat(100) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        // 1 个 sector wallClock == lapStart（退化）/ 1 个正常。
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb, gateType = "Sector"))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 1200, gateType = "Sector"))
+        val r = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r); r!!
+        assertEquals(listOf(wb, wb + 1200), r.sectorBoundaries)
+        // 无重复相邻 == 项（首项不重复）。
+        assertEquals(2, r.sectorBoundaries.size)
+    }
+
+    // --- case R：跨时钟域 guard——用 wallClock 不用 GPS 协议时钟 ---
+    // sector 的 crossingWallClockTimestampMs 落窗口内，但 crossingTimestampMs（GPS 协议钟）落窗口外。
+    @Test
+    fun `case R - clock domain guard uses wallClock not gps clock`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        val wb = entity.startTs + 1000L
+        repeat(100) { repo.writeSample(lapSample(it * 40L)) }
+        repo.flush()
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb))
+        repo.writeCrossing(crossingEvent(sessionId, crossingWallClock = wb + 2000))
+        // sector wallClock=wb+700 在窗口内；crossingTs=99_999_999（GPS 协议钟）落窗口外。
+        // 若实现误用 crossingTimestampMs 判窗口 → 该 sector 被错排除 → sectorBoundaries 退化 [wb] → fail。
+        repo.writeCrossing(
+            crossingEvent(sessionId, crossingWallClock = wb + 700, crossingTs = 99_999_999L, gateType = "Sector")
+        )
+        val r = repo.getLapTelemetry(sessionId, 0)
+        assertNotNull(r); r!!
+        assertEquals(listOf(wb, wb + 700), r.sectorBoundaries)
     }
 
     // --- Fake DAOs ---
