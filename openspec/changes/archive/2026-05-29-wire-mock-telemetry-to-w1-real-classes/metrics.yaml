@@ -1,0 +1,26 @@
+estimated_days: 0.2
+actual_days: 0.1        # workflow 子 agent 实现（未返回结构化结果）+ 主会话核实/补 commit/整合
+complexity: "small"     # 纯测试侧（1 helper 文件 MockTelemetry.kt +21/-21），零生产代码改动
+review_mode: "road-test-first"  # 2026-05-29 user 授权批次：去 Codex + 去 Opus 子 agent
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []  # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1: []  # road-test-first 去 Opus 子 agent
+review_findings_l2: []
+divergence_reason: "无"
+phase: "Phase 1"        # 收尾 · 线B（W2 round follow-up）
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus（agent 未返回 StructuredOutput，改动已完整，主会话核实字段匹配真实类后补 commit）
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []  # 本 round 消费真实 LapTelemetry，不扩展任何共享 entity 字段
+accelerated_escalation: null
+# --- road-test-first 模式落地 ---
+# 按 W2 round 注释收尾：删 test-only 占位 FakeLapTelemetry，mockSingleLap/mockMultiLap 返回类型切到正式
+# com.blazepush.core.domain.model.LapTelemetry，补全 9 字段（sessionId/lapIndex/lapStartWallClock/
+# lapEndWallClock/lapDurationMs/samples/sectorBoundaries/trackId/trackNameSnapshot，与真实容器逐字段核对一致）。
+# 验证 4 个 chart/map 组件（SpeedTimeChart/AccelTimeChart/SectorBar/TrackPolylineMap）能直接消费 getLapTelemetry
+# 真实输出形态。FileLogger：纯测试侧无运行时路径，无需埋点。
+# 验证：ui.components 5 个 contract test 全绿；feature:test 整合后 321 test 0 fail。真机 SKIP（test source set，无 UI/运行时行为改动）。
+# 注记：workflow 实现 agent 未返回 StructuredOutput（pipeline[0] null），但 MockTelemetry.kt 改动已完整且正确，
+#   主会话核对真实 LapTelemetry 字段后补 commit（fd805aa→rebase a6ca70c）。
+# W2 归档 tasks.md follow-up「wire-mock-telemetry-to-w1-real-classes」disposition：done（本 round 即其 follow-up）。
