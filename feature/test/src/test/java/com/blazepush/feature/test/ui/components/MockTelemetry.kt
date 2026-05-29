@@ -1,29 +1,18 @@
 package com.blazepush.feature.test.ui.components
 
+import com.blazepush.core.domain.model.LapTelemetry
 import com.blazepush.core.domain.model.LapTelemetrySample
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-/**
- * test-only LapTelemetry container. W1 round 合回后 follow-up round
- * `wire-mock-telemetry-to-w1-real-classes` 切换到正式 LapTelemetry 类型。
- * 当前在 `feature/test/src/test/` source set，生产 APK 不包含此类型。
- */
-internal data class FakeLapTelemetry(
-    val samples: List<LapTelemetrySample>,
-    val sectorBoundaries: List<Long>,
-    val lapStartWallClock: Long,
-    val lapEndWallClock: Long,
-)
-
 private const val BASE_WALL_CLOCK = 1_700_000_000_000L
 private const val CENTER_LAT = 31.0
 private const val CENTER_LON = 121.0
 private const val RADIUS = 0.005
 
-internal fun mockSingleLap(n: Int = 100, lapDurationMs: Long = 60_000): FakeLapTelemetry {
+internal fun mockSingleLap(n: Int = 100, lapDurationMs: Long = 60_000): LapTelemetry {
     val lapStart = BASE_WALL_CLOCK
     val lapEnd = lapStart + lapDurationMs
 
@@ -64,27 +53,38 @@ internal fun mockSingleLap(n: Int = 100, lapDurationMs: Long = 60_000): FakeLapT
     val sectorDuration = lapDurationMs / 3
     val sectorBoundaries = listOf(lapStart, lapStart + sectorDuration, lapStart + sectorDuration * 2)
 
-    return FakeLapTelemetry(
-        samples = samples,
-        sectorBoundaries = sectorBoundaries,
+    return LapTelemetry(
+        sessionId = "mock-session",
+        lapIndex = 0,
         lapStartWallClock = lapStart,
         lapEndWallClock = lapEnd,
+        lapDurationMs = lapDurationMs,
+        samples = samples,
+        sectorBoundaries = sectorBoundaries,
+        trackId = null,
+        trackNameSnapshot = null,
     )
 }
 
-internal fun mockMultiLap(n: Int = 3): List<FakeLapTelemetry> {
+internal fun mockMultiLap(n: Int = 3): List<LapTelemetry> {
     val durations = listOf(60_000L, 62_000L, 58_000L).take(n)
     var currentStart = BASE_WALL_CLOCK
-    return durations.map { duration ->
+    return durations.mapIndexed { index, duration ->
         val lap = mockSingleLap(n = 100, lapDurationMs = duration).let {
             val offset = currentStart - it.lapStartWallClock
-            FakeLapTelemetry(
+            // 从头重建容器：lapIndex/lapDurationMs 必须显式赋值（不依赖 it 的恒 0 lapIndex）
+            LapTelemetry(
+                sessionId = "mock-session",
+                lapIndex = index,
+                lapStartWallClock = currentStart,
+                lapEndWallClock = currentStart + duration,
+                lapDurationMs = duration,
                 samples = it.samples.map { s ->
                     s.copy(absoluteTsMs = s.absoluteTsMs + offset)
                 },
                 sectorBoundaries = it.sectorBoundaries.map { b -> b + offset },
-                lapStartWallClock = currentStart,
-                lapEndWallClock = currentStart + duration,
+                trackId = null,
+                trackNameSnapshot = null,
             )
         }
         currentStart = lap.lapEndWallClock + 1000L
