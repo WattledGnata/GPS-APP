@@ -29,7 +29,8 @@ import java.nio.file.Files
 
 /**
  * lap-data-readers round: getLapTelemetry + getDataPointsForResult reader API。
- * 10 cases (A-J) 覆盖 spec Requirement 1-5。
+ * 11 cases (A-J + L) 覆盖 spec Requirement 1-5；case L 由 unify-perftest-anchor-cross-clock round
+ * 追加（getDataPointsForResult sentinel entity.timestamp 跨时钟域 guard）。
  */
 class LapTelemetryReadersTest {
 
@@ -195,6 +196,26 @@ class LapTelemetryReadersTest {
         assertEquals("gate-C: 0 production refs to TestResult series", 0, trSrc.lines().filter { !it.trimStart().startsWith("*") && gateC.containsMatchIn(it) }.count())
         val trrSrc = File(root, "core/data/src/main/java/com/blazepush/core/data/repository/TestResultRepository.kt").readText()
         assertEquals("gate-D: only readPerformanceSamples", 0, Regex("""telemetryRepository\.(?!readPerformanceSamples\b)\w+""").findAll(trrSrc).count())
+    }
+
+    // --- case L：sentinel entity.timestamp 返回 null（unify-perftest-anchor-cross-clock round）---
+    @Test
+    fun `case L - getDataPointsForResult sentinel entity timestamp returns null`() = runTest {
+        // binary 文件完全合法（100 帧），仅 entity.timestamp = Long.MIN_VALUE（GPS 未同步 sentinel）。
+        // 没有 sentinel guard 时：readPerformanceSamples 读出 100 帧 → 返回非 null PerformanceTelemetry
+        //   （absoluteTsMs = Long.MIN_VALUE + tsDeltaMs，catastrophic）。
+        // 有 guard 时：在 readPerformanceSamples 调用之前返回 null。assertNull 即证明 guard 生效。
+        val sessionId = repo.startSession(TelemetrySessionType.PERFORMANCE_TEST)
+        val entity = fakeSessionDao.queryBySessionId(sessionId)!!
+        repeat(100) { repo.writeSample(lapSample(it * 40L, speedKmh = 80.0 + it, flags = 7)) }
+        repo.flush(); repo.endSession(sessionId)
+        fakeTestRecordDao.insertTestRecord(TestRecordEntity(
+            id = "t-sentinel", testTemplateId = "Acceleration0To100", testType = "0-100", carModel = "Test",
+            deviceName = "GPS", deviceAddress = "", result = "4.21", timestamp = Long.MIN_VALUE,
+            totalTime = 4.21, totalDistance = 100.0, avgAcceleration = 0.5, maxAcceleration = 0.8,
+            dataFilePath = entity.binaryFilePath))
+        val r = testResultRepo.getDataPointsForResult("t-sentinel")
+        assertNull("sentinel entity.timestamp MUST 返回 null（即便 binary 完全可读）", r)
     }
 
     // --- Fake DAOs ---

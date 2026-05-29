@@ -143,6 +143,12 @@ class TestResultRepository(
     suspend fun getDataPointsForResult(testId: String): PerformanceTelemetry? {
         val entity = testRecordDao.getTestRecordById(testId) ?: return null
         if (entity.dataFilePath.isEmpty()) return null
+        // sentinel guard：entity.timestamp 是 GPS 协议时间（RaceChronoParser 未同步时写 Long.MIN_VALUE）。
+        // 若为 sentinel，absoluteTsMs = testStartWallClock + tsDeltaMs ≈ Long.MIN_VALUE，chart 时间轴崩塌。
+        // writer 侧 trigger guard（satellites>=6 + hdop<2.0）已阻断 sentinel 进 binary；本行是 reader 侧
+        // defensive 第二道防线（防 future trigger guard 回归），MUST 在 readPerformanceSamples 调用之前。
+        // 详 spec lap-telemetry-readers Requirement 2 invariant 三条款 / unify-perftest-anchor-cross-clock round。
+        if (entity.timestamp == Long.MIN_VALUE) return null
         val rawSamples = withContext(Dispatchers.IO) {
             runCatching { telemetryRepository.readPerformanceSamples(entity.dataFilePath) }
                 .getOrDefault(emptyList())
