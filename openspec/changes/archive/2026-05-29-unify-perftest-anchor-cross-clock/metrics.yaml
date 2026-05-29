@@ -1,0 +1,20 @@
+estimated_days: 0.1        # ~1.5h per deferred memo §9
+actual_days: 0.1           # guard + spec + case L 本身 ~30min；gradle 8.7 下载停滞绕行另耗时（见 divergence_reason）
+complexity: "trivial"      # < 50 行 + 单 module (core/data) + 无 schema 改；1 行 guard + 1 spec normative + 1 test case
+review_mode: "accelerated" # small/trivial 加速通道（CLAUDE.md 2026-05-29）
+review_rounds_l1: 0        # 加速通道：0 Opus 子 agent
+review_rounds_l2: 0        # 加速通道：0 Opus 子 agent
+codex_l1_findings: []      # user 拍板跳过 Codex L1（CC 主会话自审 0 P0/P1）
+codex_l2_findings: []      # user 拍板跳过 Codex L2（trivial defensive guard + 全套测试全绿）
+review_findings_l1: []     # accelerated 模式无 Opus 子 agent
+review_findings_l2: []     # accelerated 模式无 Opus 子 agent
+divergence_reason: "gradle 8.7-bin 首次下载停滞（PID stalled / lock 占用），worktree + 主区均临时切 gradle-8.9-all（已下好）跑测试，跑完 revert wrapper；与本 round 逻辑无关，纯 build infra 绕行"
+phase: "Phase 1"           # Tier1.5（W4 归档之后、Tier2 lap-detail-screen-with-cursor 之前）
+model_apply: "opus"        # CC 主会话 Opus 直跑（trivial scope，未委托 Sonnet 子 agent）
+design_decisions_diverged_during_apply: []  # 无 design Decision drift。apply 期 1 处 spec normative drift（case L verify 机制：原 mockk verify(exactly=0) → 改真 fake + 有效 binary assertNull）属 spec drift 非 design drift，inline 修订 spec scenario + tasks，#17 caveat 透明声明
+cross_round_field_drift_resolved: []  # 无跨 round 共享字段 drift
+accelerated_escalation: null  # 未升级。NOTE：本 round 是 W1 L2 review 派生的 follow-up round，按 CLAUDE.md 加速通道强制升级第 5 条（派生 follow-up round）字面应升 medium；user 拍板保留 trivial 加速通道，理由：设计层风险已在 deferred memo docs/design/lap-perftest-anchor-cross-clock-deferred.md §3-4 做完 medium 级分析（3 alternatives + 数学误差范围 + MUST 条款），本 round 仅机械实施方案 A
+# --- 加速通道漏检 SLA 跟踪（首个加速通道 round，2026-05-29）---
+# 本 round + improve-test-execution-progress-bar 是加速通道前 2 个 round；
+# 每 5 个加速通道 round 回看一次"apply 期 / Codex 发现的 P0/P1 是否本可在 L1 加速通道自审时找到"。
+# 本 round apply 期自查发现 2 条（worktree 环境性 fail 定性 + spec verify 机制 drift），均非设计层 P0/P1，加速通道判定有效。
