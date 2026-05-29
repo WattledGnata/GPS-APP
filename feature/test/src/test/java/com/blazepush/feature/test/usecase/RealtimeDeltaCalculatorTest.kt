@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.feature.test.model.laptiming.GpsSample
@@ -48,7 +49,6 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = ref.elapsedMs[50],
             currentX = ref.xs[50],
             currentY = ref.ys[50],
-            prevMatchedIdx = 49,
         )
         val p = requireNotNull(proj)
         assertTrue("expected |delta| ≤ 5ms, got ${p.deltaMs}", abs(p.deltaMs) <= 5)
@@ -62,7 +62,6 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = ref.elapsedMs[50] + 1000,
             currentX = ref.xs[50],
             currentY = ref.ys[50],
-            prevMatchedIdx = 49,
         )
         val p = requireNotNull(proj)
         assertTrue("expected delta ≈ +1000ms, got ${p.deltaMs}", abs(p.deltaMs - 1000) <= 5)
@@ -76,7 +75,6 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = ref.elapsedMs[50] - 1000,
             currentX = ref.xs[50],
             currentY = ref.ys[50],
-            prevMatchedIdx = 49,
         )
         val p = requireNotNull(proj)
         assertTrue("expected delta ≈ -1000ms, got ${p.deltaMs}", abs(p.deltaMs - (-1000)) <= 5)
@@ -92,34 +90,31 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = ref.elapsedMs[50],
             currentX = curX,
             currentY = curY,
-            prevMatchedIdx = 49,
         )
         assertNull(proj)
     }
 
     @Test
-    fun `prevMatchedIdx negative one searches from start without crash`() {
+    fun `stateless search finds segment near start without crash`() {
         val ref = makeStraightReference()
         val proj = projectDelta(
             reference = ref,
             currentLapElapsedMs = ref.elapsedMs[5],
             currentX = ref.xs[5],
             currentY = ref.ys[5],
-            prevMatchedIdx = -1,
         )
         val p = requireNotNull(proj)
-        assertTrue("matched in [0, 200] window", p.matchedIdx in 0..199)
+        assertTrue("matched near start in [0, 10]", p.matchedIdx in 0..10)
     }
 
     @Test
-    fun `prevMatchedIdx near end does not throw IOOB`() {
+    fun `stateless search handles point near end without IOOB`() {
         val ref = makeStraightReference()
         val proj = projectDelta(
             reference = ref,
             currentLapElapsedMs = ref.elapsedMs[ref.xs.size - 1],
             currentX = ref.xs[ref.xs.size - 1],
             currentY = ref.ys[ref.xs.size - 1],
-            prevMatchedIdx = ref.xs.size - 1,
         )
         assertNotNull(proj)
     }
@@ -141,7 +136,6 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = 100,
             currentX = 0f,
             currentY = 0f,
-            prevMatchedIdx = -1,
         )
         assertNull(proj)
     }
@@ -174,11 +168,123 @@ class RealtimeDeltaCalculatorTest {
             currentLapElapsedMs = 40, // 与 bestElapsed 中点 = 40 同步
             currentX = midX,
             currentY = midY,
-            prevMatchedIdx = 0,
         )
         val p = requireNotNull(proj)
         // bestElapsed 应在 [0, 80] 中点 ≈ 40，delta ≈ 0
         assertTrue("midpoint delta should be ~0, got ${p.deltaMs}", abs(p.deltaMs) <= 5)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 4 边界 case（Alt B 核心反例锁死）
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * case: lap 切换瞬间不再 -lapDuration
+     *
+     * 构造 10 点 reference（elapsedMs 0..9000），当前点在 reference 起点附近（idx 0），
+     * currentLapElapsedMs ≈ 0（新 lap 刚开圈）。
+     * Alt A 若 prevMatchedIdx 卡末段会返回 ≈ -9000；Alt B 全量扫一定找 idx 0 附近。
+     */
+    @Test
+    fun `lap switch instant - no minus lapDuration regression`() {
+        val lapDurationMs = 9000L
+        val samples = (0 until 10).map { i ->
+            GpsSample(
+                timestampMillis = 1000L + i * 1000L,
+                latitude = 30.0 + i * 0.0001,
+                longitude = 120.0,
+            )
+        }
+        val ref = requireNotNull(
+            buildReferenceLapIndex(
+                LapRecord(
+                    recordId = "lap-switch",
+                    sessionId = "s",
+                    trackId = "t",
+                    lapIndex = 0,
+                    startedAtMillis = 1000L,
+                    finishedAtMillis = 1000L + lapDurationMs,
+                    durationMillis = lapDurationMs,
+                    trajectory = samples,
+                ),
+            ),
+        )
+        // 新圈刚开始 50ms，物理位置在 reference 起点（idx 0）
+        val proj = projectDelta(
+            reference = ref,
+            currentLapElapsedMs = 50L,
+            currentX = ref.xs[0],
+            currentY = ref.ys[0],
+        )
+        val p = requireNotNull(proj)
+        // deltaMs 应 ≈ +50（在起点附近 bestElapsed ≈ 0），绝对不是 ≈ -9000
+        assertTrue(
+            "lap switch: deltaMs must be near 0, not -lapDuration; got ${p.deltaMs}",
+            abs(p.deltaMs) < 1000L,
+        )
+        assertTrue(
+            "lap switch: matchedIdx MUST be near start (≤ 2), not stuck at end; got ${p.matchedIdx}",
+            p.matchedIdx <= 2,
+        )
+    }
+
+    /**
+     * case: 全量扫描找全局最近——当前点在末段附近，matchedIdx 应接近 size-2
+     */
+    @Test
+    fun `stateless scan finds globally nearest segment near end`() {
+        val ref = makeStraightReference()
+        val lastIdx = ref.xs.size - 1
+        val proj = projectDelta(
+            reference = ref,
+            currentLapElapsedMs = ref.elapsedMs[lastIdx],
+            currentX = ref.xs[lastIdx],
+            currentY = ref.ys[lastIdx],
+        )
+        val p = requireNotNull(proj)
+        // 全量扫描应找到末段附近（size-2 = 98），不被起点卡住
+        assertTrue(
+            "end-of-lap: matchedIdx should be near end (≥ 90), got ${p.matchedIdx}",
+            p.matchedIdx >= 90,
+        )
+    }
+
+    /**
+     * case: off-track 失效返回 null
+     *
+     * 当前点距 reference 所有 segment > failoverDistanceM(50m)，断言返回 null。
+     */
+    @Test
+    fun `off-track beyond failover returns null`() {
+        val ref = makeStraightReference()
+        // 偏移到 lon=120.001（≈ 96m，远超 50m）
+        val (offX, offY) = ref.toLocalMeters(30.005, 120.001)
+        val proj = projectDelta(
+            reference = ref,
+            currentLapElapsedMs = 2000L,
+            currentX = offX,
+            currentY = offY,
+        )
+        assertNull("off-track >50m should return null", proj)
+    }
+
+    /**
+     * case: track 切换（完全不同坐标）返回 null
+     *
+     * 当前点坐标偏移 +10000m（约 0.09° lat），远超 50m failover 阈值。
+     */
+    @Test
+    fun `track switch - completely different coordinate returns null`() {
+        val ref = makeStraightReference()
+        // +0.09° lat ≈ 10_000m，远超 50m 阈值
+        val (offX, offY) = ref.toLocalMeters(30.0 + 0.09, 120.0)
+        val proj = projectDelta(
+            reference = ref,
+            currentLapElapsedMs = 500L,
+            currentX = offX,
+            currentY = offY,
+        )
+        assertNull("track switch: completely different coord should return null (failover)", proj)
     }
 
     private fun assertTrue(message: String, condition: Boolean) {

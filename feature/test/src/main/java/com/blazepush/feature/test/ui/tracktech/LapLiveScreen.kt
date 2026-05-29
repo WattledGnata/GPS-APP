@@ -197,11 +197,11 @@ private fun Lap2x2Dashboard(
     state: LapLiveState,
     modifier: Modifier = Modifier,
 ) {
-    val deltaText = formatDelta(state.deltaToBestMs)
+    // round redesign-realtime-delta-projection-search：stale 时显示 `--` 占位，不显示不可信数值。
+    // Alt B 全量扫描成功路径永远可信；stale 只发生在真正脱离 reference（>50m）时，此时维持旧值会误导。
+    val deltaText = if (state.deltaIsStale || state.deltaToBestMs == null) "--" else formatDelta(state.deltaToBestMs)
     val deltaAccent = when {
         state.deltaToBestMs == null -> TrackTechColors.TextMuted
-        // round add-realtime-lap-delta：stale 时（连续失效 ≥ 5 帧 / 1 秒）字色降级，
-        // 数字仍显示上一帧 prevDeltaMs，但用户立刻看到"灰了 → 不可信"。
         state.deltaIsStale -> TrackTechColors.TextMuted
         state.deltaToBestMs < 0 -> TrackTechColors.Green
         state.deltaToBestMs > 0 -> TrackTechColors.Red

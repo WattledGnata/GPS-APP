@@ -83,13 +83,13 @@ data class LapSessionSaveResult(
 )
 
 /**
- * 实时秒差跨帧状态聚合体。round add-realtime-lap-delta 引入：
+ * 实时秒差跨帧状态聚合体。round redesign-realtime-delta-projection-search 重设计（Alt B stateless）：
  * - reference：当前 best 圈预计算索引；null = 无 best（首圈进行中）
- * - prevMatchedIdx：上一帧 polyline 投影命中 segment 起点 idx；-1 = 还未成功匹配过
  * - prevDeltaMs：上一帧成功投影的 delta；失效时 UI 维持显示这个值
  * - staleFrameCount：连续失效帧计数；累计 ≥ STALE_FRAME_THRESHOLD 时进 stale
  * - outDeltaMs / outIsStale：本帧的最终 LapLiveState 输出值（在 update 同事务内派生，避免 race）
  *
+ * prevMatchedIdx 已删除（Alt B 全量扫描不需要跨帧 cache，根除连续性假设是本 round 核心目标）。
  * 所有字段每帧 GPS data 来到时通过 [_realtimeDeltaState.value] atomic 替换更新；
  * Deriver 通过订阅本 StateFlow 直接读 outDeltaMs / outIsStale 两个标量。
  *
@@ -99,7 +99,6 @@ data class LapSessionSaveResult(
  */
 internal data class RealtimeDeltaState(
     val reference: ReferenceLapIndex?,
-    val prevMatchedIdx: Int = -1,
     val prevDeltaMs: Long? = null,
     val staleFrameCount: Int = 0,
     val outDeltaMs: Long? = null,
@@ -396,21 +395,22 @@ class TestSessionViewModel(
         if (!shouldRebuild) return
 
         val newRef = buildReferenceLapIndex(newBest) ?: return
+        FileLogger.d(TAG, "RTDelta ref rebuilt: frames=${newRef.xs.size}")
         _realtimeDeltaState.value = state.copy(
             reference = newRef,
-            prevMatchedIdx = -1,
             staleFrameCount = 0,
         )
     }
 
     /**
-     * round add-realtime-lap-delta：每帧 GPS data 调用一次 projectDelta，atomic update RealtimeDeltaState。
+     * round redesign-realtime-delta-projection-search（Alt B stateless）：每帧 GPS data 调用一次 projectDelta，
+     * atomic update RealtimeDeltaState。
      *
      * 路径：
      * - reference 为 null（无 best） / lastAcceptedCrossing 为 null（首圈进行中）→ outDeltaMs = null
-     * - 调 projectDelta：
-     *   - 成功 → outDeltaMs = delta, outIsStale = false, prevMatchedIdx/prevDeltaMs/staleFrameCount 更新
-     *   - 失败 → staleFrameCount++；outDeltaMs = prevDeltaMs（维持上一帧），outIsStale 当 stale 帧门触发时为 true
+     * - 调 projectDelta（全量 O(n)，无 prevMatchedIdx）：
+     *   - 成功 → outDeltaMs = delta, outIsStale = false, prevDeltaMs/staleFrameCount 更新
+     *   - 失败 → staleFrameCount++；isStale 时 outDeltaMs = null（不再维持 prevDeltaMs 误导 UI）
      *
      * 时钟域：currentLapElapsedMs 用 `gps.timestamp - lastAcceptedCrossing.timestampMillis`，
      * 两个 ts 都是 GPS sample 域同源相减（避免 wall clock / BLE 链路延迟污染）。
@@ -437,11 +437,10 @@ class TestSessionViewModel(
                     currentLapElapsedMs = currentLapElapsedMs,
                     currentX = curX,
                     currentY = curY,
-                    prevMatchedIdx = state.prevMatchedIdx,
                 )
                 if (projection != null) {
+                    FileLogger.v("RTDelta", "proj idx=${projection.matchedIdx} dist=${projection.projDistanceM}m delta=${projection.deltaMs}ms elapsed=$currentLapElapsedMs")
                     state.copy(
-                        prevMatchedIdx = projection.matchedIdx,
                         prevDeltaMs = projection.deltaMs,
                         staleFrameCount = 0,
                         outDeltaMs = projection.deltaMs,
@@ -449,10 +448,11 @@ class TestSessionViewModel(
                     )
                 } else {
                     val newStale = state.staleFrameCount + 1
-                    val isStale = state.prevDeltaMs != null && newStale >= STALE_FRAME_THRESHOLD
+                    val isStale = newStale >= STALE_FRAME_THRESHOLD
+                    FileLogger.d("RTDelta", "stale frame#$newStale isStale=$isStale (proj failed: off-track >failoverDist)")
                     state.copy(
                         staleFrameCount = newStale,
-                        outDeltaMs = state.prevDeltaMs, // 维持上一帧；从未成功过则为 null
+                        outDeltaMs = if (isStale) null else state.prevDeltaMs,
                         outIsStale = isStale,
                     )
                 }
