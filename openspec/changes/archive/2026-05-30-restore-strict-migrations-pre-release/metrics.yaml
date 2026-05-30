@@ -1,0 +1,30 @@
+estimated_days: 0.3
+actual_days: 0.3
+complexity: "medium"     # Room schema migration → 强制升级 medium 流程的 5 例外场景之一；road-test-first 下不调 Opus 子 agent，靠 CC 谨慎自审 + 单测 + 路测
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []    # road-test-first 模式去 Codex
+codex_l2_findings: []    # road-test-first 模式去 Codex
+review_findings_l1: []
+review_findings_l2:
+  - "P2(主会话自审): fallbackToDestructiveMigrationFrom(1, 2) 含 2 冗余——migration2To3 已提供完整 v2→v3 路径，Room 先找路径再 fallback，含 2 永不触发且与注释自相矛盾；由 session-video-metadata-persist round 顺手修为 (1)"
+divergence_reason: "立项时以为只是移除一行 fallbackToDestructiveMigration()；实施期勘察发现迁移链本就断裂（v2→v3 缺 Migration[A56 d15a60c 加两表无显式 migration]、v4→v5 缺[c7e5b06 加 maxDeceleration + 5b9704f 在 v4 内偷加 crossingWallClockTimestampMs 未 bump version]），一直靠 fallbackToDestructiveMigration 静默清库兜着。范围从'删一行'扩大到'补 migration2To3 + migration4To5 + 处理 v4 双状态（PRAGMA table_info 幂等 ADD COLUMN）+ fallbackToDestructiveMigrationFrom(1,2) 兜底 v1/v2 旧包名'"
+phase: "Phase 2"         # pre-release 数据完整性前置（Phase 2 视频管线落库前先建立严格迁移纪律）
+model_apply: "sonnet"
+design_decisions_diverged_during_apply: []  # 无 design Decision 偷改；范围扩大已在 commit body + design 现状段透明记录
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 目标：移除 .fallbackToDestructiveMigration() 无参兜底（pre-release 建立严格迁移纪律，防 missing migration 静默清空圈速数据）。
+# 迁移链勘察结论（v1→v5）：
+#   v1→v2：MIGRATION_1_2 在 dc0c011 多模块重构丢失 → 保留 destructiveMigrationFrom（旧包名 com.race.gps.* 时代，无 release tag 用户）
+#   v2→v3：缺口 → 补 migration2To3（CREATE TABLE telemetry_sessions + crossing_events + index）
+#   v3→v4：migration3To4 已存在，不变
+#   v4→v5：缺口 → 补 migration4To5（ADD maxDeceleration + PRAGMA table_info 幂等处理 crossingWallClockTimestampMs v4 双状态）
+# 实现：AppDatabase.kt 加 migration2To3/migration4To5/migrationChain；AppModule.kt addMigrations(*migrationChain) + fallbackToDestructiveMigrationFrom(1,2)。
+# 测试路线：JVM 单测（Migration.startVersion/endVersion + SQL string 断言 + migrationChain 连续性），21 tests / 0 fail。
+#   未引入 room-testing MigrationTestHelper（离线约束 + 无 androidTest 基础设施）→ MigrationTestHelper 端到端 schema 验证记 follow-up round `room-test-infrastructure`（tasks §10）。
+# 路测项：v4 旧状态设备（5b9704f 之前安装）的 PRAGMA 分支需真机验证（pre-release 无真实用户，优先级低）。
+# 主会话自审发现 P2（fallbackFrom 含 2 冗余 + 注释矛盾），交 session-video-metadata-persist round 顺手修。
+# FileLogger：本 round 纯迁移配置，运行时无新分支（迁移失败本身抛异常），未额外埋点。

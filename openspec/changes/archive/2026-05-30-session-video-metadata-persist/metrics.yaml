@@ -1,0 +1,30 @@
+estimated_days: 0.3
+actual_days: 0.3
+complexity: "medium"     # Room schema migration v5→v6 → 强制升级 medium；road-test-first 下不调 Opus，CC 谨慎自审 + 单测 + 路测
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []    # road-test-first 模式去 Codex
+codex_l2_findings: []    # road-test-first 模式去 Codex
+review_findings_l1: []
+review_findings_l2:
+  - "P2(主会话自审·延后清理): deleteSession 视频白名单用 canonicalPath.contains(\"/video/\")，可收紧为 startsWith(filesDir/video/)（canonical 化已防 path traversal，pre-release 可接受）"
+  - "P3(主会话自审·延后清理): AppDatabaseMigrationSqlTest.kt 混入数行日文注释，需改回简体中文"
+  - "P2(主会话归档自审): 本 round specs/ 归档后为空——spec delta 未被 openspec 识别/sync（proposal header 用 '## Why（问题溯源...）' 带括号后缀致解析 warning、未生成 spec delta）；契约信息已在本 metrics 详尽保留（attachVideoToSession 签名/白名单/字段语义/迁移列定义），video capability 正式 spec 延至 camera-recording-and-gps-sync(round3) 归档时补全。Baseline 7 条款缺口透明声明。"
+divergence_reason: "无大偏离。顺手修了 restore-strict-migrations-pre-release 遗留的 P2（fallbackToDestructiveMigrationFrom(1,2)→(1)，因 migration2To3 提供完整 v2→v3 路径，含 2 冗余且与注释矛盾；已确认 Room 2.6.1 不因某版本既有 migration 又在 fallbackFrom 而抛构建异常）"
+phase: "Phase 2"
+model_apply: "sonnet"
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []  # 本 round 是 videoFilePath/videoStartedAtWallClock 的 producer；消费方 camera-recording-and-gps-sync(round3) 尚未合回 → 无既有 round drift 可 resolve；新字段消费验证转 round3（见下方注释 #16）
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 目标：Phase 2 视频管线把每个 lap session 录的视频路径 + 视频起始 wallClock 锚点持久化（供视频帧↔遥测对齐 + 删 session 连带删视频）。本 round 只加字段/通道/删除白名单，不实现录制（录制是 round3）。
+# 3-class 勘察：2-class（无 DTO）——Entity(TelemetrySessionEntity) + Domain(TelemetryModels.TelemetrySession) + mapper(TelemetryRepository.toDomain 内联扩展)；videoFilePath/videoStartedAtWallClock 三处全同步加（均 nullable，不用哨兵——#6 防旧 session 误命中）。
+# 迁移：AppDatabase v5→v6，migration5To6（ALTER ADD COLUMN videoFilePath TEXT + videoStartedAtWallClock INTEGER，nullable），migrationChain size 升至 4（v2→v6 连续）。列定义与 Room 对 String?→TEXT / Long?→INTEGER NULL 一致（沿用 v3→v4 同款 nullable ADD 模式，已有测试证明 Room 接受）。
+# 持久化通道：TelemetryRepository.attachVideoToSession(sessionId, videoFilePath, videoStartedAtWallClock) + TelemetrySessionDao.updateVideoMetadata；不改 startSession/endSession 语义（视频 opt-in 与 session 解耦）。
+# 删除白名单：deleteSession 删 binary 用 /telemetry/、删视频用 /telemetry/ 或 /video/ canonicalPath 校验防 path traversal；videoFilePath!=null 才连带删。
+# 日志：core/data 不依赖 feature/test（FileLogger 在 feature/test）→ 删视频用 android.util.Log（成功/不存在/失败/白名单拒绝 4 埋点，adb logcat 可查）；如需落文件由 round3 在 feature/test 层包装 attachVideoToSession 调用点加 FileLogger。
+# #14 fake DAO：updateVideoMetadata 加到 DAO 接口后补全 8 个 FakeTelemetrySessionDao/FakeSessionDao stub。
+# #16 跨 round 共享字段：videoFilePath/videoStartedAtWallClock 消费方 = camera-recording-and-gps-sync(round3 待实现) —— round3 录制首帧回调写 videoStartedAtWallClock、Finalize 写 videoFilePath via attachVideoToSession；round3 apply 时 MUST verify 字段正确传播（tasks §10 已登记）。
+# 测试：migration5To6 SQL 断言 + chain size=4 + deleteSession 视频白名单（/video/ 内删 / 白名单外拒绝）+ mapper 往返（null/非null）；:core:data testDebugUnitTest 169 / 0 fail，:core:data + :core:domain + :feature:test compile 全绿。
+# follow-up：room-test-infrastructure（MigrationTestHelper 端到端 schema 验证，沿用 restore round 登记）。
