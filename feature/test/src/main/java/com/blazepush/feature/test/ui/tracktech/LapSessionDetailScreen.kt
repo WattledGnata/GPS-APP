@@ -1,9 +1,12 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -132,21 +137,39 @@ fun LapSessionDetailScreen(
             title = "Session",
             onBack = { navController.popBackStack() },
         )
-        val theoreticalBest = remember(crossings) { computeTheoreticalBest(crossings) }
+        // ui-redo-lap-sector-table round：撤掉过大的 TheoreticalBestPanel，改用
+        // RaceChrono/AiM 风格的 "带 sector 列的表"。table 非 null（有 sector 门）时圈列表区
+        // 渲染 sector 表（表头 + THEORETICAL 行 + valid/best 圈行，横向滚动同步固定列宽防窄屏挤压）；
+        // table 为 null（无 sector 门或 <2 SF）时 fallback 回原 LapRecordsHeader + 全部 LapRecordRow。
+        val table = remember(crossings) { computeLapSectorTable(crossings) }
+        // sector 表横向滚动 state：表头 / THEORETICAL / 各圈行共享同一 hScroll 保证横向同步。
+        val hScroll = rememberScrollState()
+
+        // 导航回调工厂：VALID/BEST 圈 lapNumber=idx+1 严格对应 getLapTelemetry(sessionId, lapNumber-1)
+        // 的 lapIndex；INVALID/INCOMPLETE 圈 lapNumber 是合成值，点了 getLapTelemetry 越界返回
+        // null → 白屏，故传 null 禁点（Decision 圈行可点范围）。
+        val onLapClickFactory: (record: UiLapRecord) -> (() -> Unit)? = { record ->
+            when (record.status) {
+                UiLapStatus.VALID, UiLapStatus.BEST -> {
+                    {
+                        val lapIndex = record.lapNumber - 1
+                        FileLogger.d(
+                            "LapDetail",
+                            "navigate sid=$sessionId lapNumber=${record.lapNumber} -> lapIndex=$lapIndex",
+                        )
+                        navController.navigate("lap_detail/$sessionId/$lapIndex")
+                    }
+                }
+                UiLapStatus.INVALID, UiLapStatus.INCOMPLETE -> null
+            }
+        }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (theoreticalBest != null) {
-                item {
-                    TheoreticalBestPanel(
-                        best = theoreticalBest,
-                        bestActualLapMs = derived.bestLapMs,
-                    )
-                }
-            }
             item {
                 OverviewSection(
                     trackName = trackName,
@@ -160,28 +183,42 @@ fun LapSessionDetailScreen(
                     distanceKm = distanceKm,
                 )
             }
-            item { LapRecordsHeader() }
-            if (derived.lapRecords.isEmpty()) {
-                item { EmptyLapRecordsHint() }
+            if (table != null) {
+                // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），
+                // INVALID/INCOMPLETE 圈仍用原 LapRecordRow 在表下方列出（别丢）。
+                item { LapRecordsHeader() }
+                item {
+                    LapSectorTableBlock(
+                        table = table,
+                        bestActualLapMs = derived.bestLapMs,
+                        hScroll = hScroll,
+                        onLapClick = { lapNumber ->
+                            val lapIndex = lapNumber - 1
+                            FileLogger.d(
+                                "LapDetail",
+                                "navigate sid=$sessionId lapNumber=$lapNumber -> lapIndex=$lapIndex",
+                            )
+                            navController.navigate("lap_detail/$sessionId/$lapIndex")
+                        },
+                    )
+                }
+                // sector 表只渲染 valid/best 圈（table.laps）；INVALID/INCOMPLETE 圈从
+                // derived.lapRecords 取出在表下方用原 LapRecordRow 列出。
+                val extraRecords = derived.lapRecords.filter {
+                    it.status == UiLapStatus.INVALID || it.status == UiLapStatus.INCOMPLETE
+                }
+                items(extraRecords) { record ->
+                    LapRecordRow(record = record, onClick = onLapClickFactory(record))
+                }
             } else {
-                items(derived.lapRecords) { record ->
-                    // 仅 VALID/BEST 圈可点（Decision 圈行可点范围）：它们的 lapNumber=idx+1 严格对应
-                    // getLapTelemetry(sessionId, lapNumber-1) 的 lapIndex；INVALID/INCOMPLETE 圈
-                    // lapNumber 是合成值，点了 getLapTelemetry 越界返回 null → 白屏，故传 null 禁点。
-                    val onLapClick: (() -> Unit)? = when (record.status) {
-                        UiLapStatus.VALID, UiLapStatus.BEST -> {
-                            {
-                                val lapIndex = record.lapNumber - 1
-                                FileLogger.d(
-                                    "LapDetail",
-                                    "navigate sid=$sessionId lapNumber=${record.lapNumber} -> lapIndex=$lapIndex",
-                                )
-                                navController.navigate("lap_detail/$sessionId/$lapIndex")
-                            }
-                        }
-                        UiLapStatus.INVALID, UiLapStatus.INCOMPLETE -> null
+                // fallback：无 sector 门或 <2 SF → 保持原圈列表（不回归）。
+                item { LapRecordsHeader() }
+                if (derived.lapRecords.isEmpty()) {
+                    item { EmptyLapRecordsHint() }
+                } else {
+                    items(derived.lapRecords) { record ->
+                        LapRecordRow(record = record, onClick = onLapClickFactory(record))
                     }
-                    LapRecordRow(record = record, onClick = onLapClick)
                 }
             }
         }
@@ -478,6 +515,21 @@ private fun formatLapTime(ms: Long?): String {
     return "%d:%02d.%03d".format(minutes, seconds, millis)
 }
 
+// sector 列紧凑时间格式（sector 多在 10-40s，formatLapTime 出 "0:23.456" 前导 0: 较冗）：
+// 出 "23.456" / 大于 60s 时出 "m:ss.mmm"。仍是时间字符串走 Score 字体（V2：MUST NOT DSEG7）。
+private fun formatSectorSplit(ms: Long): String {
+    if (ms <= 0L) return "—"
+    val totalSec = ms / 1000
+    val minutes = totalSec / 60
+    val seconds = totalSec % 60
+    val millis = ms % 1000
+    return if (minutes > 0) {
+        "%d:%02d.%03d".format(minutes, seconds, millis)
+    } else {
+        "%d.%03d".format(seconds, millis)
+    }
+}
+
 private fun formatDuration(ms: Long): String {
     val totalSec = ms / 1000
     val hours = totalSec / 3600
@@ -516,24 +568,31 @@ internal data class DetailMetrics(
 )
 
 /**
- * lap-session-theoretical-best round：理论最佳圈聚合（各 sector 取所有完整圈中最快段拼接）+ 每 sector 最快圈号。
+ * ui-redo-lap-sector-table round：圈 × sector 拆分表（RaceChrono/AiM 风格）。
+ *
+ * 每个 valid/best 圈一行（splits 对齐 sectorCount，缺段补 null）；theoretical 行取各 sector 最快段拼接。
  */
-internal data class TheoreticalBest(
-    val totalMs: Long,
-    val sectors: List<SectorBest>,
+internal data class LapSectorTable(
+    val sectorCount: Int, // 每圈段数（= 最大段数）
+    val laps: List<LapSectorRow>, // 每个 valid/best 圈一行
+    val theoreticalTotalMs: Long, // 各 sector 最快段拼接总和
+    val bestSplitPerSector: List<Long>, // size=sectorCount，每 sector 最快段耗时
+    val bestLapPerSector: List<Int>, // size=sectorCount，每 sector 最快是第几圈(lapNumber)
 )
 
-internal data class SectorBest(
-    val sectorIndex: Int,
-    val bestMs: Long,
+internal data class LapSectorRow(
     val lapNumber: Int,
+    val lapTimeMs: Long,
+    val splits: List<Long?>, // size=sectorCount；该圈该 sector 缺失则 null
 )
 
 /**
- * 从 LapSessionDetailScreen 已加载的 crossings 直接算理论最佳圈（复用 deriveDetailMetrics / getLapTelemetry 同款
- * SF 配对 + sector 窗口逻辑，零 binary 读、零 repository 改）。无 sector 门（每圈 < 2 段）或无完整圈 → null（不显示）。
+ * 从 LapSessionDetailScreen 已加载的 crossings 直接算圈 × sector 拆分表（复用 deriveDetailMetrics /
+ * getLapTelemetry 同款 SF 配对 + sector 窗口逻辑，零 binary 读、零 repository 改）。
+ *
+ * 无 sector 门（每圈 < 2 段）、<2 SF、或无完整圈 → null（圈列表区 fallback 回原简单列表）。
  */
-internal fun computeTheoreticalBest(crossings: List<TelemetryCrossingEvent>): TheoreticalBest? {
+internal fun computeLapSectorTable(crossings: List<TelemetryCrossingEvent>): LapSectorTable? {
     val acceptedSF = crossings
         .filter {
             it.gateType.equals("StartFinish", ignoreCase = true) &&
@@ -549,94 +608,182 @@ internal fun computeTheoreticalBest(crossings: List<TelemetryCrossingEvent>): Th
                 it.crossingWallClockTimestampMs != null
         }
         .mapNotNull { it.crossingWallClockTimestampMs }
-    // 每圈各 sector 耗时（lapNumber = idx + 1，与 deriveDetailMetrics / getLapTelemetry 同源配对）。
-    // acceptedSF 已过滤 wallClock 非空，!! 安全。
+    // 每圈窗口 = acceptedSF.zipWithNext()（lapNumber = idx + 1，与 deriveDetailMetrics /
+    // getLapTelemetry 同源配对）。acceptedSF 已过滤 wallClock 非空，!! 安全。
+    // 窗口内 accepted Sector wallClock 落 [lapStart, lapEnd) 且 != lapStart → bounds 相邻差 = 各 split。
+    data class RawLap(val lapNumber: Int, val lapTimeMs: Long, val splits: List<Long>)
     val perLap = acceptedSF.zipWithNext().mapIndexed { idx, pair ->
         val lapStart = pair.first.crossingWallClockTimestampMs!!
         val lapEnd = pair.second.crossingWallClockTimestampMs!!
         val inWindow = sectorWallClocks.filter { it in lapStart until lapEnd && it != lapStart }.sorted()
         val bounds = listOf(lapStart) + inWindow + lapEnd
-        (idx + 1) to bounds.zipWithNext { a, b -> b - a }
+        RawLap(
+            lapNumber = idx + 1,
+            lapTimeMs = lapEnd - lapStart,
+            splits = bounds.zipWithNext { a, b -> b - a },
+        )
     }
-    val sectorCount = perLap.maxOfOrNull { it.second.size } ?: 0
+    val sectorCount = perLap.maxOfOrNull { it.splits.size } ?: 0
     if (sectorCount < 2) return null
-    val completeLaps = perLap.filter { it.second.size == sectorCount }
-    if (completeLaps.isEmpty()) return null
-    val sectors = (0 until sectorCount).map { i ->
-        val best = completeLaps.minByOrNull { it.second[i] }!!
-        SectorBest(sectorIndex = i, bestMs = best.second[i], lapNumber = best.first)
+
+    // 每行 splits 对齐 sectorCount（实际段数不足末尾补 null）。
+    val laps = perLap.map { raw ->
+        val aligned: List<Long?> = (0 until sectorCount).map { i -> raw.splits.getOrNull(i) }
+        LapSectorRow(lapNumber = raw.lapNumber, lapTimeMs = raw.lapTimeMs, splits = aligned)
     }
-    return TheoreticalBest(totalMs = sectors.sumOf { it.bestMs }, sectors = sectors)
+
+    // bestSplitPerSector / bestLapPerSector 只看"完整圈"(splits.size == sectorCount)；无完整圈 → null。
+    val completeLaps = perLap.filter { it.splits.size == sectorCount }
+    if (completeLaps.isEmpty()) return null
+    val bestSplitPerSector = mutableListOf<Long>()
+    val bestLapPerSector = mutableListOf<Int>()
+    for (i in 0 until sectorCount) {
+        val best = completeLaps.minByOrNull { it.splits[i] }!!
+        bestSplitPerSector += best.splits[i]
+        bestLapPerSector += best.lapNumber
+    }
+    return LapSectorTable(
+        sectorCount = sectorCount,
+        laps = laps,
+        theoreticalTotalMs = bestSplitPerSector.sum(),
+        bestSplitPerSector = bestSplitPerSector,
+        bestLapPerSector = bestLapPerSector,
+    )
 }
 
+// sector 列固定宽度 token（窄屏关键：固定列宽 + 横向滚动同步避免 5+ 列在窄屏挤压换行）。
+private val SectorTableLapColWidth = 48.dp
+private val SectorTableTimeColWidth = 76.dp
+private val SectorTableSectorColWidth = 60.dp
+
+/**
+ * 圈 × sector 拆分表块（表头 + THEORETICAL 行 + 各 valid/best 圈行，全部共享同一 hScroll 横向同步）。
+ *
+ * 时间字符串走 Score 字体（V2：MUST NOT DSEG7）；每 Text maxLines=1 + Ellipsis；
+ * 固定列宽 + horizontalScroll(hScroll) 防窄屏换行。
+ */
 @Composable
-private fun TheoreticalBestPanel(
-    best: TheoreticalBest,
+private fun LapSectorTableBlock(
+    table: LapSectorTable,
     bestActualLapMs: Long?,
+    hScroll: ScrollState,
+    onLapClick: (lapNumber: Int) -> Unit,
 ) {
     CutCornerPanel(
         modifier = Modifier.fillMaxWidth(),
         cutSize = 6.dp,
         cutCorners = cutCornersAll,
-        contentPadding = 16.dp,
+        contentPadding = 12.dp,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                text = "THEORETICAL BEST",
-                style = TrackTechTypography.UiTextLabel,
-                color = TrackTechColors.Cyan,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = formatLapTime(best.totalMs),
-                style = TrackTechTypography.RacingTitleMedium,
-                color = TrackTechColors.TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (bestActualLapMs != null && bestActualLapMs > best.totalMs) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 表头行：LAP | TIME | S1 | S2 | ... | SN
+            Row(modifier = Modifier.horizontalScroll(hScroll)) {
+                SectorCell(SectorTableLapColWidth) {
+                    SectorCellText("LAP", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
+                }
+                SectorCell(SectorTableTimeColWidth) {
+                    SectorCellText("TIME", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
+                }
+                for (i in 0 until table.sectorCount) {
+                    SectorCell(SectorTableSectorColWidth) {
+                        SectorCellText("S${i + 1}", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
+                    }
+                }
+            }
+
+            // THEORETICAL 行：OPT | 拼接总时间 | 各 sector 最快段（绿色高亮）
+            Row(modifier = Modifier.horizontalScroll(hScroll)) {
+                SectorCell(SectorTableLapColWidth) {
+                    SectorCellText("OPT", TrackTechTypography.UiTextLabel, TrackTechColors.Green)
+                }
+                SectorCell(SectorTableTimeColWidth) {
+                    SectorCellText(
+                        formatLapTime(table.theoreticalTotalMs),
+                        TrackTechTypography.UiTextBody,
+                        TrackTechColors.Green,
+                    )
+                }
+                table.bestSplitPerSector.forEach { ms ->
+                    SectorCell(SectorTableSectorColWidth) {
+                        SectorCellText(formatSectorSplit(ms), TrackTechTypography.UiTextBody, TrackTechColors.Green)
+                    }
+                }
+            }
+
+            // gain 小字：理论最优 vs 最快实跑圈（gain > 0 时绿色显示能再快多少）。
+            if (bestActualLapMs != null && bestActualLapMs > table.theoreticalTotalMs) {
                 Text(
-                    text = "比最快圈快 %.3fs".format((bestActualLapMs - best.totalMs) / 1000.0),
-                    style = TrackTechTypography.UiTextBody,
+                    text = "比最快圈快 %.3fs".format((bestActualLapMs - table.theoreticalTotalMs) / 1000.0),
+                    style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.Green,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            best.sectors.forEach { s ->
+
+            // 各圈行（valid/best）：Lap N | lapTime | 各 sector split（命中 best 绿色高亮，缺段 "—"）
+            table.laps.forEach { lap ->
+                val isBest = bestActualLapMs != null && lap.lapTimeMs == bestActualLapMs
+                val timeColor = if (isBest) TrackTechColors.Purple else TrackTechColors.TextPrimary
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onLapClick(lap.lapNumber) }
+                        .horizontalScroll(hScroll),
                 ) {
-                    Text(
-                        text = "Sector ${s.sectorIndex + 1}",
-                        style = TrackTechTypography.UiTextLabel,
-                        color = TrackTechColors.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    Spacer(Modifier.size(12.dp))
-                    Text(
-                        text = formatLapTime(s.bestMs),
-                        style = TrackTechTypography.UiTextBody,
-                        color = TrackTechColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        text = "Lap ${s.lapNumber}",
-                        style = TrackTechTypography.UiTextLabel,
-                        color = TrackTechColors.Cyan,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    SectorCell(SectorTableLapColWidth) {
+                        SectorCellText("Lap ${lap.lapNumber}", TrackTechTypography.UiTextSmall, TrackTechColors.TextSecondary)
+                    }
+                    SectorCell(SectorTableTimeColWidth) {
+                        SectorCellText(formatLapTime(lap.lapTimeMs), TrackTechTypography.UiTextBody, timeColor)
+                    }
+                    lap.splits.forEachIndexed { i, split ->
+                        val isSectorBest = split != null && split == table.bestSplitPerSector.getOrNull(i)
+                        val splitColor = if (isSectorBest) TrackTechColors.Green else TrackTechColors.TextPrimary
+                        SectorCell(SectorTableSectorColWidth) {
+                            SectorCellText(
+                                if (split != null) formatSectorSplit(split) else "—",
+                                TrackTechTypography.UiTextBody,
+                                splitColor,
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * 固定宽度 sector 表单元（窄屏关键：锁列宽 + 末尾 8dp 内边距分隔，inner Text 被 bounded width 测量
+ * 后 maxLines=1+Ellipsis 才生效）。
+ */
+@Composable
+private fun SectorCell(
+    width: Dp,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier = Modifier.width(width).padding(end = 8.dp)) {
+        content()
+    }
+}
+
+/**
+ * sector 表单元内文本（统一 maxLines=1 + Ellipsis；时间字符串走 Score / UiText 字体，MUST NOT DSEG7）。
+ */
+@Composable
+private fun SectorCellText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+) {
+    Text(
+        text = text,
+        style = style,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
