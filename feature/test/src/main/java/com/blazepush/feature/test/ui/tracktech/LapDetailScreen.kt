@@ -129,10 +129,8 @@ fun LapDetailScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            return@Column
-        }
-
-        LazyColumn(
+        } else {
+            LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -184,6 +182,7 @@ fun LapDetailScreen(
                     )
                 }
             }
+        }
         }
     }
 }
