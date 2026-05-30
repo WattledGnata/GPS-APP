@@ -1,0 +1,27 @@
+estimated_days: 0.6
+actual_days: 0.3
+complexity: "large"     # 新 module core:camera + CameraX 5 件套集成 + 双 dangerous 权限 + 网络/代理踩坑
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "spec draft 写 PermissionRequestOutcome 三态，实际是 AllGranted/MissingPermissions 二态（永久拒绝靠 rationale）；实现按真实 API，spec normative 已对齐现实（spec drift inline 修订，非 design Decision 偏离）"
+phase: "Phase 2"        # 视频管线第一刀
+model_apply: "opus"     # 主会话直实现
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- 关键：网络/依赖前置攻坚 ---
+# Google Maven + 阿里云镜像 curl 直连 000，但有 env 代理 121.4.45.119:31609（git/curl 用，gradle 不读 env）。
+# 解法：~/.gradle/gradle.properties 写 systemProp.http(s).proxyHost/Port（全局，不进项目 git）→ gradle 经代理下 CameraX。
+# FAIL-FAST 验证：:core:camera:compileDebugKotlin 在线编译 SUCCESSFUL（CameraX 1.3.4 真下载+resolve，CameraAvailability ProcessCameraProvider 编通）。
+# --- 实现 ---
+# core:camera 模块（compileSdk 34 / minSdk 28，mirror core:data）+ CameraX 1.3.4 五件套（1.4.0+ 要 compileSdk 35 故不升）。
+# CameraAvailability.hasCamera 查询骨架（仅查不开相机）。RequiredCameraPermissions.forSdk = [CAMERA, RECORD_AUDIO]（mirror BLE）。
+# app manifest + CAMERA + RECORD_AUDIO + uses-feature camera.any required=false；app 接 core:camera。懒请求（不在启动强请求）。
+# 验证：:app:assembleDebug SUCCESSFUL（64M，CameraX 打入）；feature:test 366/0fail（+2 权限测试无回归）；
+#   真机 vivo V2405A install Success + app 启动正常（启动不弹相机权限=懒请求验证）。
+# 真机三态 grant/deny 流（tasks 6.2）= round 2 preview 提供触发入口后验（round 1 无可点相机 UI）。
