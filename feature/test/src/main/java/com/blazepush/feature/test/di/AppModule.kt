@@ -37,30 +37,22 @@ import org.koin.dsl.module
  */
 val databaseModule = module {
     single {
-        // persist-session-summary-fields round（schema v3 → v4）：
-        // - addMigrations(migration3To4) 注册 v3→v4 严格 migration（保护现役数据）
-        // - 全局 destructive fallback 已移除（防 v3→v4 失败时静默清库）
-        // - 路径 A 选定：窄范围 destructiveMigrationFrom(1, 2) 兜底 pre-A56 开发期 schema
-        //   （schema 历史确认：dc0c011 多模块重构创建 v2，d15a60c A56 升 v3，未见 v1；
-        //    v2 是 pre-A56 开发期 schema，对它 destructive 可接受 — 不存在 release tag 用户）
+        // restore-strict-migrations-pre-release round（2026-05-30）：
+        // - migrationChain 包含 migration2To3 + migration3To4 + migration4To5，严格覆盖 v2→v5
+        // - 保留 destructiveMigrationFrom(1, 2) 兜底 pre-A56 开发期 v1/v2 schema（无 release tag 用户）
+        // - 移除无参 fallbackToDestructiveMigration()，防止 missing migration 静默清空用户数据
+        //
+        // 注意：MUST NOT 用 fallbackToDestructiveMigrationFrom(... 4) —— Room 检测
+        // migration3To4.endVersion=4 与 fallbackFrom 列表 4 冲突，build() 时抛
+        // IllegalArgumentException "Inconsistency detected"（已踩坑 2026-05-03）。
+        // 同理 MUST NOT 在 fallbackFrom 列表里含 2、3、4、5 —— 对应 migrationChain 严格覆盖范围。
         Room.databaseBuilder(
             androidContext(),
             AppDatabase::class.java,
             "race_chrono_database"
         )
-            .addMigrations(AppDatabase.migration3To4)
-            // smooth-perftest-acceleration-curve round：test_records 加 maxDeceleration 列触发
-            // schema v4 → v5。debug 阶段不写 strict migration，无参 fallbackToDestructiveMigration()
-            // 兜底所有 missing migration（含 v1/v2/v4 → v5）。strict migration（migration3To4）仍优先生效，
-            // missing migration 才走 destructive 重建表。
-            //
-            // 注意：MUST NOT 用 fallbackToDestructiveMigrationFrom(... 4) —— Room 检测
-            // migration3To4.endVersion=4 与 fallbackFrom 列表 4 冲突，build() 时抛
-            // IllegalArgumentException "Inconsistency detected"（已踩坑 2026-05-03）。
-            //
-            // 影响：装新包时存量 V1 测试记录会被清空（destructive 重建 test_records 表）。
-            // 上线前 follow-up：补回严格 migration（见 backlog §8.9 restore-strict-migrations-pre-release）。
-            .fallbackToDestructiveMigration()
+            .addMigrations(*AppDatabase.migrationChain.toTypedArray())
+            .fallbackToDestructiveMigrationFrom(1, 2)
             .build()
     }
 

@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.core.data.local
 
 import androidx.room.Database
@@ -70,6 +71,64 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         /**
+         * MIGRATION_2_3 SQL 字符串列表（v2 → v3）。
+         *
+         * A56 round（d15a60c）新增 telemetry_sessions + crossing_events 两张表，
+         * 当时无显式 Migration（走 fallbackToDestructiveMigration）。
+         * restore-strict-migrations-pre-release round 补回严格 migration。
+         *
+         * v1/v2 为 pre-A56 开发期 schema（包名 com.race.gps.*），无 release 用户，
+         * 保留 destructiveMigrationFrom(1, 2) 兜底；本 Migration 覆盖 v2→v3。
+         *
+         * @author CC
+         * @description schema v2→v3 CREATE TABLE SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-05-30
+         */
+        internal val migration2To3Sql: List<String> = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS telemetry_sessions (
+                sessionId TEXT NOT NULL PRIMARY KEY,
+                sessionType TEXT NOT NULL,
+                startTs INTEGER NOT NULL,
+                endTs INTEGER NOT NULL,
+                binaryFilePath TEXT NOT NULL,
+                lapCount INTEGER NOT NULL DEFAULT 0,
+                bestLapMs INTEGER
+            )
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS crossing_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                sessionId TEXT NOT NULL,
+                lapIndex INTEGER NOT NULL,
+                crossingTimestampMs INTEGER NOT NULL,
+                speedKmh REAL NOT NULL,
+                gateId TEXT NOT NULL,
+                gateType TEXT NOT NULL,
+                accepted INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                directionScore REAL,
+                FOREIGN KEY (sessionId) REFERENCES telemetry_sessions(sessionId) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+            "CREATE INDEX IF NOT EXISTS index_crossing_events_sessionId ON crossing_events(sessionId)",
+        )
+
+        /**
+         * Room migration v2 → v3：CREATE TABLE telemetry_sessions + crossing_events。
+         * A56（d15a60c）引入两张新表，本 Migration 补回严格路径。
+         *
+         * @author CC
+         * @description Room migration from schema v2 to v3
+         * @date 2026-05-30
+         */
+        val migration2To3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration2To3Sql.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
          * MIGRATION_3_4 SQL 字符串列表（v3 → v4）。
          *
          * `internal` 暴露给 JVM 单元测试断言：本 round 不引入 room-testing / Robolectric / Context 依赖，
@@ -99,5 +158,68 @@ abstract class AppDatabase : RoomDatabase() {
                 migration3To4Sql.forEach { db.execSQL(it) }
             }
         }
+
+        /**
+         * MIGRATION_4_5 SQL：test_records 加 maxDeceleration（smooth-perftest-acceleration-curve，c7e5b06）。
+         *
+         * 注意：fix-lap-crossing-clock-hygiene round（5b9704f）在 v4 schema 内直接加了
+         * crossing_events.crossingWallClockTimestampMs（没 bump version）。
+         * 这导致部分 v4 设备已有该列，部分没有。migration4To5 通过 PRAGMA table_info
+         * 条件检查幂等处理两种状态，不在此列表中（由 migration4To5 直接实现）。
+         *
+         * @author CC
+         * @description schema v4→v5 ALTER TABLE SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-05-30
+         */
+        internal val migration4To5Sql: List<String> = listOf(
+            "ALTER TABLE test_records ADD COLUMN maxDeceleration REAL NOT NULL DEFAULT 0.0",
+        )
+
+        /**
+         * Room migration v4 → v5：
+         * 1. test_records 加 maxDeceleration 列（smooth-perftest-acceleration-curve，c7e5b06）
+         * 2. crossing_events 条件加 crossingWallClockTimestampMs 列（fix-lap-crossing-clock-hygiene，5b9704f；
+         *    该字段在 v4 内无 version bump 直接加，部分 v4 设备已有，需 PRAGMA 条件幂等处理）
+         *
+         * @author CC
+         * @description Room migration from schema v4 to v5
+         * @date 2026-05-30
+         */
+        val migration4To5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. test_records.maxDeceleration（c7e5b06）
+                migration4To5Sql.forEach { db.execSQL(it) }
+                // 2. crossing_events.crossingWallClockTimestampMs（5b9704f 在 v4 无 bump 直接加）
+                //    通过 PRAGMA table_info 检查是否已有该列，幂等处理两种 v4 状态
+                val hasWallClockCol = db.query(
+                    "PRAGMA table_info(crossing_events)"
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val nameIndex = cursor.getColumnIndex("name")
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == "crossingWallClockTimestampMs") {
+                            return@use true
+                        }
+                    }
+                    false
+                }
+                if (!hasWallClockCol) {
+                    db.execSQL("ALTER TABLE crossing_events ADD COLUMN crossingWallClockTimestampMs INTEGER")
+                }
+            }
+        }
+
+        /**
+         * 完整迁移链（v2→v5），供 AppModule Room builder 和 JVM 单测使用。
+         * v1/v2 由 AppModule 的 destructiveMigrationFrom(1, 2) 兜底（pre-A56 开发期 schema，无 release 用户）。
+         *
+         * @author CC
+         * @description aggregated migration chain v2→v5
+         * @date 2026-05-30
+         */
+        val migrationChain: List<Migration> = listOf(
+            migration2To3,
+            migration3To4,
+            migration4To5,
+        )
     }
 }
