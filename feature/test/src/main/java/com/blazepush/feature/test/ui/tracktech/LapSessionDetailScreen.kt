@@ -197,6 +197,21 @@ fun LapSessionDetailScreen(
                     },
                 )
             }
+            // video-overlay-realtime-playback round：仅当 session 有视频时显示"播放带数据视频"入口
+            // （if/else 分支，禁 early-return；session 异步加载，null 时不渲染 item）。
+            if (session?.videoFilePath != null) {
+                item {
+                    VideoPlaybackEntry(
+                        onClick = {
+                            FileLogger.d(
+                                "VideoOverlay",
+                                "open video playback sid=$sessionId",
+                            )
+                            navController.navigate("lap_video/$sessionId")
+                        },
+                    )
+                }
+            }
             if (table != null) {
                 // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），
                 // INVALID/INCOMPLETE 圈仍用原 LapRecordRow 在表下方列出（别丢）。
@@ -427,6 +442,49 @@ private fun CompareEntry(
             text = if (enabled) "›" else "—",
             style = TrackTechTypography.UiTextBody,
             color = labelColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * video-overlay-realtime-playback round：播放带数据视频入口（复用 CompareEntry 风格）。
+ * 仅当 session.videoFilePath != null 时由调用方条件渲染；点击导航到 lap_video/{sessionId}。
+ * 文字走 UiTextLabel；Text maxLines=1 + Ellipsis。
+ */
+@Composable
+private fun VideoPlaybackEntry(
+    onClick: () -> Unit,
+) {
+    val accent = TrackTechColors.Cyan
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
+            .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.12f))
+            .border(
+                width = 1.dp,
+                color = accent,
+                shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "PLAY VIDEO + DATA",
+            style = TrackTechTypography.UiTextLabel,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "›",
+            style = TrackTechTypography.UiTextBody,
+            color = accent,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

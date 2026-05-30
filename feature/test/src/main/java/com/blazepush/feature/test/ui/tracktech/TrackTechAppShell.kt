@@ -47,7 +47,7 @@ object TabIndex {
     const val Count = 4
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun TrackTechAppShell() {
     TrackTechTheme {
@@ -210,6 +210,17 @@ fun TrackTechAppShell() {
                         navController = navController,
                         sessionId = sessionId,
                         sessionViewModel = sessionViewModel,
+                    )
+                }
+                // video-overlay-realtime-playback round：视频实时叠加遥测 HUD 播放屏。
+                composable(
+                    route = "lap_video/{sessionId}",
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                    LapVideoPlaybackScreen(
+                        navController = navController,
+                        sessionId = sessionId,
                     )
                 }
             }

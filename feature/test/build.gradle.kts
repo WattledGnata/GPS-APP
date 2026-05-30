@@ -58,6 +58,11 @@ dependencies {
     // 暂不引入 camera-camera2 直接依赖，fps 由设备决定（design.md Decision 3 risks 已声明）。
     implementation(project(":core:camera"))
 
+    // media3 / ExoPlayer (video-overlay-realtime-playback round)：
+    // 播放屏 ExoPlayer 播放原始视频 + PlayerView（AndroidView）垫底，overlay 用 Compose 浮上层。
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
