@@ -4,8 +4,16 @@ package com.blazepush.feature.test.ui.tracktech
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,7 +28,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,7 +54,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.blazepush.core.camera.CameraAvailability
+import com.blazepush.core.domain.permission.PermissionRequestOutcome
+import com.blazepush.core.domain.permission.RequiredCameraPermissions
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
@@ -75,6 +93,78 @@ fun LapLiveScreen(
     var showEndConfirmation by remember { mutableStateOf(false) }
     val trackName = track?.name?.zh ?: "—"
 
+    // camera-preview-in-laplivescreen round（Decision 4/5 + spec MUST 1/7）：
+    // 相机预览默认关（opt-in），hasCamera 降级 gate 查一次。
+    var cameraEnabled by remember { mutableStateOf(false) }
+    var hasCamera by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        CameraAvailability.hasCamera(context) { available ->
+            hasCamera = available
+            FileLogger.d("CamPreview", "hasCamera=$available")
+        }
+    }
+
+    // 懒请求权限 launcher（spec MUST 2/3）：复用 RequiredCameraPermissions + PermissionRequestOutcome.from。
+    val requestedCameraPermissions = remember {
+        RequiredCameraPermissions.forSdk(Build.VERSION.SDK_INT)
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        when (PermissionRequestOutcome.from(requestedCameraPermissions, result)) {
+            PermissionRequestOutcome.AllGranted -> {
+                cameraEnabled = true
+                FileLogger.d("CamPreview", "permission AllGranted → cameraEnabled=true")
+            }
+            is PermissionRequestOutcome.MissingPermissions -> {
+                cameraEnabled = false
+                FileLogger.d("CamPreview", "permission MissingPermissions → cameraEnabled=false")
+                val activity = context.findActivity()
+                // 永久拒绝（!shouldShowRequestPermissionRationale）→ 引导跳 app 设置页（spec MUST 3）。
+                val permanentlyDenied = activity != null && requestedCameraPermissions.any {
+                    !activity.shouldShowRequestPermissionRationale(it)
+                }
+                if (permanentlyDenied) {
+                    Toast.makeText(
+                        context,
+                        "相机/麦克风权限被永久拒绝，请到系统设置开启",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    runCatching {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    }
+                } else {
+                    Toast.makeText(context, "需要相机和麦克风权限才能预览", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // toggle 点击处理（spec MUST 1/2/7）：无相机不响应；已授权直接翻；未授权懒请求。
+    val onToggleCamera: () -> Unit = {
+        if (!hasCamera) {
+            FileLogger.d("CamPreview", "toggle ignored: hasCamera=false")
+        } else if (cameraEnabled) {
+            cameraEnabled = false
+            FileLogger.d("CamPreview", "toggle off → cameraEnabled=false")
+        } else {
+            val alreadyGranted = requestedCameraPermissions.all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            }
+            if (alreadyGranted) {
+                cameraEnabled = true
+                FileLogger.d("CamPreview", "toggle on (already granted) → cameraEnabled=true")
+            } else {
+                FileLogger.d("CamPreview", "toggle on → launch permission request")
+                cameraPermissionLauncher.launch(requestedCameraPermissions.toTypedArray())
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         val activity = context.findActivity()
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -103,6 +193,14 @@ fun LapLiveScreen(
             .background(TrackTechColors.Background)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        // camera-preview-in-laplivescreen round（Decision 1 + spec MUST 4）：
+        // 预览层是 root Box 第一个子元素（最底），HUD Column 保持其后绘制 → Compose 后绘者在上，
+        // HUD 浮在预览之上（屏上合成，本 round 不录不烧录）。
+        // M2 重组陷阱：用 if（无 else 分支也不 early-return）控制显隐，绝不 return@Box。
+        if (cameraEnabled && hasCamera) {
+            CameraPreview(modifier = Modifier.fillMaxSize())
+        }
+
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -133,6 +231,22 @@ fun LapLiveScreen(
                 onEndCompleted = onConfirmEnd,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+
+        // camera-preview-in-laplivescreen round（Decision 4/5 + spec MUST 7）：
+        // 相机 toggle 角落浮层（top-end），hasCamera 降级时隐藏（无相机不显示 / 不响应）。
+        // 浮在 HUD 之上但不破坏现有 Column 布局（绝对定位在 Box 角落）。
+        if (hasCamera) {
+            IconButton(
+                onClick = onToggleCamera,
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
+                Icon(
+                    imageVector = if (cameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
+                    contentDescription = if (cameraEnabled) "Camera on" else "Camera off",
+                    tint = if (cameraEnabled) TrackTechColors.Cyan else TrackTechColors.TextMuted,
+                )
+            }
         }
     }
 

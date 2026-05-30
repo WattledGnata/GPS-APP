@@ -51,6 +51,9 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:data"))
     implementation(project(":core:bluetooth"))
+    // camera-preview-in-laplivescreen round（Decision 2）：拿 PreviewView / ProcessCameraProvider
+    // （core:camera 把 camera-view/camera-lifecycle 提为 api）+ CameraAvailability（hasCamera 降级）。
+    implementation(project(":core:camera"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
