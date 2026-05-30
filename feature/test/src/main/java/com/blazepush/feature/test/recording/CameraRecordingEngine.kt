@@ -78,6 +78,14 @@ class CameraRecordingEngine(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
 
+    // Bug A 修复：attach/bind 时序解耦。attachPreviewSurface 可能先于 bind 异步回调到来。
+    // 先存引用，bind 成功后补连；若 preview 已就绪则立即连。
+    private var pendingPreviewView: PreviewView? = null
+
+    // Bug B 修复：bind/unbind 幂等守卫，防 isRecording key 抖动触发重复 bind 打断录制。
+    private var isBound = false
+    private var boundLifecycleOwner: LifecycleOwner? = null
+
     // Start 事件时持久化，供 Finalize 分支读取（即使 state 已从 Recording 变 Stopping）
     // 仅在 MainExecutor 回调内读写，无竞态
     private var _capturedWallClock: Long = 0L
@@ -109,7 +117,12 @@ class CameraRecordingEngine(
         context: Context,
         config: RecordingConfig = RecordingConfig.DEFAULT,
     ) {
-        FileLogger.d(TAG, "bind: lifecycleOwner=${lifecycleOwner::class.simpleName} config=$config")
+        // Bug B 修复：幂等守卫——同一 lifecycleOwner 已绑定时直接 no-op，防 isRecording key 抖动重复 bind 打断录制。
+        if (isBound && boundLifecycleOwner === lifecycleOwner) {
+            FileLogger.d(TAG, "bind: no-op（已绑定同一 lifecycleOwner=${lifecycleOwner::class.simpleName}），幂等跳过")
+            return
+        }
+        FileLogger.d(TAG, "bind: lifecycleOwner=${lifecycleOwner::class.simpleName} config=$config isBound=$isBound")
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -118,7 +131,7 @@ class CameraRecordingEngine(
 
                 val newPreview = Preview.Builder().build()
                 // 不设 surface：surface 由 attachPreviewSurface 独立驱动
-                // 若已有 surface 连接，保留（重绑时重新 attach 即可）
+                // 若已有 pendingPreviewView（attach 先于 bind 到达），bind 后补连（Bug A 修复路径）
 
                 val recorder = Recorder.Builder()
                     .setQualitySelector(
@@ -142,10 +155,21 @@ class CameraRecordingEngine(
             bindResult.onSuccess { (newPreview, vc) ->
                 preview = newPreview
                 videoCapture = vc
-                FileLogger.d(TAG, "bind: Preview+VideoCapture 双 use-case 绑定 OK（surface 待 attachPreviewSurface）")
+                isBound = true
+                boundLifecycleOwner = lifecycleOwner
+                // Bug A 修复：bind 成功后检查 pendingPreviewView，若 attach 已先行到达则补连 surface。
+                val pv = pendingPreviewView
+                if (pv != null) {
+                    newPreview.setSurfaceProvider(pv.surfaceProvider)
+                    FileLogger.d(TAG, "bind: 补连 pendingPreviewView surface（attach 先于 bind 到达）previewView=$pv")
+                } else {
+                    FileLogger.d(TAG, "bind: Preview+VideoCapture 双 use-case 绑定 OK（surface 待 attachPreviewSurface）")
+                }
             }.onFailure { t ->
                 preview = null
                 videoCapture = null
+                isBound = false
+                boundLifecycleOwner = null
                 val msg = "bind 失败: ${t.message}"
                 _recordingState.value = RecordingState.Error(msg)
                 FileLogger.e(TAG, msg, t)
@@ -163,6 +187,11 @@ class CameraRecordingEngine(
      */
     @MainThread
     fun unbind(context: Context, reason: String = "省电释放") {
+        // Bug B 修复：幂等守卫——未绑定时直接 no-op，防重复 unbind。
+        if (!isBound) {
+            FileLogger.d(TAG, "unbind: no-op（未绑定），幂等跳过 reason=$reason")
+            return
+        }
         if (_recordingState.value is RecordingState.Recording) {
             FileLogger.d(TAG, "unbind: reason=$reason 录制中，先 stopRecording")
             stopRecording()
@@ -174,6 +203,8 @@ class CameraRecordingEngine(
         }
         preview = null
         videoCapture = null
+        isBound = false
+        boundLifecycleOwner = null
         FileLogger.d(TAG, "unbind: camera 已释放 reason=$reason")
     }
 
@@ -187,13 +218,16 @@ class CameraRecordingEngine(
      */
     @MainThread
     fun attachPreviewSurface(previewView: PreviewView) {
+        // Bug A 修复：无论 preview 是否就绪，先存 pendingPreviewView。
+        // 若 preview 已就绪（bind 已完成）则立即连接；否则等 bind 的 onSuccess 补连。
+        pendingPreviewView = previewView
         val p = preview
         if (p == null) {
-            FileLogger.d(TAG, "attachPreviewSurface: WARN preview=null（bind 尚未完成），no-op")
+            FileLogger.d(TAG, "attachPreviewSurface: preview=null（bind 尚未完成），暂存 pendingPreviewView，等 bind 后补连")
             return
         }
         p.setSurfaceProvider(previewView.surfaceProvider)
-        FileLogger.d(TAG, "attachPreviewSurface: surface 已连接 previewView=$previewView")
+        FileLogger.d(TAG, "attachPreviewSurface: surface 已连接（preview 已就绪）previewView=$previewView")
     }
 
     /**
@@ -204,14 +238,16 @@ class CameraRecordingEngine(
      */
     @MainThread
     fun detachPreviewSurface() {
+        // Bug A 修复：清除 pendingPreviewView，防止 bind 后错误补连已离开 composition 的 PreviewView。
+        pendingPreviewView = null
         val p = preview
         if (p == null) {
-            FileLogger.d(TAG, "detachPreviewSurface: preview=null，no-op")
+            FileLogger.d(TAG, "detachPreviewSurface: preview=null，no-op（pendingPreviewView 已清除）")
             return
         }
         p.setSurfaceProvider(null)
         val isRec = _recordingState.value is RecordingState.Recording
-        FileLogger.d(TAG, "detachPreviewSurface: surface 已断开（isRecording=$isRec，VideoCapture 继续）")
+        FileLogger.d(TAG, "detachPreviewSurface: surface 已断开（isRecording=$isRec，VideoCapture 继续）pendingPreviewView 已清除")
     }
 
     // =========================================================================

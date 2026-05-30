@@ -196,28 +196,25 @@ fun LapLiveScreen(
     }
 
     // recording-persist-across-pages-and-hud-indicator：screen-level 绑定条件驱动。
-    // 条件：settledPage==1（预览页可见）OR isRecording（录制中跨页持续）→ bind。
-    // 两者均 false → unbind（省电释放）。
-    // hasCamera gate：无相机机型不做无意义 bind，省资源。
+    // Bug B 修复：把绑定条件收敛成单一布尔 shouldBind，LaunchedEffect 仅以此为 key。
+    // 这样录制开始时 isRecording false→true，settledPage==1 → shouldBind 一直 true，不翻转 → effect 不重跑 → 不 rebind。
+    // 横滑回 page0 且录制中：isRecording=true → shouldBind=true → 不 unbind，录制继续。
+    // 横滑回 page0 无录制：shouldBind=false → unbind 省电。
     val isRecording = recordingState is RecordingState.Recording
-    LaunchedEffect(pagerState.settledPage, isRecording, hasCamera, cameraPermissionGranted) {
-        if (!hasCamera || !cameraPermissionGranted) {
-            // 无相机或未授权：不 bind，避免无效资源占用
-            FileLogger.d("CamRec", "bind skip: hasCamera=$hasCamera granted=$cameraPermissionGranted")
-            return@LaunchedEffect
-        }
-        if (pagerState.settledPage == 1 || isRecording) {
+    val shouldBind = (pagerState.settledPage == 1 || isRecording) && hasCamera && cameraPermissionGranted
+    LaunchedEffect(shouldBind) {
+        if (shouldBind) {
             FileLogger.d(
                 "CamRec",
-                "bind: settledPage=${pagerState.settledPage} isRecording=$isRecording → 绑定 camera（screen lifecycle）",
+                "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecording=$isRecording → 绑定 camera（screen lifecycle）",
             )
             recordingEngine.bind(screenLifecycleOwner, context, RecordingConfig.DEFAULT)
         } else {
             FileLogger.d(
                 "CamRec",
-                "unbind: 省电释放 settledPage=${pagerState.settledPage} isRecording=$isRecording",
+                "unbind: shouldBind=false settledPage=${pagerState.settledPage} isRecording=$isRecording hasCamera=$hasCamera granted=$cameraPermissionGranted",
             )
-            recordingEngine.unbind(context, reason = "省电释放 settledPage=${pagerState.settledPage}")
+            recordingEngine.unbind(context, reason = "shouldBind=false settledPage=${pagerState.settledPage}")
         }
     }
 
