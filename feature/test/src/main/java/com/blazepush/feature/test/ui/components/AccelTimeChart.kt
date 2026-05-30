@@ -100,7 +100,7 @@ fun AccelTimeChart(
 
         if (cursorSample?.accelerationG != null) {
             MetricNumber(
-                value = cursorSample.accelerationG.toString(),
+                value = String.format(java.util.Locale.US, "%.2f", cursorSample.accelerationG),
                 kind = MetricKind.Mechanical,
                 size = MetricSize.Small,
                 unit = "G",
