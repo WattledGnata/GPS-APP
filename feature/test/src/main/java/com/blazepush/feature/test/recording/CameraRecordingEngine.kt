@@ -13,6 +13,7 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.blazepush.core.data.repository.TelemetryRepository
@@ -73,6 +74,7 @@ class CameraRecordingEngine(
     val recordingState: StateFlow<RecordingState> = _recordingState
 
     // CameraX 句柄（bind 成功后赋值，unbind / Error 时清空）
+    private var preview: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
 
@@ -81,39 +83,43 @@ class CameraRecordingEngine(
     private var _capturedWallClock: Long = 0L
     private var _capturedSessionId: String? = null
 
+    // =========================================================================
+    // 新 API（recording-persist-across-pages-and-hud-indicator round）
+    // 把"绑定 use-case"与"连接 PreviewView surface"解耦：
+    //   bind()                  — 绑定 Preview+VideoCapture（不设 surface，由调用方 attach）
+    //   unbind()                — 解绑（含录制中先 stop）
+    //   attachPreviewSurface()  — 设置 Preview.setSurfaceProvider(previewView.surfaceProvider)
+    //   detachPreviewSurface()  — 设置 Preview.setSurfaceProvider(null)（录制中 detach 安全）
+    // =========================================================================
+
     /**
-     * 绑定 Preview + VideoCapture 双 use-case。
+     * 绑定 Preview + VideoCapture 双 use-case（screen-level lifecycle owner）。
      *
-     * 注意：此方法由 RecordableCameraPreview Composable 在 DisposableEffect 内调用（主线程）。
-     * bind 失败 → state = Error，UI 降级（预览黑屏）。
+     * 本方法由 LapLiveScreen 顶层 LaunchedEffect 驱动，条件 settledPage==1 || isRecording。
+     * 不接受 previewView：surface 连接由 [attachPreviewSurface] 独立管理。
+     * 幂等：内部 cameraProvider.unbindAll() + 重新绑定，重复调用安全。
      *
-     * fps 控制：CameraX 1.3.4 的 Recorder.Builder 不支持 Camera2Interop（不实现 ExtendableBuilder）。
-     * 帧率由 QualitySelector + 设备 HAL 决定，通常 30fps。
-     *
-     * @param previewView    CameraX PreviewView（已在 Composable 创建）
-     * @param lifecycleOwner Composable 的 LocalLifecycleOwner
-     * @param context        用于获取 ProcessCameraProvider + MainExecutor
-     * @param config         录制配置（分辨率；fps 字段本 round 不实际控制，留扩展点）
+     * @param lifecycleOwner screen 级 LifecycleOwner（Activity lifecycle，非 page Composable）
+     * @param context        Application / Activity context
+     * @param config         录制配置
      */
     @MainThread
-    fun bindUseCases(
-        previewView: androidx.camera.view.PreviewView,
+    fun bind(
         lifecycleOwner: LifecycleOwner,
         context: Context,
         config: RecordingConfig = RecordingConfig.DEFAULT,
     ) {
-        FileLogger.d(TAG, "bindUseCases: config=$config (fps hint 在 1.3.4 Recorder.Builder 上不可用，由设备决定)")
+        FileLogger.d(TAG, "bind: lifecycleOwner=${lifecycleOwner::class.simpleName} config=$config")
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             val bindResult = runCatching {
                 val cameraProvider = cameraProviderFuture.get()
 
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
+                val newPreview = Preview.Builder().build()
+                // 不设 surface：surface 由 attachPreviewSurface 独立驱动
+                // 若已有 surface 连接，保留（重绑时重新 attach 即可）
 
-                // Recorder：按 config.resolution 选 QualitySelector（FHD_1080P → Quality.FHD）
                 val recorder = Recorder.Builder()
                     .setQualitySelector(
                         when (config.resolution) {
@@ -123,23 +129,24 @@ class CameraRecordingEngine(
                     .build()
                 val vc = VideoCapture.withOutput(recorder)
 
-                // unbindAll 再 bind，避免重复 bind 或旧 use-case 冲突（CameraPreview 也会 unbindAll，此处覆盖）
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
+                    newPreview,
                     vc,
                 )
-                vc
+                Pair(newPreview, vc)
             }
 
-            bindResult.onSuccess { vc ->
+            bindResult.onSuccess { (newPreview, vc) ->
+                preview = newPreview
                 videoCapture = vc
-                FileLogger.d(TAG, "bindUseCases: Preview+VideoCapture 双 use-case 绑定 OK")
+                FileLogger.d(TAG, "bind: Preview+VideoCapture 双 use-case 绑定 OK（surface 待 attachPreviewSurface）")
             }.onFailure { t ->
+                preview = null
                 videoCapture = null
-                val msg = "bindUseCases 失败: ${t.message}"
+                val msg = "bind 失败: ${t.message}"
                 _recordingState.value = RecordingState.Error(msg)
                 FileLogger.e(TAG, msg, t)
             }
@@ -147,22 +154,108 @@ class CameraRecordingEngine(
     }
 
     /**
-     * 解绑所有 use-case（Composable onDispose 调用）。
-     * 若录制进行中，先 stop 再 unbind。
+     * 解绑所有 use-case（幂等）。若录制进行中先 stop 再 unbind。
+     *
+     * 由 LapLiveScreen 顶层 LaunchedEffect（省电路径）或 DisposableEffect.onDispose（screen 销毁）调用。
+     *
+     * @param context Application / Activity context
+     * @param reason  日志原因描述，供路测 FileLogger 诊断
      */
     @MainThread
-    fun unbindAll(context: Context) {
+    fun unbind(context: Context, reason: String = "省电释放") {
         if (_recordingState.value is RecordingState.Recording) {
-            FileLogger.d(TAG, "unbindAll: active recording detected, requesting stop first")
+            FileLogger.d(TAG, "unbind: reason=$reason 录制中，先 stopRecording")
             stopRecording()
         }
         runCatching {
             ProcessCameraProvider.getInstance(context).get().unbindAll()
         }.onFailure { t ->
-            FileLogger.e(TAG, "unbindAll failed", t)
+            FileLogger.e(TAG, "unbind failed: reason=$reason", t)
         }
+        preview = null
         videoCapture = null
-        FileLogger.d(TAG, "unbindAll: camera unbound")
+        FileLogger.d(TAG, "unbind: camera 已释放 reason=$reason")
+    }
+
+    /**
+     * 连接 PreviewView surface 到 Preview use-case（page 1 进入 composition 时调用）。
+     *
+     * 录制中亦可 attach（VideoCapture 管道独立，attach surface 仅恢复预览画面）。
+     * 若 [bind] 尚未调用（preview=null），记 WARN 并 no-op（不抛异常）。
+     *
+     * @param previewView 目标 PreviewView
+     */
+    @MainThread
+    fun attachPreviewSurface(previewView: PreviewView) {
+        val p = preview
+        if (p == null) {
+            FileLogger.d(TAG, "attachPreviewSurface: WARN preview=null（bind 尚未完成），no-op")
+            return
+        }
+        p.setSurfaceProvider(previewView.surfaceProvider)
+        FileLogger.d(TAG, "attachPreviewSurface: surface 已连接 previewView=$previewView")
+    }
+
+    /**
+     * 断开 PreviewView surface（page 1 离开 composition 时调用）。
+     *
+     * 录制中调用：VideoCapture 继续录制，仅预览画面停止渲染（setSurfaceProvider(null) 合法）。
+     * 未绑定（preview=null）时为 no-op。
+     */
+    @MainThread
+    fun detachPreviewSurface() {
+        val p = preview
+        if (p == null) {
+            FileLogger.d(TAG, "detachPreviewSurface: preview=null，no-op")
+            return
+        }
+        p.setSurfaceProvider(null)
+        val isRec = _recordingState.value is RecordingState.Recording
+        FileLogger.d(TAG, "detachPreviewSurface: surface 已断开（isRecording=$isRec，VideoCapture 继续）")
+    }
+
+    // =========================================================================
+    // 旧 API（Deprecated - 由上方新 API 替代）
+    // =========================================================================
+
+    /**
+     * 绑定 Preview + VideoCapture 双 use-case。
+     *
+     * @deprecated 使用 [bind] + [attachPreviewSurface] / [detachPreviewSurface] 替代。
+     *             本方法保留仅防旧调用方编译断，新代码不得使用。
+     */
+    @Deprecated(
+        message = "使用 bind(lifecycleOwner, context, config) + attachPreviewSurface(previewView) 替代",
+        replaceWith = ReplaceWith("bind(lifecycleOwner, context, config)"),
+    )
+    @MainThread
+    fun bindUseCases(
+        previewView: androidx.camera.view.PreviewView,
+        lifecycleOwner: LifecycleOwner,
+        context: Context,
+        config: RecordingConfig = RecordingConfig.DEFAULT,
+    ) {
+        FileLogger.d(TAG, "bindUseCases: DEPRECATED，转发到 bind + attachPreviewSurface")
+        bind(lifecycleOwner, context, config)
+        // 异步 bind 完成后 preview 可能尚未就绪；这里直接 attach 会 no-op（WARN log）。
+        // 保持旧行为：调用方进 DisposableEffect 时同步执行，bind 异步回调后 preview 才有值。
+        // DEPRECATED 方法不保证 surface 即时连接，新代码请用 attachPreviewSurface。
+        attachPreviewSurface(previewView)
+    }
+
+    /**
+     * 解绑所有 use-case（Composable onDispose 调用）。
+     *
+     * @deprecated 使用 [unbind] 替代。保留防旧调用方编译断。
+     */
+    @Deprecated(
+        message = "使用 unbind(context, reason) 替代",
+        replaceWith = ReplaceWith("unbind(context)"),
+    )
+    @MainThread
+    fun unbindAll(context: Context) {
+        FileLogger.d(TAG, "unbindAll: DEPRECATED，转发到 unbind")
+        unbind(context, reason = "unbindAll（旧 API）")
     }
 
     /**

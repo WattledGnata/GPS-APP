@@ -14,9 +14,16 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +73,7 @@ import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.recording.CameraRecordingEngine
+import com.blazepush.feature.test.recording.RecordingConfig
 import com.blazepush.feature.test.recording.RecordingState
 import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
@@ -94,9 +104,12 @@ fun LapLiveScreen(
     val context = LocalContext.current
     val view = LocalView.current
     val coroutineScope = rememberCoroutineScope()
+    val screenLifecycleOwner = LocalLifecycleOwner.current
 
     val lapLiveState by sessionViewModel.lapLiveState.collectAsState()
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
+    // screen 顶层收集录制状态：供绑定条件 LaunchedEffect + RecIndicator + 资源安全 onDispose 共用
+    val recordingState by recordingEngine.recordingState.collectAsState()
 
     var showEndConfirmation by remember { mutableStateOf(false) }
     val trackName = track?.name?.zh ?: "—"
@@ -182,6 +195,32 @@ fun LapLiveScreen(
         }
     }
 
+    // recording-persist-across-pages-and-hud-indicator：screen-level 绑定条件驱动。
+    // 条件：settledPage==1（预览页可见）OR isRecording（录制中跨页持续）→ bind。
+    // 两者均 false → unbind（省电释放）。
+    // hasCamera gate：无相机机型不做无意义 bind，省资源。
+    val isRecording = recordingState is RecordingState.Recording
+    LaunchedEffect(pagerState.settledPage, isRecording, hasCamera, cameraPermissionGranted) {
+        if (!hasCamera || !cameraPermissionGranted) {
+            // 无相机或未授权：不 bind，避免无效资源占用
+            FileLogger.d("CamRec", "bind skip: hasCamera=$hasCamera granted=$cameraPermissionGranted")
+            return@LaunchedEffect
+        }
+        if (pagerState.settledPage == 1 || isRecording) {
+            FileLogger.d(
+                "CamRec",
+                "bind: settledPage=${pagerState.settledPage} isRecording=$isRecording → 绑定 camera（screen lifecycle）",
+            )
+            recordingEngine.bind(screenLifecycleOwner, context, RecordingConfig.DEFAULT)
+        } else {
+            FileLogger.d(
+                "CamRec",
+                "unbind: 省电释放 settledPage=${pagerState.settledPage} isRecording=$isRecording",
+            )
+            recordingEngine.unbind(context, reason = "省电释放 settledPage=${pagerState.settledPage}")
+        }
+    }
+
     DisposableEffect(Unit) {
         val activity = context.findActivity()
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -189,6 +228,14 @@ fun LapLiveScreen(
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             view.keepScreenOn = false
+            // screen 销毁资源安全：录制中先 stop，再 unbind，防泄漏
+            val currentState = recordingEngine.recordingState.value
+            if (currentState is RecordingState.Recording) {
+                FileLogger.d("CamRec", "screen 销毁：录制中，先 stopRecording")
+                recordingEngine.stopRecording()
+            }
+            FileLogger.d("CamRec", "screen 销毁：unbind camera")
+            recordingEngine.unbind(context, reason = "screen 销毁")
         }
     }
 
@@ -220,6 +267,11 @@ fun LapLiveScreen(
                 lapLiveState = lapLiveState,
                 onConfirmEnd = onConfirmEnd,
                 hasCamera = hasCamera,
+                recordingState = recordingState,
+                onStopRecording = {
+                    FileLogger.d("CamRec", "HUD RecIndicator 点击 stop")
+                    recordingEngine.stopRecording()
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -256,6 +308,8 @@ private fun LapHudPage(
     lapLiveState: LapLiveState,
     onConfirmEnd: () -> Unit,
     hasCamera: Boolean,
+    recordingState: RecordingState,
+    onStopRecording: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -295,13 +349,96 @@ private fun LapHudPage(
             )
         }
 
+        // recording-persist-across-pages-and-hud-indicator：
+        // 录制中显示 RecIndicator（红点+时长+可点停），非 Recording 态不渲染（if/else，禁 early return）。
+        if (recordingState is RecordingState.Recording) {
+            RecIndicator(
+                startedAtWallClock = recordingState.startedAtWallClock,
+                onStop = onStopRecording,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 0.dp, end = 0.dp),
+            )
+        }
+
         // 横滑提示（spec MUST 5）：右缘小 chevron + 2 个 dot 页指示器，不喧宾夺主。
-        // 仅在有相机时提示（无相机机型预览页只显示降级文案，仍可横滑但不强调）。
-        if (hasCamera) {
+        // 仅在有相机且非录制时提示（录制中已有 RecIndicator 在右上，与横滑提示同位置冲突，优先 RecIndicator）。
+        if (hasCamera && recordingState !is RecordingState.Recording) {
             SwipeToCameraHint(
                 modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
+    }
+}
+
+/**
+ * HUD 页录制状态指示器（recording-persist-across-pages-and-hud-indicator round）。
+ *
+ * 仅在 [RecordingState.Recording] 时渲染。显示：
+ * - 闪烁红点（InfiniteTransition alpha 1→0.3→1，周期 800ms）
+ * - 录制时长（mm:ss，每秒刷新，从 startedAtWallClock 算 elapsed）
+ * - 整体 clickable → onStop（停止录制）
+ *
+ * V2 视觉约束：时长 Text maxLines=1 + Ellipsis + Score 字体（含冒号，不可用 Mechanical）。
+ */
+@Composable
+private fun RecIndicator(
+    startedAtWallClock: Long,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var elapsedMs by remember { mutableLongStateOf(0L) }
+
+    // 每秒刷新时长（UI ticker，引擎不负责 tick）
+    LaunchedEffect(startedAtWallClock) {
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - startedAtWallClock
+            delay(1000L)
+        }
+    }
+
+    // 红点闪烁（alpha 1→0.3 循环，周期 800ms）
+    val infiniteTransition = rememberInfiniteTransition(label = "rec_dot")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "rec_dot_alpha",
+    )
+
+    val minutes = elapsedMs / 60000
+    val seconds = (elapsedMs / 1000) % 60
+    val timeText = "%02d:%02d".format(minutes, seconds)
+
+    Row(
+        modifier = modifier
+            .clickable(onClick = onStop)
+            .background(
+                color = TrackTechColors.SurfaceDark.copy(alpha = 0.8f),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // 闪烁红点
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(TrackTechColors.Red.copy(alpha = dotAlpha)),
+        )
+        // 录制时长（Score 字体，含冒号不可用 Mechanical）
+        Text(
+            text = timeText,
+            style = TrackTechTypography.UiTextLabel,
+            color = TrackTechColors.Red,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -343,8 +480,9 @@ private fun SwipeToCameraHint(modifier: Modifier = Modifier) {
  *  - 有相机但未授权 → 显示"需要相机/麦克风权限" + "授权"按钮。
  *  - 有相机且已授权 → 仅当 isCurrent（settledPage==1）时渲染 RecordableCameraPreview + start/stop 按钮。
  *
- * isCurrent gate：回到页 0 → RecordableCameraPreview 不在 composition → onDispose unbindAll（释放相机）。
- * 录制不随 isCurrent 中断（引擎内部处理）；unbindAll 时引擎会 stop 进行中的录制。
+ * isCurrent gate：回到页 0 → RecordableCameraPreview 不在 composition → onDispose detachPreviewSurface（仅断预览画面）。
+ * 录制不随 isCurrent 中断：camera 绑定在 screen 顶层 LaunchedEffect（settledPage==1 || isRecording）管理，
+ * 录制中横滑回页 0 时 VideoCapture 继续录、仅预览画面停止渲染（不再 unbindAll，故录制不断）。
  */
 @Composable
 private fun CameraPreviewPage(
@@ -395,8 +533,9 @@ private fun CameraPreviewPage(
                 }
             }
         } else if (isCurrent) {
-            // 仅当本页为当前停留页时才绑相机（省电核心）。离页 → 不在 composition → onDispose unbindAll。
-            // round 3 改：使用 RecordableCameraPreview（Preview + VideoCapture 双 use-case），替代原 CameraPreview。
+            // 仅当本页为当前停留页时才渲染预览（省电核心）。离页 → onDispose detachPreviewSurface（仅断画面）。
+            // camera 绑定由 screen 顶层 LaunchedEffect 管（settledPage==1 || isRecording）→ 录制中离页不解绑、录制不断。
+            // RecordableCameraPreview（Preview + VideoCapture 双 use-case）只管 surface 连接，不管绑定生命周期。
             RecordableCameraPreview(
                 engine = recordingEngine,
                 modifier = Modifier.fillMaxSize(),
