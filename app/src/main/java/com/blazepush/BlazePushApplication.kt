@@ -4,6 +4,7 @@ import android.app.Application
 import com.blazepush.feature.test.di.bluetoothModule
 import com.blazepush.feature.test.di.databaseModule
 import com.blazepush.feature.test.di.domainModule
+import com.blazepush.feature.test.di.recordingModule
 import com.blazepush.feature.test.di.repositoryModule
 import com.blazepush.feature.test.di.utilsModule
 import com.blazepush.feature.test.di.viewModelModule
@@ -30,7 +31,9 @@ class BlazePushApplication : Application() {
                 repositoryModule,
                 domainModule,
                 viewModelModule,
-                utilsModule
+                utilsModule,
+                // camera-recording-and-gps-sync round：录制引擎 single 注册
+                recordingModule,
             )
         }
     }

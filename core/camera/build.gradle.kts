@@ -38,7 +38,9 @@ dependencies {
     // CameraX (Phase 2 视频管线)
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
-    implementation(libs.androidx.camera.video)
+    // camera-recording-and-gps-sync round（Decision 2）：camera-video 提为 api，
+    // 让 feature:test 的录制引擎能直接 import VideoCapture / Recorder / QualitySelector。
+    api(libs.androidx.camera.video)
     // camera-preview-in-laplivescreen round（Decision 2）：camera-lifecycle / camera-view 提为 api，
     // 让 ProcessCameraProvider / PreviewView 类透出给依赖方 feature:test（CameraPreview Composable 消费）。
     // camera-core/camera2/video 保持 implementation（feature:test 不直接 import 它们）。

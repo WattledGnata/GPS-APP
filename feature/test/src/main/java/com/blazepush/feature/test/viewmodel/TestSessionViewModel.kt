@@ -283,6 +283,14 @@ class TestSessionViewModel(
 
     private var activeLapSessionId: String? = null
     private var activeLapStartSystemTs: Long? = null
+
+    /**
+     * 返回当前 active lap session id（录制引擎在 startRecording 时调用，读取当前关联的 session）。
+     * null = 无进行中的 lap session（录制将成为孤立视频）。
+     *
+     * camera-recording-and-gps-sync round（MUST 6）：public accessor，不破坏内部 private 写语义。
+     */
+    fun getActiveLapSessionId(): String? = activeLapSessionId
     private var lastWrittenCrossingCount: Int = 0
 
     private val _launchStatus = MutableStateFlow(

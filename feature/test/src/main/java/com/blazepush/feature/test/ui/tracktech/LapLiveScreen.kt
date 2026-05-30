@@ -63,11 +63,14 @@ import com.blazepush.core.camera.CameraAvailability
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.recording.CameraRecordingEngine
+import com.blazepush.feature.test.recording.RecordingState
 import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import kotlin.math.abs
 
@@ -86,6 +89,7 @@ private const val HOLD_TICK_MS = 16L
 fun LapLiveScreen(
     navController: NavController,
     sessionViewModel: TestSessionViewModel = koinViewModel(),
+    recordingEngine: CameraRecordingEngine = koinInject(),
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -157,7 +161,7 @@ fun LapLiveScreen(
         }
     }
 
-    // 显式请求一次（页 1 “授权”按钮 + 进预览页懒请求复用）：无相机不响应；已授权 no-op。
+    // 显式请求一次（页 1 "授权"按钮 + 进预览页懒请求复用）：无相机不响应；已授权 no-op。
     val requestCameraPermission: () -> Unit = {
         if (!hasCamera) {
             FileLogger.d("CamPreview", "permission request ignored: hasCamera=false")
@@ -224,6 +228,8 @@ fun LapLiveScreen(
                 hasCamera = hasCamera,
                 permissionGranted = cameraPermissionGranted,
                 onRequestPermission = requestCameraPermission,
+                recordingEngine = recordingEngine,
+                sessionViewModel = sessionViewModel,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -330,13 +336,15 @@ private fun SwipeToCameraHint(modifier: Modifier = Modifier) {
 }
 
 /**
- * 页 1 = 相机取景页（spec MUST 4/6/7）。三态分流（全用 if/else，绝不 early-return）：
- *  - 无相机机型（hasCamera=false）→ 显示“无可用相机”。
- *  - 有相机但未授权 → 显示“需要相机/麦克风权限” + “授权”按钮（再点再请求）。
- *  - 有相机且已授权 → 仅当 isCurrent（settledPage==1）时渲染 CameraPreview。
+ * 页 1 = 相机取景页（camera-recording-and-gps-sync round 改造）。
  *
- * isCurrent gate 是省电核心：回到页 0 → isCurrent=false → CameraPreview 不在 composition →
- * CameraPreview 的 DisposableEffect onDispose unbindAll 释放相机。
+ * 三态分流（全用 if/else，绝不 early-return — M2 崩溃教训）：
+ *  - 无相机机型（hasCamera=false）→ 显示"无可用相机"。
+ *  - 有相机但未授权 → 显示"需要相机/麦克风权限" + "授权"按钮。
+ *  - 有相机且已授权 → 仅当 isCurrent（settledPage==1）时渲染 RecordableCameraPreview + start/stop 按钮。
+ *
+ * isCurrent gate：回到页 0 → RecordableCameraPreview 不在 composition → onDispose unbindAll（释放相机）。
+ * 录制不随 isCurrent 中断（引擎内部处理）；unbindAll 时引擎会 stop 进行中的录制。
  */
 @Composable
 private fun CameraPreviewPage(
@@ -344,8 +352,13 @@ private fun CameraPreviewPage(
     hasCamera: Boolean,
     permissionGranted: Boolean,
     onRequestPermission: () -> Unit,
+    recordingEngine: CameraRecordingEngine,
+    sessionViewModel: TestSessionViewModel,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val recordingState by recordingEngine.recordingState.collectAsState()
+
     Box(
         modifier = modifier
             .background(TrackTechColors.Background),
@@ -383,8 +396,13 @@ private fun CameraPreviewPage(
             }
         } else if (isCurrent) {
             // 仅当本页为当前停留页时才绑相机（省电核心）。离页 → 不在 composition → onDispose unbindAll。
-            CameraPreview(modifier = Modifier.fillMaxSize())
-            // 角落小标题“CAMERA / 取景”，浮在预览之上。
+            // round 3 改：使用 RecordableCameraPreview（Preview + VideoCapture 双 use-case），替代原 CameraPreview。
+            RecordableCameraPreview(
+                engine = recordingEngine,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            // 角落标题（左上角）
             Text(
                 text = "CAMERA · 取景",
                 style = TrackTechTypography.UiTextLabel,
@@ -395,6 +413,68 @@ private fun CameraPreviewPage(
                     .align(Alignment.TopStart)
                     .padding(16.dp),
             )
+
+            // 录制状态文字（右上角）—— round 5 再做精致 REC 红点，此处最小可用
+            val recStateText = when (recordingState) {
+                is RecordingState.Recording -> "REC"
+                is RecordingState.Stopping -> "停止中..."
+                is RecordingState.Error -> "录制错误"
+                else -> ""
+            }
+            if (recStateText.isNotEmpty()) {
+                Text(
+                    text = recStateText,
+                    style = TrackTechTypography.UiTextLabel,
+                    color = when (recordingState) {
+                        is RecordingState.Recording -> TrackTechColors.Red
+                        is RecordingState.Error -> TrackTechColors.Red
+                        else -> TrackTechColors.TextMuted
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp),
+                )
+            }
+
+            // Start/Stop 录制按钮（右下角 · 最小可用 · 精致版留 round 5）
+            val recBtnText = when (recordingState) {
+                is RecordingState.Recording -> "STOP"
+                is RecordingState.Stopping -> "停止中..."
+                is RecordingState.Error -> "重试"
+                else -> "REC"
+            }
+            val recBtnColor = when (recordingState) {
+                is RecordingState.Recording -> TrackTechColors.Red
+                is RecordingState.Error -> TrackTechColors.Red
+                else -> TrackTechColors.Cyan
+            }
+            TextButton(
+                onClick = {
+                    if (recordingState is RecordingState.Recording) {
+                        recordingEngine.stopRecording()
+                    } else if (recordingState is RecordingState.Idle || recordingState is RecordingState.Error) {
+                        if (recordingState is RecordingState.Error) recordingEngine.resetError()
+                        recordingEngine.startRecording(
+                            context = context,
+                            activeSessionId = sessionViewModel.getActiveLapSessionId(),
+                        )
+                    }
+                    // Stopping 状态下按钮点击忽略
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = recBtnText,
+                    style = TrackTechTypography.RacingTitleSmall,
+                    color = recBtnColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         } else {
             // 已授权但当前不在本页（settledPage!=1）→ 占位，不绑相机（防 beyondBounds 预组合时误绑）。
             Text(

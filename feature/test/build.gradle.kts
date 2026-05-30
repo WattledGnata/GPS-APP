@@ -53,6 +53,9 @@ dependencies {
     implementation(project(":core:bluetooth"))
     // camera-preview-in-laplivescreen round（Decision 2）：拿 PreviewView / ProcessCameraProvider
     // （core:camera 把 camera-view/camera-lifecycle 提为 api）+ CameraAvailability（hasCamera 降级）。
+    // camera-recording-and-gps-sync round：core:camera 已将 camera-video 改为 api（VideoCapture/Recorder 透出）。
+    // fps hint 实现（Camera2Interop）在 CameraX 1.3.4 不适用 Recorder.Builder（不实现 ExtendableBuilder），
+    // 暂不引入 camera-camera2 直接依赖，fps 由设备决定（design.md Decision 3 risks 已声明）。
     implementation(project(":core:camera"))
 
     implementation(libs.androidx.core.ktx)

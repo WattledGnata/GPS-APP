@@ -4,6 +4,7 @@ import androidx.room.Room
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.feature.test.datastore.RecentTracksStore
 import com.blazepush.feature.test.datastore.RecentTracksStoreApi
+import com.blazepush.feature.test.recording.CameraRecordingEngine
 import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
@@ -131,6 +132,14 @@ private inline fun <reified T : Throwable> Throwable.findInCauseChain(): T? {
         current = current.cause
     }
     return null
+}
+
+/**
+ * 录制模块（camera-recording-and-gps-sync round）
+ */
+val recordingModule = module {
+    // CameraRecordingEngine 为 single（同一 LapLiveScreen 实例共享引擎状态）
+    single { CameraRecordingEngine(get()) }
 }
 
 /**
