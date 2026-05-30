@@ -201,6 +201,17 @@ fun TrackTechAppShell() {
                         sessionViewModel = sessionViewModel,
                     )
                 }
+                composable(
+                    route = "lap_comparison/{sessionId}",
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                    LapComparisonScreen(
+                        navController = navController,
+                        sessionId = sessionId,
+                        sessionViewModel = sessionViewModel,
+                    )
+                }
             }
         }
     }

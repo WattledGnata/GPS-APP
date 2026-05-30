@@ -183,6 +183,20 @@ fun LapSessionDetailScreen(
                     distanceKm = distanceKm,
                 )
             }
+            // M3 COMPARE 入口（lap-comparison-screen-with-cursor）：仅在 ≥2 个 VALID/BEST 圈时
+            // 可点（< 2 圈无法比较 → disabled）。点击导航到 lap_comparison/{sessionId}。
+            item {
+                CompareEntry(
+                    enabled = derived.validLaps >= 2,
+                    onClick = {
+                        FileLogger.d(
+                            "LapCompare",
+                            "open compare sid=$sessionId validLaps=${derived.validLaps}",
+                        )
+                        navController.navigate("lap_comparison/$sessionId")
+                    },
+                )
+            }
             if (table != null) {
                 // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），
                 // INVALID/INCOMPLETE 圈仍用原 LapRecordRow 在表下方列出（别丢）。
@@ -368,6 +382,51 @@ private fun OverviewRow(
             text = value,
             style = TrackTechTypography.UiTextBody,
             color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * M3 COMPARE 入口按钮（lap-comparison-screen-with-cursor）。
+ * enabled = false（< 2 VALID/BEST 圈）时灰禁不可点；enabled = true 时紫色高亮可点导航。
+ * 时间/文字字符串走 Score/UiText 字体（V2：MUST NOT DSEG7）；Text maxLines=1 + Ellipsis。
+ */
+@Composable
+private fun CompareEntry(
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = if (enabled) TrackTechColors.Purple else TrackTechColors.BorderAlpha60
+    val labelColor = if (enabled) TrackTechColors.Purple else TrackTechColors.TextMuted
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
+            .background(if (enabled) TrackTechColors.PurpleAlpha20 else TrackTechColors.Surface)
+            .border(
+                width = 1.dp,
+                color = accent,
+                shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "COMPARE LAPS",
+            style = TrackTechTypography.UiTextLabel,
+            color = labelColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (enabled) "›" else "—",
+            style = TrackTechTypography.UiTextBody,
+            color = labelColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
