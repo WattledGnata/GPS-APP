@@ -169,6 +169,27 @@ fun LapDetailScreen(
                         cursorAbsoluteTs = cursorAbsoluteTs,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // 本圈各 sector 耗时（lap-detail-sector-split-times round）：sector 是看圈速的关注点。
+                    val sectorSplits = computeSectorSplits(
+                        telemetry.sectorBoundaries,
+                        telemetry.lapEndWallClock,
+                    )
+                    if (sectorSplits.size >= 2) {
+                        sectorSplits.forEachIndexed { index, splitMs ->
+                            OverviewRow(
+                                label = "Sector ${index + 1}",
+                                value = formatLapDetailTime(splitMs),
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "无 sector 分段",
+                            style = TrackTechTypography.UiTextLabel,
+                            color = TrackTechColors.TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
             item {
@@ -326,6 +347,17 @@ private fun OverviewRow(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * 本圈各 sector 耗时（split）：sectorBoundaries（[lapStart, s1, s2, ...]）末尾接 lapEndWallClock，
+ * 相邻差即各段耗时。返回 sectorBoundaries.size 个 split（最后一段到 lapEnd）。空 boundaries → 空。
+ * 抽 internal 纯函数便于 JVM 单测。
+ */
+internal fun computeSectorSplits(sectorBoundaries: List<Long>, lapEndWallClock: Long): List<Long> {
+    if (sectorBoundaries.isEmpty()) return emptyList()
+    val bounds = sectorBoundaries + lapEndWallClock
+    return bounds.zipWithNext { a, b -> b - a }
 }
 
 /** 圈时格式化（m:ss.mmm）。与 LapSessionDetailScreen.formatLapTime 同语义（时间字符串 → Score 字体）。 */
