@@ -1,0 +1,22 @@
+estimated_days: 0.4
+actual_days: 0.3        # 子 agent 实现表 + 主会话 review/build/真机迭代（含 supersede 旧面板）
+complexity: "medium"    # 圈列表 UI 重做（表 + 共享横滚 + 高亮 + theoretical 行）+ 数据函数重构；单文件但 ~150 行 UI
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无；supersede lap-session-theoretical-best 面板（用户路测否大面板，改表）"
+phase: "Phase 1"
+model_apply: "opus"     # 子 agent（general-purpose，继承 Opus）实现 + 主会话 orchestration/review
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# supersede lap-session-theoretical-best 的大面板 → RaceChrono/AiM 风格圈列表表（lap 行×sector 列，最快段 Green 高亮 + OPT 行）。
+# computeLapSectorTable 纯函数从现成 crossings 算（零 binary/repo/契约改）；窄屏共享 hScroll + 固定列宽防挤压。
+# 子 agent 实现 + 主会话 review（旧面板/函数删净 only 注释残留 + 表逻辑核对）；LapSectorTableTest 6 case + feature:test 343/0fail。
+# 真机 vivo V2405A 用户签收 OK（lastUpdateTime 2026-05-30 11:27；第二次 ! adb install Success）。code commit d410cf0。
+# follow-up：窄屏横滚 edge fade / 列宽极端值微调（见 tasks §10）。
