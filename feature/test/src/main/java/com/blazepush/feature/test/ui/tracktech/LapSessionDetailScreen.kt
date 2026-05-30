@@ -132,12 +132,21 @@ fun LapSessionDetailScreen(
             title = "Session",
             onBack = { navController.popBackStack() },
         )
+        val theoreticalBest = remember(crossings) { computeTheoreticalBest(crossings) }
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (theoreticalBest != null) {
+                item {
+                    TheoreticalBestPanel(
+                        best = theoreticalBest,
+                        bestActualLapMs = derived.bestLapMs,
+                    )
+                }
+            }
             item {
                 OverviewSection(
                     trackName = trackName,
@@ -505,6 +514,130 @@ internal data class DetailMetrics(
     val bestLapMs: Long?,
     val lapRecords: List<UiLapRecord>,
 )
+
+/**
+ * lap-session-theoretical-best round：理论最佳圈聚合（各 sector 取所有完整圈中最快段拼接）+ 每 sector 最快圈号。
+ */
+internal data class TheoreticalBest(
+    val totalMs: Long,
+    val sectors: List<SectorBest>,
+)
+
+internal data class SectorBest(
+    val sectorIndex: Int,
+    val bestMs: Long,
+    val lapNumber: Int,
+)
+
+/**
+ * 从 LapSessionDetailScreen 已加载的 crossings 直接算理论最佳圈（复用 deriveDetailMetrics / getLapTelemetry 同款
+ * SF 配对 + sector 窗口逻辑，零 binary 读、零 repository 改）。无 sector 门（每圈 < 2 段）或无完整圈 → null（不显示）。
+ */
+internal fun computeTheoreticalBest(crossings: List<TelemetryCrossingEvent>): TheoreticalBest? {
+    val acceptedSF = crossings
+        .filter {
+            it.gateType.equals("StartFinish", ignoreCase = true) &&
+                it.accepted &&
+                it.crossingWallClockTimestampMs != null
+        }
+        .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
+    if (acceptedSF.size < 2) return null
+    val sectorWallClocks = crossings
+        .filter {
+            it.gateType.equals("Sector", ignoreCase = true) &&
+                it.accepted &&
+                it.crossingWallClockTimestampMs != null
+        }
+        .mapNotNull { it.crossingWallClockTimestampMs }
+    // 每圈各 sector 耗时（lapNumber = idx + 1，与 deriveDetailMetrics / getLapTelemetry 同源配对）。
+    // acceptedSF 已过滤 wallClock 非空，!! 安全。
+    val perLap = acceptedSF.zipWithNext().mapIndexed { idx, pair ->
+        val lapStart = pair.first.crossingWallClockTimestampMs!!
+        val lapEnd = pair.second.crossingWallClockTimestampMs!!
+        val inWindow = sectorWallClocks.filter { it in lapStart until lapEnd && it != lapStart }.sorted()
+        val bounds = listOf(lapStart) + inWindow + lapEnd
+        (idx + 1) to bounds.zipWithNext { a, b -> b - a }
+    }
+    val sectorCount = perLap.maxOfOrNull { it.second.size } ?: 0
+    if (sectorCount < 2) return null
+    val completeLaps = perLap.filter { it.second.size == sectorCount }
+    if (completeLaps.isEmpty()) return null
+    val sectors = (0 until sectorCount).map { i ->
+        val best = completeLaps.minByOrNull { it.second[i] }!!
+        SectorBest(sectorIndex = i, bestMs = best.second[i], lapNumber = best.first)
+    }
+    return TheoreticalBest(totalMs = sectors.sumOf { it.bestMs }, sectors = sectors)
+}
+
+@Composable
+private fun TheoreticalBestPanel(
+    best: TheoreticalBest,
+    bestActualLapMs: Long?,
+) {
+    CutCornerPanel(
+        modifier = Modifier.fillMaxWidth(),
+        cutSize = 6.dp,
+        cutCorners = cutCornersAll,
+        contentPadding = 16.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "THEORETICAL BEST",
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = formatLapTime(best.totalMs),
+                style = TrackTechTypography.RacingTitleMedium,
+                color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (bestActualLapMs != null && bestActualLapMs > best.totalMs) {
+                Text(
+                    text = "比最快圈快 %.3fs".format((bestActualLapMs - best.totalMs) / 1000.0),
+                    style = TrackTechTypography.UiTextBody,
+                    color = TrackTechColors.Green,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            best.sectors.forEach { s ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Sector ${s.sectorIndex + 1}",
+                        style = TrackTechTypography.UiTextLabel,
+                        color = TrackTechColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Text(
+                        text = formatLapTime(s.bestMs),
+                        style = TrackTechTypography.UiTextBody,
+                        color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        text = "Lap ${s.lapNumber}",
+                        style = TrackTechTypography.UiTextLabel,
+                        color = TrackTechColors.Cyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
 
 internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
     // unify-lap-count-pairing-semantics round：accepted SF 排序键 + duration 减法统一为
