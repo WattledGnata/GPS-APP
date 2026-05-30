@@ -1,0 +1,31 @@
+estimated_days: 0.3
+actual_days: 0.5        # 含 2 轮路测 bug 修复（预览黑屏 + 录制 code=4）
+complexity: "medium"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2:
+  - "P0(主会话归档自审): CameraPreviewPage L483/L535 注释 rot 把核心机制说反(写 onDispose unbindAll stop 录制)，实际 RecordableCameraPreview 只 detachPreviewSurface；已修正合进 7c2c899"
+  - "注：真机路测发现 2 个回归 bug 已修(见 divergence_reason)"
+divergence_reason: "实施初版(3ec82dd)真机路测暴露 2 个回归 bug：A 预览黑屏——attachPreviewSurface 跑在 bind 前(preview=null no-op)、bind 后无人补连 surface；B 录制 code=4——LaunchedEffect 把 isRecording 当 key，录制开始 false→true 触发 rebind 打断 VideoCapture 管道。修复(9a03c6c)：A engine 存 pendingPreviewView + bind 后补连 surface；B LaunchedEffect 改单 key shouldBind(=settledPage==1||isRecording，录制中不翻转不重跑) + bind/unbind 幂等守卫(isBound+lifecycleOwner 引用比较)。注释 rot 修正(7c2c899)。"
+phase: "Phase 2"
+model_apply: "sonnet"
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地（含 2 轮路测 bug 修复）---
+# 初版(3ec82dd)：camera 绑定生命周期重构 + 跨页状态 UI（HUD REC 红点+时长+可点停）。
+# 路测 bug A（预览黑屏）：attachPreviewSurface 跑在 bind 前 preview=null no-op，bind 后无人补连 surface。
+#   修复：engine 存 pendingPreviewView，bind 后补连 surface。
+# 路测 bug B（录制 code=4）：LaunchedEffect key=isRecording，录制开始 false→true 重跑 rebind 打断 VideoCapture 管道。
+#   修复：key 改 shouldBind(=settledPage==1||isRecording)，录制中不翻转不重跑；bind/unbind 加幂等守卫(isBound+lifecycleOwner 引用比较)。
+# 注释 rot 修正(7c2c899)：CameraPreviewPage L483/L535 错描述 onDispose unbindAll stop 录制，实际只 detachPreviewSurface。
+# 真机验证通过(华为 8KE0219522008434)：预览出画面 / 录制 Finalize OK / 落盘 26.8MB /
+#   录制中横滑跨页持续不断 / HUD 红点+时长+可点停 / 未录制回 HUD 省电释放。
+# commit 链：3ec82dd(初版) → 7c2c899(注释 rot 修正) → 9a03c6c(修 2 回归 bug)。
+# FileLogger 锚点 tag=CamRec：bind/unbind 原因 / attach 补连 / detach / Finalize / screen 销毁收尾。
+# 次级风险：录制中 Activity 旋转 recreate 会 rebind 打断录制——LapLiveScreen 强制横屏规避，未处理。
+# follow-up：recording-params-config-screen（见 docs/design/recording-params-config-deferred.md）。
