@@ -6,13 +6,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.blazepush.feature.test.overlay.OverlayCanvasPainter
 import com.blazepush.feature.test.usecase.GaugeMath
 import kotlin.math.sqrt
 
@@ -44,6 +47,18 @@ fun GForceBall(
     val gMag = sqrt(lat * lat + lon * lon)
     val dotColor = if (gMag >= GaugeMath.GBALL_MAX_G * 0.8) TrackTechColors.Red else TrackTechColors.Cyan
 
+    // 共享绘制层颜色容器（真相源仍是 TrackTechColors）。
+    // round video-export-burned-overlay Round A：Canvas 块下沉到 OverlayCanvasPainter，回放端薄壳。
+    val paints = remember(dotColor) {
+        OverlayCanvasPainter.GForcePaints(
+            dialColor = dialColor.toArgb(),
+            outerColor = outerColor.toArgb(),
+            ringColor = ringColor.toArgb(),
+            axisColor = axisColor.toArgb(),
+            dotColor = dotColor.toArgb(),
+        )
+    }
+
     Box(
         modifier = modifier.size(diameter),
         contentAlignment = Alignment.Center,
@@ -51,45 +66,17 @@ fun GForceBall(
         Canvas(modifier = Modifier.size(diameter)) {
             val w = size.width
             val h = size.height
-            val cx = w / 2f
-            val cy = h / 2f
-            val radius = minOf(w, h) / 2f - 2f
-            val center = Offset(cx, cy)
-
-            // 表盘底
-            drawCircle(color = dialColor, radius = radius, center = center)
-
-            // 同心刻度圈：0.5G / 1.0G / 1.5G（1.5G = 外圈边界）
-            val ringFractions = listOf(0.5 / GaugeMath.GBALL_MAX_G, 1.0 / GaugeMath.GBALL_MAX_G, 1.0)
-            ringFractions.forEachIndexed { idx, f ->
-                drawCircle(
-                    color = if (idx == ringFractions.lastIndex) outerColor else ringColor,
-                    radius = (radius * f).toFloat(),
-                    center = center,
-                    style = Stroke(width = if (idx == ringFractions.lastIndex) 2f else 1f),
+            drawIntoCanvas { c ->
+                OverlayCanvasPainter.drawGForceBall(
+                    canvas = c.nativeCanvas,
+                    cx = w / 2f,
+                    cy = h / 2f,
+                    radius = minOf(w, h) / 2f - 2f,
+                    latG = lat,
+                    lonG = lon,
+                    paints = paints,
                 )
             }
-
-            // 十字轴
-            drawLine(
-                color = axisColor,
-                start = Offset(cx - radius, cy),
-                end = Offset(cx + radius, cy),
-                strokeWidth = 1f,
-            )
-            drawLine(
-                color = axisColor,
-                start = Offset(cx, cy - radius),
-                end = Offset(cx, cy + radius),
-                strokeWidth = 1f,
-            )
-
-            // 动点：纯函数映射归一化偏移 → 像素
-            val (nx, ny) = GaugeMath.gForceToBallOffset(lat, lon)
-            val dot = Offset(cx + nx.toFloat() * radius, cy + ny.toFloat() * radius)
-            // 动点光晕 + 实心点
-            drawCircle(color = dotColor.copy(alpha = 0.3f), radius = radius * 0.16f, center = dot)
-            drawCircle(color = dotColor, radius = radius * 0.08f, center = dot)
         }
 
         // 合成 G 数值小字（底部，纯数字读数 + 单位 G）

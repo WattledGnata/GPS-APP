@@ -403,6 +403,11 @@ private fun OverlayHud(
     trackPoints: List<GeoPoint>,
     gaugeMaxKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
 ) {
+    // round video-export-burned-overlay Round A：回放端四角已经共享绘制层 OverlayCanvasPainter
+    // （speedo/gball/minimap 经 nativeCanvas，laptime 暂保留 Compose Text）。首次组装打一条锚点。
+    LaunchedEffect(Unit) {
+        FileLogger.d(TAG, "shared painter wired: speedo/gball/minimap via OverlayCanvasPainter; laptime Compose")
+    }
     Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         SpeedCorner(
             speedKmh = frame?.speedKmh,

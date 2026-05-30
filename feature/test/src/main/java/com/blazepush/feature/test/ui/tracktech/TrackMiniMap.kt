@@ -3,12 +3,15 @@ package com.blazepush.feature.test.ui.tracktech
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import com.blazepush.feature.test.model.track.GeoPoint
+import com.blazepush.feature.test.overlay.OverlayCanvasPainter
 import kotlin.math.cos
 import kotlin.math.max
 
@@ -133,32 +136,26 @@ fun TrackMiniMap(
     currentLon: Double?,
     modifier: Modifier = Modifier,
 ) {
-    val lineColor = TrackTechColors.BorderAlpha60
-    val dotColor = TrackTechColors.Cyan
+    // 共享绘制层颜色容器（真相源仍是 TrackTechColors）。
+    // round video-export-burned-overlay Round A：Canvas 块下沉到 OverlayCanvasPainter，回放端薄壳。
+    val paints = remember {
+        OverlayCanvasPainter.MiniMapPaints(
+            lineColor = TrackTechColors.BorderAlpha60.toArgb(),
+            dotColor = TrackTechColors.Cyan.toArgb(),
+        )
+    }
     Canvas(modifier = modifier) {
-        val projected = TrackMiniMapProjection.project(
-            points = points,
-            currentLat = currentLat,
-            currentLon = currentLon,
-            canvasWidth = size.width,
-            canvasHeight = size.height,
-            padding = 6.dp.toPx(),
-        ) ?: return@Canvas
-
-        // 赛道轮廓 polyline
-        if (projected.polyline.size >= 2) {
-            val path = Path().apply {
-                moveTo(projected.polyline.first().x, projected.polyline.first().y)
-                projected.polyline.drop(1).forEach { lineTo(it.x, it.y) }
-                // 赛道闭环：首尾相连
-                lineTo(projected.polyline.first().x, projected.polyline.first().y)
-            }
-            drawPath(path = path, color = lineColor, style = Stroke(width = 2f))
-        }
-
-        // 当前位置高亮点
-        projected.current?.let { c ->
-            drawCircle(color = dotColor, radius = 5f, center = c)
+        drawIntoCanvas { c ->
+            OverlayCanvasPainter.drawTrackMiniMap(
+                canvas = c.nativeCanvas,
+                width = size.width,
+                height = size.height,
+                padding = 6.dp.toPx(),
+                points = points,
+                currentLat = currentLat,
+                currentLon = currentLon,
+                paints = paints,
+            )
         }
     }
 }
