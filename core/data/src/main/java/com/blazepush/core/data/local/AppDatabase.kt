@@ -27,12 +27,15 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
         TelemetrySessionEntity::class,
         CrossingEventEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 /**
  * Room 数据库总入口。
  * 包含测试记录、车型、蓝牙设备、速度分段、telemetry session 与过线事件 6 个 Entity。
+ *
+ * schema v6（session-video-metadata-persist）：telemetry_sessions 加 videoFilePath TEXT + videoStartedAtWallClock INTEGER，
+ * 供 Phase 2 视频帧↔遥测对齐（round 3 camera-recording-and-gps-sync 录制引擎写入）。
  *
  * @author CC
  * @description Room 数据库聚合入口，封装所有 DAO
@@ -209,17 +212,49 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * 完整迁移链（v2→v5），供 AppModule Room builder 和 JVM 单测使用。
-         * v1/v2 由 AppModule 的 destructiveMigrationFrom(1, 2) 兜底（pre-A56 开发期 schema，无 release 用户）。
+         * MIGRATION_5_6 SQL 字符串列表（v5 → v6）。
+         *
+         * session-video-metadata-persist round：telemetry_sessions 加 videoFilePath + videoStartedAtWallClock。
+         * 两列均 nullable（无 NOT NULL 约束），对应 TelemetrySessionEntity 的 String?/Long? 字段。
+         * 历史 v5 row migration 后新字段值为 NULL = "无视频"（正确降级）。
          *
          * @author CC
-         * @description aggregated migration chain v2→v5
+         * @description schema v5→v6 ALTER TABLE SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-05-30
+         */
+        internal val migration5To6Sql: List<String> = listOf(
+            "ALTER TABLE telemetry_sessions ADD COLUMN videoFilePath TEXT",
+            "ALTER TABLE telemetry_sessions ADD COLUMN videoStartedAtWallClock INTEGER",
+        )
+
+        /**
+         * Room migration v5 → v6：ADD COLUMN 两个 nullable 视频元数据字段。
+         * 不重建表，向下兼容历史数据。旧 row migration 后 videoFilePath=NULL / videoStartedAtWallClock=NULL。
+         *
+         * @author CC
+         * @description Room migration from schema v5 to v6
+         * @date 2026-05-30
+         */
+        val migration5To6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration5To6Sql.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
+         * 完整迁移链（v2→v6），供 AppModule Room builder 和 JVM 单测使用。
+         * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
+         * v2→v6 全程严格覆盖，fallbackFrom 列表不含 2-6。
+         *
+         * @author CC
+         * @description aggregated migration chain v2→v6
          * @date 2026-05-30
          */
         val migrationChain: List<Migration> = listOf(
             migration2To3,
             migration3To4,
             migration4To5,
+            migration5To6,
         )
     }
 }

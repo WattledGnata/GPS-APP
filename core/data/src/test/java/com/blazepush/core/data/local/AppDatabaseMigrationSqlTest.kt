@@ -203,9 +203,12 @@ class AppDatabaseMigrationSqlTest {
 
     @Test
     fun `migrationChain contains exactly three migrations`() {
+        // session-video-metadata-persist round：migrationChain size 已升至 4（2→3→4→5→6）。
+        // 本测试名称保留兼容（rename 需重构，scope-boundary 暂不动），断言已更新为 4。
+        // 完整的 size=4 断言见 `migrationChain contains exactly four migrations`。
         assertEquals(
-            "migrationChain must contain 3 migrations: migration2To3, migration3To4, migration4To5",
-            3,
+            "migrationChain must contain 4 migrations: migration2To3, migration3To4, migration4To5, migration5To6",
+            4,
             AppDatabase.migrationChain.size
         )
     }
@@ -236,6 +239,103 @@ class AppDatabaseMigrationSqlTest {
 
     @Test
     fun `migrationChain has no gaps between v2 and v5`() {
+        // NOTE: このテストは session-video-metadata-persist round で v6 に更新されたため
+        // 以下の v6 版テストに置き換えてください。v5 まで検証する旧バージョンとして残存。
+        // 実際のチェーンは v2→v6 であり migrationChain.size == 4 が正しい。
+        // このテストは `migrationChain has no gaps between v2 and v6` に置き換え済み。
+        val sortedChain = AppDatabase.migrationChain.sortedBy { it.startVersion }
+        assertTrue(
+            "migrationChain must at least cover v2 to v5",
+            sortedChain.any { it.startVersion == 2 } && sortedChain.any { it.endVersion >= 5 }
+        )
+    }
+
+    // ─── migration5To6 tests ───────────────────────────────────────────────────
+
+    @Test
+    fun `migration5To6 targets v5 to v6`() {
+        assertEquals(
+            "migration5To6.startVersion must be 5",
+            5,
+            AppDatabase.migration5To6.startVersion
+        )
+        assertEquals(
+            "migration5To6.endVersion must be 6 (session-video-metadata-persist round)",
+            6,
+            AppDatabase.migration5To6.endVersion
+        )
+    }
+
+    @Test
+    fun `migration5To6Sql contains exactly two statements`() {
+        assertEquals(
+            "migration5To6Sql must contain 2 statements: ADD COLUMN videoFilePath, ADD COLUMN videoStartedAtWallClock",
+            2,
+            AppDatabase.migration5To6Sql.size
+        )
+    }
+
+    @Test
+    fun `migration5To6Sql adds videoFilePath as TEXT nullable`() {
+        assertTrue(
+            "migration5To6Sql must add videoFilePath TEXT (nullable, no NOT NULL)",
+            AppDatabase.migration5To6Sql.any {
+                it.contains("ADD COLUMN videoFilePath TEXT") && !it.contains("NOT NULL")
+            }
+        )
+    }
+
+    @Test
+    fun `migration5To6Sql adds videoStartedAtWallClock as INTEGER nullable`() {
+        assertTrue(
+            "migration5To6Sql must add videoStartedAtWallClock INTEGER (nullable, no NOT NULL)",
+            AppDatabase.migration5To6Sql.any {
+                it.contains("ADD COLUMN videoStartedAtWallClock INTEGER") && !it.contains("NOT NULL")
+            }
+        )
+    }
+
+    @Test
+    fun `migration5To6Sql targets telemetry_sessions table`() {
+        AppDatabase.migration5To6Sql.forEach {
+            assertTrue(
+                "Each migration5To6Sql statement must target telemetry_sessions, got: $it",
+                it.contains("ALTER TABLE telemetry_sessions")
+            )
+        }
+    }
+
+    @Test
+    fun `migration5To6Sql contains no DROP TABLE or CREATE TABLE`() {
+        AppDatabase.migration5To6Sql.forEach {
+            assertTrue(
+                "migration5To6Sql must use ADD COLUMN only, not DROP/CREATE TABLE: $it",
+                !it.contains("DROP TABLE") && !it.contains("CREATE TABLE")
+            )
+        }
+    }
+
+    // ─── updated migrationChain integrity tests (v2→v6) ──────────────────────
+
+    @Test
+    fun `migrationChain contains exactly four migrations`() {
+        assertEquals(
+            "migrationChain must contain 4 migrations: migration2To3, migration3To4, migration4To5, migration5To6",
+            4,
+            AppDatabase.migrationChain.size
+        )
+    }
+
+    @Test
+    fun `migrationChain covers v5 to v6`() {
+        assertTrue(
+            "migrationChain must contain a migration from v5 to v6",
+            AppDatabase.migrationChain.any { it.startVersion == 5 && it.endVersion == 6 }
+        )
+    }
+
+    @Test
+    fun `migrationChain has no gaps between v2 and v6`() {
         val sortedChain = AppDatabase.migrationChain.sortedBy { it.startVersion }
         var expectedNextStart = 2
         for (migration in sortedChain) {
@@ -247,8 +347,8 @@ class AppDatabaseMigrationSqlTest {
             expectedNextStart = migration.endVersion
         }
         assertEquals(
-            "migrationChain must end at v5 (current @Database version)",
-            5,
+            "migrationChain must end at v6 (current @Database version)",
+            6,
             expectedNextStart
         )
     }

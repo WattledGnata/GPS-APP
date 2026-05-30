@@ -369,6 +369,8 @@ class LapTelemetryReadersTest {
         override fun getSessionCountForTrack(trackId: String) = flowOf(0)
         override fun getTotalLapCountForTrack(trackId: String) = flowOf(0)
         override fun getRecentSessionsForTrack(trackId: String, limit: Int) = flowOf<List<TelemetrySessionEntity>>(emptyList())
+        // session-video-metadata-persist round：同步 abstract 方法，no-op。
+        override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {}
         override suspend fun deleteSession(e: TelemetrySessionEntity) { sessions.removeIf { it.sessionId == e.sessionId } }
     }
     private class FakeCrossingEventDao : CrossingEventDao {

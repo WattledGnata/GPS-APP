@@ -27,4 +27,10 @@ data class TelemetrySessionEntity(
     // schema v4 起：startSession 时持久化 track display name 快照，detail 屏 D5 fallback 优先级 1
     // （多赛道扩展后 catalog 删除赛道时仍能正确显示当时赛道名，不 fallback currentSelectedTrack）
     val trackNameSnapshot: String? = null,
+    // schema v6 起：视频文件 absolute path（round 3 camera-recording-and-gps-sync 录制结束后写入）
+    // null = 无视频；不用空字符串哨兵，nullable 语义清晰
+    val videoFilePath: String? = null,
+    // schema v6 起：录制首帧回调时刻 System.currentTimeMillis()，与 binary absoluteTsMs 同时钟域
+    // 供视频帧↔遥测对齐；null = 未开始录制或无视频
+    val videoStartedAtWallClock: Long? = null,
 )

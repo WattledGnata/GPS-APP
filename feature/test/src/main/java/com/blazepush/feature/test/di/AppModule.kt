@@ -37,22 +37,26 @@ import org.koin.dsl.module
  */
 val databaseModule = module {
     single {
-        // restore-strict-migrations-pre-release round（2026-05-30）：
-        // - migrationChain 包含 migration2To3 + migration3To4 + migration4To5，严格覆盖 v2→v5
-        // - 保留 destructiveMigrationFrom(1, 2) 兜底 pre-A56 开发期 v1/v2 schema（无 release tag 用户）
+        // session-video-metadata-persist round（2026-05-30）：
+        // - migrationChain 包含 migration2To3 + migration3To4 + migration4To5 + migration5To6，严格覆盖 v2→v6
+        // - 保留 destructiveMigrationFrom(1) 兜底 pre-A56 开发期 v1 schema（旧包名 com.race.gps.*，无 release tag 用户）
+        // - v2→v6 全程由 migrationChain 严格覆盖，fallbackFrom 列表不含 2-6
         // - 移除无参 fallbackToDestructiveMigration()，防止 missing migration 静默清空用户数据
         //
         // 注意：MUST NOT 用 fallbackToDestructiveMigrationFrom(... 4) —— Room 检测
         // migration3To4.endVersion=4 与 fallbackFrom 列表 4 冲突，build() 时抛
         // IllegalArgumentException "Inconsistency detected"（已踩坑 2026-05-03）。
-        // 同理 MUST NOT 在 fallbackFrom 列表里含 2、3、4、5 —— 对应 migrationChain 严格覆盖范围。
+        // 同理 MUST NOT 在 fallbackFrom 列表里含 2、3、4、5、6 —— 对应 migrationChain 严格覆盖范围。
+        // （P2 修正：restore round 写 `fallbackToDestructiveMigrationFrom(1, 2)`，
+        //   2 是冗余——migration2To3 已提供完整 v2→v3 路径，Room 优先找迁移路径，
+        //   fallback 列表中的 2 永不触发且与注释自相矛盾。已改为 `(1)` 自洽。）
         Room.databaseBuilder(
             androidContext(),
             AppDatabase::class.java,
             "race_chrono_database"
         )
             .addMigrations(*AppDatabase.migrationChain.toTypedArray())
-            .fallbackToDestructiveMigrationFrom(1, 2)
+            .fallbackToDestructiveMigrationFrom(1)
             .build()
     }
 

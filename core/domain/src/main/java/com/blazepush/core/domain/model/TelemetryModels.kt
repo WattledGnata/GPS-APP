@@ -47,6 +47,10 @@ data class TelemetrySession(
     val topSpeedKmh: Double? = null,
     val trackId: String? = null,
     val trackNameSnapshot: String? = null,
+    // schema v6 起：视频文件 absolute path（由 round 3 录制引擎写入）；null = 无视频
+    val videoFilePath: String? = null,
+    // schema v6 起：录制首帧 wallClock（与 binary absoluteTsMs 同时钟域）；null = 无视频
+    val videoStartedAtWallClock: Long? = null,
 )
 
 /**

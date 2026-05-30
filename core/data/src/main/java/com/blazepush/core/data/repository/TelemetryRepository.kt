@@ -5,6 +5,7 @@
 package com.blazepush.core.data.repository
 
 import android.content.Context
+import android.util.Log
 import com.blazepush.core.data.local.binary.BinaryTelemetryWriter
 import com.blazepush.core.data.local.binary.LapTelemetryReader
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
@@ -239,18 +240,19 @@ class TelemetryRepository(
         sessionDao.getRecentSessionsForTrack(trackId, limit).map { list -> list.map { it.toDomain() } }
 
     /**
-     * 删除 lap session：cascade 清 crossing_events 关联行 + binary 文件
-     * （`/telemetry/` 路径白名单防穿越，与 [TestResultRepository.deleteResult] 同款安全策略）。
-     * 不存在的 sessionId 视为 no-op；binary 文件 delete 失败不抛（File.delete 返回 false）。
+     * 删除 lap session：cascade 清 crossing_events 关联行 + binary 文件 + 视频文件（若有）。
+     * 白名单防路径穿越：binary 需含 `/telemetry/`，视频需含 `/telemetry/` 或 `/video/`。
+     * 不存在的 sessionId 视为 no-op；File.delete 失败不抛，埋 FileLogger.e 日志。
      *
      * @author CC
-     * @description cascade delete lap session entity + crossings + binary file
-     * @date 2026-05-02
+     * @description cascade delete lap session entity + crossings + binary file + video file
+     * @date 2026-05-30
      */
     suspend fun deleteSession(sessionId: String) {
         val entity = sessionDao.queryBySessionId(sessionId) ?: return
         crossingDao.deleteCrossingsBySessionId(sessionId)
         sessionDao.deleteSession(entity)
+        // 删 binary file（原有逻辑）
         val path = entity.binaryFilePath
         if (path.isNotEmpty()) {
             val file = File(path)
@@ -258,6 +260,47 @@ class TelemetryRepository(
                 file.delete()
             }
         }
+        // 删视频文件（session-video-metadata-persist round）
+        val videoPath = entity.videoFilePath
+        if (videoPath != null) {
+            val videoFile = File(videoPath)
+            val allowedPaths = listOf("/telemetry/", "/video/")
+            val canonicalPath = videoFile.canonicalPath
+            if (allowedPaths.any { canonicalPath.contains(it) }) {
+                if (!videoFile.exists()) {
+                    Log.d("deleteSession", "video file not found, skip: $videoPath")
+                } else if (videoFile.delete()) {
+                    Log.d("deleteSession", "deleted video: $videoPath")
+                } else {
+                    Log.e("deleteSession", "failed to delete video: $videoPath")
+                }
+            } else {
+                Log.d("deleteSession", "video path not in whitelist, skip: $videoPath")
+            }
+        }
+    }
+
+    /**
+     * 写入视频元数据（供 round 3 camera-recording-and-gps-sync 录制引擎调用）。
+     * round 3 录制首帧回调取 videoStartedAtWallClock = System.currentTimeMillis()（与 binary absoluteTsMs 同时钟域）。
+     * 录制结束后调本方法写 videoFilePath + videoStartedAtWallClock 两字段。
+     * sessionId 不存在时无副作用（Room UPDATE 不存在行，不抛）。
+     *
+     * @author CC
+     * @description attach video path + wallClock anchor to a session after recording
+     * @date 2026-05-30
+     */
+    suspend fun attachVideoToSession(
+        sessionId: String,
+        videoFilePath: String,
+        videoStartedAtWallClock: Long,
+    ) {
+        sessionDao.updateVideoMetadata(
+            sessionId = sessionId,
+            videoFilePath = videoFilePath,
+            videoStartedAtWallClock = videoStartedAtWallClock,
+        )
+        Log.d("attachVideoToSession", "video attached: $videoFilePath wallClock: $videoStartedAtWallClock sessionId: $sessionId")
     }
 
     /**
@@ -354,6 +397,8 @@ class TelemetryRepository(
         topSpeedKmh = topSpeedKmh,
         trackId = trackId,
         trackNameSnapshot = trackNameSnapshot,
+        videoFilePath = videoFilePath,
+        videoStartedAtWallClock = videoStartedAtWallClock,
     )
 
     private fun CrossingEventEntity.toDomain() = TelemetryCrossingEvent(

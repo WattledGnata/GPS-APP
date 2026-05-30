@@ -102,6 +102,23 @@ interface TelemetrySessionDao {
     fun getRecentSessionsForTrack(trackId: String, limit: Int): Flow<List<TelemetrySessionEntity>>
 
     /**
+     * 视频元数据写入（session-video-metadata-persist round 引入）。
+     * 由 [com.blazepush.core.data.repository.TelemetryRepository.attachVideoToSession] 调用，
+     * round 3 camera-recording-and-gps-sync 录制引擎在录制结束 + 首帧回调后调用。
+     * 若 sessionId 不存在，Room UPDATE 无副作用（不抛）。
+     *
+     * @author CC
+     * @description update video metadata (path + wallClock anchor) for a session
+     * @date 2026-05-30
+     */
+    @Query("UPDATE telemetry_sessions SET videoFilePath = :videoFilePath, videoStartedAtWallClock = :videoStartedAtWallClock WHERE sessionId = :sessionId")
+    suspend fun updateVideoMetadata(
+        sessionId: String,
+        videoFilePath: String,
+        videoStartedAtWallClock: Long,
+    )
+
+    /**
      * 按 entity 删除单条 session metadata（add-history-deletion round 引入）。
      * 由 [com.blazepush.core.data.repository.TelemetryRepository.deleteSession] 调用，
      * 调用方负责先清 crossing_events 关联行 + binary 文件 cascade。

@@ -253,6 +253,10 @@ class LapPairingCrossSiteConsistencyTest {
         override fun getRecentSessionsForTrack(trackId: String, limit: Int) =
             kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
 
+        // session-video-metadata-persist round：同步 abstract 方法。本套件不消费视频路径，no-op。
+        override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {
+        }
+
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {
             sessions.removeIf { it.sessionId == entity.sessionId }
         }
