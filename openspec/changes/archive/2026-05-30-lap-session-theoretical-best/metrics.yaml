@@ -1,0 +1,25 @@
+estimated_days: 0.3
+actual_days: 0.2        # 主会话直实现（纯函数从现成 crossings + 顶部面板）
+complexity: "small"     # 纯函数 + 面板 composable（~120 行）全在 feature/test；零 binary/repository/契约改
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无"
+phase: "Phase 1"        # M2 follow-up（sectors 路测反馈 step 2）
+model_apply: "opus"
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 理论最佳圈 = session 内各 sector 取所有完整圈最快段拼接（motorsport optimal lap）。
+# 关键设计：复用 LapSessionDetailScreen 已 getCrossings 的 crossings 纯函数算，零 binary 读（避免每圈 ~3437 sample IO）、
+#   零 repository 改、零 #16；与 deriveDetailMetrics/getLapTelemetry 同源 SF 配对 + sector 窗口逻辑。
+# 仅完整圈（段数==max）参与每 sector min；无 sector 门 / 无完整圈 → null 不显示。
+# 顶部面板：总时间 Score 字体 + 比最快圈快 X.XXXs（绿）+ 各 sector 最快段 + Lap 号。
+# 单测 5 case（跨圈拼接 + rejected 排除反例 + 单圈退化 + 无 sector→null + <2 SF→null）全绿。
+# 数据基础真机确认（FileLogger sectors=5）。code commit 43ac626。
+# ⚠️ 真机视觉验证待装机（设备需人工确认安装 INSTALL_FAILED_ABORTED 多次）。
