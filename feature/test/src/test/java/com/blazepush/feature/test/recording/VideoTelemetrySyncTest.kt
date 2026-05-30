@@ -189,4 +189,151 @@ class VideoTelemetrySyncTest {
         )
         assertEquals(0, idx)
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // lapPlayheadRange - 按圈回放圈时间轴范围
+    // （round redo-video-playback-per-lap-with-blackout）
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `lapPlayheadRange - 起点减默认前导3秒 终点为lapEnd`() {
+        val r = VideoTelemetrySync.lapPlayheadRange(
+            lapStartWallClock = 100_000L,
+            lapEndWallClock = 190_000L,
+        )
+        assertEquals(97_000L, r.first) // 100_000 - 3000
+        assertEquals(190_000L, r.last)
+    }
+
+    @Test
+    fun `lapPlayheadRange - 自定义前导秒`() {
+        val r = VideoTelemetrySync.lapPlayheadRange(
+            lapStartWallClock = 100_000L,
+            lapEndWallClock = 190_000L,
+            leadInMs = 5_000L,
+        )
+        assertEquals(95_000L, r.first)
+        assertEquals(190_000L, r.last)
+    }
+
+    @Test
+    fun `lapPlayheadRange - 异常圈end小于start减前导后退化为单点区间`() {
+        // lapEnd 比 (lapStart - leadIn) 还早（异常数据）→ end clamp 到 start，避免空 range
+        val r = VideoTelemetrySync.lapPlayheadRange(
+            lapStartWallClock = 100_000L,
+            lapEndWallClock = 96_000L, // < 97_000 起点
+        )
+        assertEquals(97_000L, r.first)
+        assertEquals(97_000L, r.last)
+    }
+
+    @Test
+    fun `lapPlayheadRange - 默认前导秒常量为3000`() {
+        assertEquals(3000L, VideoTelemetrySync.LAP_LEAD_IN_MS)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // isWithinVideoCoverage - 覆盖段判定
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `isWithinVideoCoverage - playhead落覆盖段内返回true`() {
+        // 视频覆盖 [10_000, 10_000+60_000=70_000]
+        val within = VideoTelemetrySync.isWithinVideoCoverage(
+            playheadWallClock = 40_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(true, within)
+    }
+
+    @Test
+    fun `isWithinVideoCoverage - playhead早于视频起点返回false（圈头早于视频 黑屏段）`() {
+        val within = VideoTelemetrySync.isWithinVideoCoverage(
+            playheadWallClock = 5_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(false, within)
+    }
+
+    @Test
+    fun `isWithinVideoCoverage - playhead晚于视频终点返回false（圈尾晚于视频 黑屏段）`() {
+        val within = VideoTelemetrySync.isWithinVideoCoverage(
+            playheadWallClock = 80_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(false, within)
+    }
+
+    @Test
+    fun `isWithinVideoCoverage - 边界视频起点含`() {
+        assertEquals(
+            true,
+            VideoTelemetrySync.isWithinVideoCoverage(10_000L, 10_000L, 60_000L),
+        )
+    }
+
+    @Test
+    fun `isWithinVideoCoverage - 边界视频终点含`() {
+        assertEquals(
+            true,
+            VideoTelemetrySync.isWithinVideoCoverage(70_000L, 10_000L, 60_000L),
+        )
+    }
+
+    @Test
+    fun `isWithinVideoCoverage - duration未知（0）恒返回false`() {
+        // ExoPlayer READY 前 player.duration 可能为 0 / 负 → 视为无覆盖
+        assertEquals(
+            false,
+            VideoTelemetrySync.isWithinVideoCoverage(40_000L, 10_000L, 0L),
+        )
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // playheadToVideoPosition - playhead → 视频 seek position
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `playheadToVideoPosition - 覆盖段内正常映射`() {
+        val pos = VideoTelemetrySync.playheadToVideoPosition(
+            playheadWallClock = 40_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(30_000L, pos) // 40_000 - 10_000
+    }
+
+    @Test
+    fun `playheadToVideoPosition - 起点前导秒映射到position0（圈头早于视频时 clamp下界）`() {
+        // playhead 早于 videoStart → raw 负 → clamp 到 0
+        val pos = VideoTelemetrySync.playheadToVideoPosition(
+            playheadWallClock = 5_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(0L, pos)
+    }
+
+    @Test
+    fun `playheadToVideoPosition - 超视频终点clamp到duration上界`() {
+        val pos = VideoTelemetrySync.playheadToVideoPosition(
+            playheadWallClock = 90_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 60_000L,
+        )
+        assertEquals(60_000L, pos)
+    }
+
+    @Test
+    fun `playheadToVideoPosition - duration未知时不设上界clamp`() {
+        val pos = VideoTelemetrySync.playheadToVideoPosition(
+            playheadWallClock = 90_000L,
+            videoStartedAtWallClock = 10_000L,
+            videoDurationMs = 0L,
+        )
+        assertEquals(80_000L, pos) // 仅下界 clamp，无上界
+    }
 }

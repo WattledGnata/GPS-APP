@@ -197,19 +197,29 @@ fun LapSessionDetailScreen(
                     },
                 )
             }
-            // video-overlay-realtime-playback round：仅当 session 有视频时显示"播放带数据视频"入口
-            // （if/else 分支，禁 early-return；session 异步加载，null 时不渲染 item）。
+            // redo-video-playback-per-lap-with-blackout round：仅当 session 有视频时显示"按圈回放"圈列表
+            // 入口（每圈一行：圈号 + 圈速，点进 lap_video/{sessionId}/{lapIndex} 按圈回放视频+overlay）。
+            // 仅 VALID/BEST 圈列出（lapNumber-1 = lapIndex 严格对应 getLapTelemetry；INVALID/INCOMPLETE
+            // 圈无有效起止 wallClock → 不列）。if 分支条件渲染，禁 early-return。
             if (session?.videoFilePath != null) {
-                item {
-                    VideoPlaybackEntry(
-                        onClick = {
-                            FileLogger.d(
-                                "VideoOverlay",
-                                "open video playback sid=$sessionId",
-                            )
-                            navController.navigate("lap_video/$sessionId")
-                        },
-                    )
+                val videoLaps = derived.lapRecords.filter {
+                    it.status == UiLapStatus.VALID || it.status == UiLapStatus.BEST
+                }
+                if (videoLaps.isNotEmpty()) {
+                    item { VideoReplayHeader() }
+                    items(videoLaps) { record ->
+                        VideoReplayLapRow(
+                            record = record,
+                            onClick = {
+                                val lapIndex = record.lapNumber - 1
+                                FileLogger.d(
+                                    "VideoOverlay",
+                                    "open video replay sid=$sessionId lapNumber=${record.lapNumber} -> lapIndex=$lapIndex",
+                                )
+                                navController.navigate("lap_video/$sessionId/$lapIndex")
+                            },
+                        )
+                    }
                 }
             }
             if (table != null) {
@@ -449,40 +459,67 @@ private fun CompareEntry(
 }
 
 /**
- * video-overlay-realtime-playback round：播放带数据视频入口（复用 CompareEntry 风格）。
- * 仅当 session.videoFilePath != null 时由调用方条件渲染；点击导航到 lap_video/{sessionId}。
+ * redo-video-playback-per-lap-with-blackout round：按圈回放区标题（"VIDEO REPLAY"）。
  * 文字走 UiTextLabel；Text maxLines=1 + Ellipsis。
  */
 @Composable
-private fun VideoPlaybackEntry(
+private fun VideoReplayHeader() {
+    Text(
+        text = "VIDEO REPLAY",
+        style = TrackTechTypography.UiTextLabel,
+        color = TrackTechColors.Cyan,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * redo-video-playback-per-lap-with-blackout round：按圈回放圈行（圈号 + 圈速 + 播放图标，可点）。
+ * 点击导航到 lap_video/{sessionId}/{lapIndex} 按圈回放视频+overlay。
+ * 圈速时间字符串走 UiTextBody（V2：MUST NOT DSEG7）；每 Text maxLines=1 + Ellipsis；
+ * 主 Row 不用 SpaceBetween，圈速列 weight(1f) 撑开 + 末尾固定播放图标，防换行。
+ */
+@Composable
+private fun VideoReplayLapRow(
+    record: UiLapRecord,
     onClick: () -> Unit,
 ) {
     val accent = TrackTechColors.Cyan
+    val timeColor = if (record.status == UiLapStatus.BEST) TrackTechColors.Purple else TrackTechColors.TextPrimary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
-            .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.12f))
+            .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.10f))
             .border(
                 width = 1.dp,
-                color = accent,
+                color = accent.copy(alpha = 0.6f),
                 shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "PLAY VIDEO + DATA",
+            text = "Lap ${record.lapNumber}",
             style = TrackTechTypography.UiTextLabel,
-            color = accent,
+            color = TrackTechColors.TextSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
+            modifier = Modifier.width(64.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = formatLapTime(record.timeMs),
+            style = TrackTechTypography.UiTextBody,
+            color = timeColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            text = "›",
+            text = "▶",
             style = TrackTechTypography.UiTextBody,
             color = accent,
             maxLines = 1,

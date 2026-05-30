@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,11 +32,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
+import com.blazepush.core.domain.model.LapTelemetry
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.feature.test.FileLogger
@@ -53,30 +54,52 @@ import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import kotlin.math.abs
 
-private const val OVERLAY_POLL_INTERVAL_MS = 33L // ~30fps
+private const val PLAYHEAD_TICK_MS = 33L // ~30fps
 private const val TAG = "VideoOverlay"
 
 /**
- * 进屏一次性读好的整 session overlay 上下文（轮询时只查表不算 IO）。
+ * 进屏一次性读好的"单圈"按圈回放上下文（轮询时只查表不算 IO）。
+ *
+ * @property frames            整 session 帧（overlay 数据，按样本预算好的 G/速度/经纬度）
+ * @property sampleWallClocks  与 frames 一一对应的 absoluteTsMs 升序列表（供二分查最近邻）
+ * @property lapWindows        全 session 各圈窗口（resolveCurrentLap 仍可正确显示圈号/elapsed）
+ * @property bestReference     best 圈索引（实时 delta 投影；无 best → null）
+ * @property trackPoints       赛道轮廓（小地图）
+ * @property videoStartedAtWallClock 视频录制开始 wallClock（与样本同时钟域）
+ * @property lapStartWallClock 当前回放圈开圈 crossing wallClock
+ * @property lapEndWallClock   当前回放圈收圈 crossing wallClock
+ * @property lapNumber         当前回放圈号（1-based）
  */
-private data class PlaybackContext(
+private data class LapPlaybackContext(
     val frames: List<VideoOverlayTelemetry.OverlayFrame>,
     val sampleWallClocks: List<Long>,
     val lapWindows: List<VideoOverlayTelemetry.LapWindow>,
     val bestReference: ReferenceLapIndex?,
     val trackPoints: List<GeoPoint>,
     val videoStartedAtWallClock: Long,
+    val lapStartWallClock: Long,
+    val lapEndWallClock: Long,
+    val lapNumber: Int,
 )
 
 /**
- * 视频实时叠加遥测 HUD 播放屏（Phase 2 round video-overlay-realtime-playback）。
+ * 按圈回放的视频实时叠加遥测 HUD 播放屏
+ * （round redo-video-playback-per-lap-with-blackout，重构自 video-overlay-realtime-playback）。
  *
- * media3 ExoPlayer 播放原始视频（PlayerView 经 AndroidView 垫底），Compose 角标 overlay 浮上层：
- * 左上 SPEED（DSEG7）/ 左下 LAP 计时+delta（Score 斜体）/ 右上 G 值（DSEG7）/ 右下 小地图。
- * overlay 随 player.currentPosition 30fps 轮询跳变（覆盖 seek/暂停）。纯播放渲染，不烧录不导出。
+ * ## 播放模型：圈时间轴主导，视频跟随
+ *
+ * 不再由视频 currentPosition 驱动 overlay；改由 **playheadWallClock（圈 wallClock 时间轴）主导**：
+ * - 圈时间轴范围 = [lapStartWallClock - 3000ms, lapEndWallClock]（进圈定位圈起点前 3 秒，圈播完即停）。
+ * - 视频覆盖段 = [videoStartedAtWallClock, videoStartedAtWallClock + videoDurationMs]。
+ * - **playhead 落覆盖段内**：ExoPlayer 自然时钟 play，playheadWallClock = videoStart + player.currentPosition；
+ *   overlay 按 playheadWallClock 查样本。
+ * - **playhead 落覆盖段外**（圈头早于视频起点 / 圈尾晚于视频终点）：ExoPlayer pause + 黑色遮罩盖
+ *   PlayerView，30fps ticker 以 1x 实时推进 playheadWallClock；overlay 继续按 playheadWallClock 查样本。
+ *
+ * overlay 四角标（速度/圈速/G/小地图）始终浮最上层；黑屏段数据照常叠。
  *
  * @author CC
- * @description landscape video playback screen with realtime telemetry HUD overlay
+ * @description per-lap video playback with playhead-driven overlay + blackout segments
  * @date 2026-05-31
  */
 @UnstableApi
@@ -84,6 +107,7 @@ private data class PlaybackContext(
 fun LapVideoPlaybackScreen(
     navController: NavController,
     sessionId: String,
+    lapIndex: Int,
     telemetryRepository: TelemetryRepository = koinInject(),
     trackCatalog: TrackCatalog = koinInject(),
 ) {
@@ -101,50 +125,54 @@ fun LapVideoPlaybackScreen(
         }
     }
 
-    // ExoPlayer 生命周期：remember 创建 + DisposableEffect release（释放解码器，spec 反例锁定）
+    // ExoPlayer 生命周期：remember 创建 + DisposableEffect release（释放解码器）
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().also {
-            FileLogger.d(TAG, "ExoPlayer created sid=$sessionId")
+            FileLogger.d(TAG, "ExoPlayer created sid=$sessionId lapIndex=$lapIndex")
         }
     }
     DisposableEffect(exoPlayer) {
         onDispose {
             exoPlayer.release()
-            FileLogger.d(TAG, "ExoPlayer released sid=$sessionId")
+            FileLogger.d(TAG, "ExoPlayer released sid=$sessionId lapIndex=$lapIndex")
         }
     }
 
-    // 进屏一次性读 session + 全样本（Dispatchers.IO），置 state；读取中 loading（if/else 禁 early-return）
+    // 进屏一次性读 session + 整 session 样本 + 当前圈起止 wallClock
     var session by remember { mutableStateOf<TelemetrySession?>(null) }
-    var playbackContext by remember { mutableStateOf<PlaybackContext?>(null) }
+    var playbackContext by remember { mutableStateOf<LapPlaybackContext?>(null) }
     var loadFailed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(sessionId) {
+    LaunchedEffect(sessionId, lapIndex) {
         val loaded = withContext(Dispatchers.IO) {
-            loadPlaybackData(sessionId, telemetryRepository, trackCatalog)
+            loadLapPlaybackData(sessionId, lapIndex, telemetryRepository, trackCatalog)
         }
         if (loaded == null) {
             loadFailed = true
-            FileLogger.e(TAG, "load failed sid=$sessionId (no session / no video / no samples)")
+            FileLogger.e(TAG, "load failed sid=$sessionId lapIndex=$lapIndex (no session / no video / no lap / no samples)")
         } else {
             session = loaded.first
-            playbackContext = loaded.second
             val ctx = loaded.second
+            playbackContext = ctx
+            val range = VideoTelemetrySync.lapPlayheadRange(ctx.lapStartWallClock, ctx.lapEndWallClock)
             FileLogger.d(
                 TAG,
-                "loaded sid=$sessionId samples=${ctx.frames.size} estBytes=${ctx.frames.size * 70} " +
-                    "laps=${ctx.lapWindows.size} hasBest=${ctx.bestReference != null} trackPts=${ctx.trackPoints.size}",
+                "enter lap lapIndex=$lapIndex lapNumber=${ctx.lapNumber} " +
+                    "lapStart=${ctx.lapStartWallClock} lapEnd=${ctx.lapEndWallClock} " +
+                    "playheadStart=${range.first} playheadEnd=${range.last} " +
+                    "videoStart=${ctx.videoStartedAtWallClock} samples=${ctx.frames.size} " +
+                    "hasBest=${ctx.bestReference != null} trackPts=${ctx.trackPoints.size}",
             )
         }
     }
 
-    // 视频 setMediaItem（session 就绪后）
+    // 视频 setMediaItem（session 就绪后）；playWhenReady=false，由播放循环根据覆盖段控制 play/pause
     LaunchedEffect(session) {
         val s = session
         if (s != null && s.videoFilePath != null) {
             exoPlayer.setMediaItem(MediaItem.fromUri(s.videoFilePath!!))
             exoPlayer.prepare()
-            exoPlayer.playWhenReady = true
+            exoPlayer.playWhenReady = false
             FileLogger.d(TAG, "setMediaItem ${s.videoFilePath} startedAt=${s.videoStartedAtWallClock}")
         }
     }
@@ -153,46 +181,134 @@ fun LapVideoPlaybackScreen(
     var overlayFrame by remember { mutableStateOf<VideoOverlayTelemetry.OverlayFrame?>(null) }
     var overlayLap by remember { mutableStateOf<VideoOverlayTelemetry.LapResolution?>(null) }
     var overlayDeltaMs by remember { mutableStateOf<Long?>(null) }
+    // 当前是否落在视频覆盖段外（true → 黑屏遮罩盖 PlayerView）
+    var blackout by remember { mutableStateOf(true) }
 
-    // 轮询：每 33ms 读 currentPosition → frameWallClock → 最近邻样本 idx → 更新 overlay（idx 去抖）
+    // 圈时间轴主导播放循环（状态机）：
+    // playheadWallClock 状态 + isWithinCoverage 布尔。
+    // - 覆盖段内：ExoPlayer play，playhead = videoStart + player.currentPosition（视频驱动）。
+    // - 覆盖段外：ExoPlayer pause，ticker 以 1x 实时推进 playhead（黑屏 + overlay 继续叠）。
+    // - 段切换：进覆盖段 → seek 视频到对应 position + play；离覆盖段 → pause。
+    // - playhead >= playheadEnd（lapEnd）→ pause 停止（圈播完不续下一圈）。
     LaunchedEffect(playbackContext) {
         val ctx = playbackContext ?: return@LaunchedEffect
         if (ctx.sampleWallClocks.isEmpty()) return@LaunchedEffect
+
+        val range = VideoTelemetrySync.lapPlayheadRange(ctx.lapStartWallClock, ctx.lapEndWallClock)
+        val playheadStart = range.first
+        val playheadEnd = range.last
+
+        // 等 ExoPlayer READY 拿到 duration（黑屏段也要 duration 判定覆盖段右边界）
+        var videoDurationMs = exoPlayer.duration
+        while (isActive && (videoDurationMs <= 0L || exoPlayer.playbackState == Player.STATE_IDLE ||
+                exoPlayer.playbackState == Player.STATE_BUFFERING)
+        ) {
+            delay(PLAYHEAD_TICK_MS)
+            videoDurationMs = exoPlayer.duration
+        }
+        if (!isActive) return@LaunchedEffect
+        FileLogger.d(TAG, "video READY duration=$videoDurationMs lapIndex=$lapIndex")
+
+        // playhead 从圈起点前导秒开始
+        var playheadWallClock = playheadStart
+        // 进圈初始定位：若起点已在视频覆盖段内 → seek + play；否则黑屏 ticker 起步
+        var wasWithinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
+            playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+        )
+        if (wasWithinCoverage) {
+            val seekPos = VideoTelemetrySync.playheadToVideoPosition(
+                playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+            )
+            exoPlayer.seekTo(seekPos)
+            exoPlayer.play()
+            blackout = false
+            FileLogger.d(TAG, "init within coverage: seek=$seekPos play; playhead=$playheadWallClock")
+        } else {
+            exoPlayer.pause()
+            blackout = true
+            FileLogger.d(TAG, "init blackout (lap head before video): playhead=$playheadWallClock videoStart=${ctx.videoStartedAtWallClock}")
+        }
+
         var lastIdx = -1
         var tickCounter = 0
+        var lastTickRealtimeMs = System.currentTimeMillis()
+
         while (isActive) {
-            val position = exoPlayer.currentPosition
-            val frameWallClock = VideoTelemetrySync.frameWallClock(ctx.videoStartedAtWallClock, position)
-            val idx = VideoTelemetrySync.findNearestSampleIndex(frameWallClock, ctx.sampleWallClocks)
+            val nowRealtime = System.currentTimeMillis()
+            val withinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
+                playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+            )
+
+            if (withinCoverage) {
+                // 覆盖段：视频驱动 playhead
+                if (!wasWithinCoverage) {
+                    // 黑屏段 → 覆盖段：seek 视频到 position 0（圈头早于视频，刚追到 videoStart）+ play
+                    val seekPos = VideoTelemetrySync.playheadToVideoPosition(
+                        playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+                    )
+                    exoPlayer.seekTo(seekPos)
+                    exoPlayer.play()
+                    blackout = false
+                    FileLogger.d(TAG, "blackout->coverage seek=$seekPos play; playhead=$playheadWallClock")
+                } else if (!exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+                    exoPlayer.play()
+                }
+                playheadWallClock = VideoTelemetrySync.frameWallClock(
+                    ctx.videoStartedAtWallClock, exoPlayer.currentPosition,
+                )
+            } else {
+                // 覆盖段外：黑屏 ticker 以 1x 实时推进 playhead
+                if (wasWithinCoverage) {
+                    exoPlayer.pause()
+                    blackout = true
+                    FileLogger.d(TAG, "coverage->blackout pause; playhead=$playheadWallClock")
+                }
+                val advance = nowRealtime - lastTickRealtimeMs
+                playheadWallClock += advance.coerceIn(0L, 200L) // clamp 防卡顿后大跳
+                if (tickCounter % 30 == 0) {
+                    FileLogger.d(TAG, "blackout tick advance=$advance playhead=$playheadWallClock end=$playheadEnd")
+                }
+            }
+            wasWithinCoverage = withinCoverage
+            lastTickRealtimeMs = nowRealtime
+
+            // 圈播完停在圈末（不自动续下一圈）
+            if (playheadWallClock >= playheadEnd) {
+                playheadWallClock = playheadEnd
+                exoPlayer.pause()
+                FileLogger.d(TAG, "lap end reached: playhead=$playheadWallClock lapNumber=${ctx.lapNumber}; stop")
+                // 更新最后一帧 overlay 后退出循环
+                updateOverlay(
+                    ctx, playheadWallClock,
+                    onFrame = { overlayFrame = it },
+                    onLap = { overlayLap = it },
+                    onDelta = { overlayDeltaMs = it },
+                )
+                break
+            }
+
+            // 按 playheadWallClock 查最近邻样本更新 overlay（idx 去抖）
+            val idx = VideoTelemetrySync.findNearestSampleIndex(playheadWallClock, ctx.sampleWallClocks)
             if (idx != lastIdx) {
                 lastIdx = idx
-                val frame = ctx.frames[idx]
-                overlayFrame = frame
-                // 圈窗口判定 + delta 投影（落两圈间 / 无 best → null 显 "--"）
-                val lap = VideoOverlayTelemetry.resolveCurrentLap(frameWallClock, ctx.lapWindows)
-                overlayLap = lap
-                overlayDeltaMs = if (lap != null && ctx.bestReference != null) {
-                    VideoOverlayTelemetry.computeDeltaMs(
-                        reference = ctx.bestReference,
-                        currentLapElapsedMs = lap.currentLapElapsedMs,
-                        currentLat = frame.lat,
-                        currentLon = frame.lon,
-                    )
-                } else {
-                    null
-                }
-                // 同步精度抽样埋点（每 ~1s 一条，路测 adb pull 核对）
+                updateOverlay(
+                    ctx, playheadWallClock,
+                    onFrame = { overlayFrame = it },
+                    onLap = { overlayLap = it },
+                    onDelta = { overlayDeltaMs = it },
+                )
                 if (tickCounter % 30 == 0) {
+                    val f = ctx.frames[idx]
                     FileLogger.d(
                         TAG,
-                        "sync pos=$position fwc=$frameWallClock idx=$idx ts=${frame.absoluteTsMs} " +
-                            "spd=${"%.1f".format(frame.speedKmh)} lonG=${"%.2f".format(frame.lonG)} " +
-                            "latG=${"%.2f".format(frame.latG)} lap=${lap?.lapNumber} delta=$overlayDeltaMs",
+                        "sync playhead=$playheadWallClock within=$withinCoverage idx=$idx " +
+                            "spd=${"%.1f".format(f.speedKmh)} lonG=${"%.2f".format(f.lonG)} " +
+                            "latG=${"%.2f".format(f.latG)} delta=$overlayDeltaMs",
                     )
                 }
             }
             tickCounter++
-            delay(OVERLAY_POLL_INTERVAL_MS)
+            delay(PLAYHEAD_TICK_MS)
         }
     }
 
@@ -203,7 +319,7 @@ fun LapVideoPlaybackScreen(
     ) {
         // 加载/失败/内容三态：if/else 分支（M2：禁 early-return）
         if (loadFailed) {
-            PlaybackMessage("无法播放该视频")
+            PlaybackMessage("无法播放该圈视频")
         } else if (playbackContext == null) {
             PlaybackMessage("加载中…")
         } else {
@@ -214,11 +330,19 @@ fun LapVideoPlaybackScreen(
                 factory = { ctxView ->
                     PlayerView(ctxView).apply {
                         player = exoPlayer
-                        useController = true
+                        useController = false // 按圈回放由圈时间轴主导，不暴露 ExoPlayer 控制条
                     }
                 },
             )
-            // overlay 四角浮上层
+            // 黑屏段：黑色遮罩盖 PlayerView（覆盖段外视频无意义，遮成纯黑；overlay 仍浮上层）
+            if (blackout) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                )
+            }
+            // overlay 四角浮最上层（黑屏段也照常叠）
             OverlayHud(
                 frame = overlayFrame,
                 lap = overlayLap,
@@ -230,7 +354,36 @@ fun LapVideoPlaybackScreen(
 }
 
 /**
- * overlay 四角标布局（design Decision 5）：左上 SPEED / 左下 LAP+delta / 右上 G / 右下 小地图。
+ * 按 playheadWallClock 更新 overlay 三态（frame / lap resolution / delta）。
+ * 抽出复用：循环中与圈末停止各调一次，避免最后一帧 overlay 不刷新。
+ */
+private fun updateOverlay(
+    ctx: LapPlaybackContext,
+    playheadWallClock: Long,
+    onFrame: (VideoOverlayTelemetry.OverlayFrame) -> Unit,
+    onLap: (VideoOverlayTelemetry.LapResolution?) -> Unit,
+    onDelta: (Long?) -> Unit,
+) {
+    val idx = VideoTelemetrySync.findNearestSampleIndex(playheadWallClock, ctx.sampleWallClocks)
+    val frame = ctx.frames[idx]
+    onFrame(frame)
+    val lap = VideoOverlayTelemetry.resolveCurrentLap(playheadWallClock, ctx.lapWindows)
+    onLap(lap)
+    val delta = if (lap != null && ctx.bestReference != null) {
+        VideoOverlayTelemetry.computeDeltaMs(
+            reference = ctx.bestReference,
+            currentLapElapsedMs = lap.currentLapElapsedMs,
+            currentLat = frame.lat,
+            currentLon = frame.lon,
+        )
+    } else {
+        null
+    }
+    onDelta(delta)
+}
+
+/**
+ * overlay 四角标布局：左上 SPEED / 左下 LAP+delta / 右上 G / 右下 小地图。
  */
 @Composable
 private fun OverlayHud(
@@ -240,25 +393,21 @@ private fun OverlayHud(
     trackPoints: List<GeoPoint>,
 ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        // 左上 SPEED（DSEG7）
         SpeedCorner(
             speedKmh = frame?.speedKmh,
             modifier = Modifier.align(Alignment.TopStart),
         )
-        // 右上 G-FORCE（DSEG7）
         GForceCorner(
             latG = frame?.latG,
             lonG = frame?.lonG,
             modifier = Modifier.align(Alignment.TopEnd),
         )
-        // 左下 LAP + delta（Score 斜体）
         LapTimeCorner(
             lapNumber = lap?.lapNumber,
             elapsedMs = lap?.currentLapElapsedMs,
             deltaMs = deltaMs,
             modifier = Modifier.align(Alignment.BottomStart),
         )
-        // 右下 小地图（几何不足时隐藏，其余角标不受影响）
         if (trackPoints.size >= 2) {
             MiniMapCorner(
                 trackPoints = trackPoints,
@@ -450,55 +599,62 @@ private fun formatDelta(ms: Long?): String {
 }
 
 /**
- * 进屏一次性读 session metadata + 整 session overlay 上下文（在 Dispatchers.IO 调）。
- * 返回 null 表示无法播放（无 session / 无 video / 无样本）。
+ * 进屏一次性读 session metadata + 当前圈起止 wallClock + 整 session overlay 上下文（在 Dispatchers.IO 调）。
+ * 返回 null 表示无法播放（无 session / 无 video / 无目标圈 / 无样本）。
+ *
+ * 注：overlay 帧 / 圈窗口 / best reference 仍按整 session 构建（resolveCurrentLap / delta 投影需要
+ * 全圈窗口与 best 圈），但播放时间轴由 lapIndex 指向的目标圈起止 wallClock 主导。
  */
-private suspend fun loadPlaybackData(
+private suspend fun loadLapPlaybackData(
     sessionId: String,
+    lapIndex: Int,
     repo: TelemetryRepository,
     trackCatalog: TrackCatalog,
-): Pair<TelemetrySession, PlaybackContext>? {
+): Pair<TelemetrySession, LapPlaybackContext>? {
     val session = repo.getSession(sessionId) ?: return null
     val videoStartedAt = session.videoStartedAtWallClock ?: return null
     if (session.videoFilePath == null) return null
 
-    // 逐圈拼接整 session 样本（升序 absoluteTsMs）+ 各圈窗口
+    // 目标圈：lapIndex 指向的圈（lapNumber = lapIndex + 1，与详情屏 VALID/BEST 圈一致）
+    val targetLap: LapTelemetry = repo.getLapTelemetry(sessionId, lapIndex) ?: return null
+
+    // 逐圈拼接整 session 样本（升序 absoluteTsMs）+ 各圈窗口（overlay 仍需全 session 上下文）
     val allSamples = mutableListOf<LapTelemetrySample>()
     val lapWindows = mutableListOf<VideoOverlayTelemetry.LapWindow>()
-    var lapIndex = 0
+    var i = 0
     while (true) {
-        val lap = repo.getLapTelemetry(sessionId, lapIndex) ?: break
+        val lap = repo.getLapTelemetry(sessionId, i) ?: break
         allSamples.addAll(lap.samples)
         lapWindows.add(
             VideoOverlayTelemetry.LapWindow(
-                lapNumber = lapIndex + 1,
+                lapNumber = i + 1,
                 lapStartWallClock = lap.lapStartWallClock,
                 lapEndWallClock = lap.lapEndWallClock,
             ),
         )
-        lapIndex++
-        if (lapIndex > 1000) break // 安全上界防意外死循环
+        i++
+        if (i > 1000) break // 安全上界防意外死循环
     }
     if (allSamples.isEmpty()) return null
 
-    // 样本可能跨圈有重叠（圈尾==下圈头）；按 absoluteTsMs 升序排序 + 去重相邻同 ts
+    // 样本可能跨圈有重叠（圈尾==下圈头）；按 absoluteTsMs 升序排序
     val sorted = allSamples.sortedBy { it.absoluteTsMs }
     val frames = VideoOverlayTelemetry.buildFrames(sorted)
     val sampleWallClocks = frames.map { it.absoluteTsMs }
 
-    // best 圈 reference：bestLapMs 对应的圈（duration == bestLapMs）
     val bestReference = buildBestReference(sessionId, repo, session.bestLapMs)
-
-    // 赛道几何（小地图）：getTrack 同步，冷缓存时 warmup 一次
     val trackPoints = resolveTrackPoints(session.trackId, trackCatalog)
 
-    return session to PlaybackContext(
+    return session to LapPlaybackContext(
         frames = frames,
         sampleWallClocks = sampleWallClocks,
         lapWindows = lapWindows,
         bestReference = bestReference,
         trackPoints = trackPoints,
         videoStartedAtWallClock = videoStartedAt,
+        lapStartWallClock = targetLap.lapStartWallClock,
+        lapEndWallClock = targetLap.lapEndWallClock,
+        lapNumber = lapIndex + 1,
     )
 }
 
@@ -533,7 +689,6 @@ private suspend fun resolveTrackPoints(
     trackCatalog: TrackCatalog,
 ): List<GeoPoint> {
     if (trackId == null) return emptyList()
-    // getTrack 同步，冷缓存返回 fallback；先 warmup getAllTracks 暖缓存
     runCatching { trackCatalog.getAllTracks() }
     val track = trackCatalog.getTrack(trackId)
     val points = track?.referencePath?.points ?: emptyList()

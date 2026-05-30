@@ -72,4 +72,78 @@ object VideoTelemetrySync {
         // 相等时（中点）取较小 index（lo）
         return if (distLo <= distHi) lo else hi
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // 按圈回放：圈时间轴主导播放模型纯函数
+    // （round redo-video-playback-per-lap-with-blackout）
+    // ────────────────────────────────────────────────────────────────
+
+    /**
+     * 按圈回放的圈时间轴范围（playhead wallClock 域），统一加"圈起点前导秒"。
+     *
+     * 起点 = lapStartWallClock - leadInMs（默认 3000ms，进圈前提前展示进弯准备）；
+     * 终点 = lapEndWallClock（圈播完即停，不自动续下一圈）。
+     *
+     * @param lapStartWallClock 该圈开圈 crossing 真壁钟
+     * @param lapEndWallClock   该圈收圈 crossing 真壁钟
+     * @param leadInMs          圈起点前导毫秒（默认 3000）
+     * @return [startWallClock, endWallClock]（startWallClock 已减 leadIn；保证 start <= end）
+     */
+    fun lapPlayheadRange(
+        lapStartWallClock: Long,
+        lapEndWallClock: Long,
+        leadInMs: Long = LAP_LEAD_IN_MS,
+    ): LongRange {
+        val start = lapStartWallClock - leadInMs
+        // 防御：异常圈（end < start）退化成单点区间，避免空 range 让 ticker 立刻停。
+        val end = if (lapEndWallClock < start) start else lapEndWallClock
+        return start..end
+    }
+
+    /**
+     * 判定 playheadWallClock 是否落在视频覆盖段内。
+     *
+     * 视频覆盖段 = [videoStartedAtWallClock, videoStartedAtWallClock + videoDurationMs]（闭区间，
+     * 末帧含）。落段内 → ExoPlayer 自然时钟驱动 playhead；落段外（圈头早于视频起点 / 圈尾晚于
+     * 视频终点）→ 黑屏 + ticker 以 1x 实时推进 playhead。
+     *
+     * videoDurationMs <= 0（READY 前 player.duration 未知，传 0）→ 视为无任何覆盖（恒返回 false）。
+     *
+     * @param playheadWallClock 当前 playhead 绝对 wallClock
+     * @param videoStartedAtWallClock 视频录制开始 wallClock
+     * @param videoDurationMs 视频时长毫秒（ExoPlayer READY 后 player.duration）
+     * @return playhead 是否落在视频覆盖段内
+     */
+    fun isWithinVideoCoverage(
+        playheadWallClock: Long,
+        videoStartedAtWallClock: Long,
+        videoDurationMs: Long,
+    ): Boolean {
+        if (videoDurationMs <= 0L) return false
+        val coverageEnd = videoStartedAtWallClock + videoDurationMs
+        return playheadWallClock in videoStartedAtWallClock..coverageEnd
+    }
+
+    /**
+     * playheadWallClock → ExoPlayer 内 seek 位置（position，相对录制开始毫秒）。
+     *
+     * position = playheadWallClock - videoStartedAtWallClock，clamp 到 [0, videoDurationMs]。
+     * 仅在覆盖段内 seek 才有物理意义；段外调用方应黑屏 ticker，不调用本函数。
+     *
+     * @param playheadWallClock 当前 playhead 绝对 wallClock
+     * @param videoStartedAtWallClock 视频录制开始 wallClock
+     * @param videoDurationMs 视频时长毫秒（用于 clamp 上界；<=0 时不设上界 clamp）
+     * @return ExoPlayer seek 目标 position（毫秒，>= 0）
+     */
+    fun playheadToVideoPosition(
+        playheadWallClock: Long,
+        videoStartedAtWallClock: Long,
+        videoDurationMs: Long,
+    ): Long {
+        val raw = playheadWallClock - videoStartedAtWallClock
+        val lowerClamped = if (raw < 0L) 0L else raw
+        return if (videoDurationMs > 0L && lowerClamped > videoDurationMs) videoDurationMs else lowerClamped
+    }
+
+    const val LAP_LEAD_IN_MS: Long = 3000L
 }

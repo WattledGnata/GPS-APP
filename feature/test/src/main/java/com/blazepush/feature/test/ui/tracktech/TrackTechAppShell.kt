@@ -212,15 +212,21 @@ fun TrackTechAppShell() {
                         sessionViewModel = sessionViewModel,
                     )
                 }
-                // video-overlay-realtime-playback round：视频实时叠加遥测 HUD 播放屏。
+                // redo-video-playback-per-lap-with-blackout round：按圈回放的视频实时叠加遥测 HUD 播放屏。
+                // route 带 lapIndex，从详情页圈列表点进，定位该圈起点前 3 秒，圈播完停在圈末。
                 composable(
-                    route = "lap_video/{sessionId}",
-                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+                    route = "lap_video/{sessionId}/{lapIndex}",
+                    arguments = listOf(
+                        navArgument("sessionId") { type = NavType.StringType },
+                        navArgument("lapIndex") { type = NavType.IntType },
+                    ),
                 ) { backStackEntry ->
                     val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                    val lapIndex = backStackEntry.arguments?.getInt("lapIndex") ?: 0
                     LapVideoPlaybackScreen(
                         navController = navController,
                         sessionId = sessionId,
+                        lapIndex = lapIndex,
                     )
                 }
             }
