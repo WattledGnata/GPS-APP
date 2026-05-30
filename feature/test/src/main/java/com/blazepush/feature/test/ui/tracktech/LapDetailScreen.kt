@@ -1,0 +1,340 @@
+// @IgnoreFormatCheck
+package com.blazepush.feature.test.ui.tracktech
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
+import com.blazepush.core.data.repository.TelemetryRepository
+import com.blazepush.core.domain.model.LapTelemetry
+import com.blazepush.core.domain.model.LapTelemetrySample
+import com.blazepush.core.domain.usecase.AccelerationSmoother
+import com.blazepush.core.domain.usecase.GRAVITY_MS2
+import com.blazepush.core.domain.usecase.TimedSpeedSample
+import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.ui.components.AccelTimeChart
+import com.blazepush.feature.test.ui.components.SectorBar
+import com.blazepush.feature.test.ui.components.SpeedTimeChart
+import com.blazepush.feature.test.ui.components.TrackPolylineMap
+import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+
+/**
+ * 单圈详情屏（M2 lap-detail-screen-with-cursor）。
+ *
+ * 4 个共享游标的回放组件：SpeedTimeChart / AccelTimeChart / SectorBar / TrackPolylineMap。
+ * - R1：accelerationG 在 UI 层用 [AccelerationSmoother] 从 speedKmh 反算（reader 恒返回 null），
+ *   只喂给 AccelTimeChart；其余 3 组件用原始 samples（不读 accelerationG）。
+ * - R2：sectorBoundaries 直接消费 getLapTelemetry 返回的多段（future-sector-derivation 已合回）。
+ * - Cursor：hoist 单一 cursorAbsoluteTs state；同圈内 4 组件共享同一 samples，absoluteTsMs
+ *   精确相等匹配可命中同一时间点。
+ *
+ * 视觉约束（Track Tech V2）：圈时是时间字符串 → Score 字体（**非 DSEG7/Mechanical**）；
+ * 屏内每个直接 Text MUST maxLines = 1 + Ellipsis；label-value Row 配 weight。
+ *
+ * @author CC
+ * @description single-lap detail screen with shared cursor playback
+ * @date 2026-05-30
+ */
+@Composable
+fun LapDetailScreen(
+    navController: NavController,
+    sessionId: String,
+    lapIndex: Int,
+    telemetryRepository: TelemetryRepository = koinInject(),
+    sessionViewModel: TestSessionViewModel = koinViewModel(),
+) {
+    var lapTelemetry by remember { mutableStateOf<LapTelemetry?>(null) }
+
+    LaunchedEffect(sessionId, lapIndex) {
+        val result = telemetryRepository.getLapTelemetry(sessionId, lapIndex)
+        if (result != null) {
+            FileLogger.d(
+                "LapDetail",
+                "loaded sid=$sessionId idx=$lapIndex samples=${result.samples.size} sectors=${result.sectorBoundaries.size}",
+            )
+        } else {
+            FileLogger.e("LapDetail", "getLapTelemetry null sid=$sessionId idx=$lapIndex")
+        }
+        lapTelemetry = result
+    }
+
+    // 共享游标 single source of truth（Cursor 决策）：SpeedTimeChart / AccelTimeChart 发起变更，
+    // 4 组件入参全传它。25Hz 拖动用 v 级别埋点（可被 level 过滤）。
+    var cursorAbsoluteTs by remember { mutableStateOf<Long?>(null) }
+
+    // R1 accelerationG 派生：remember(lapTelemetry) 缓存一次（lapTelemetry 只在 LaunchedEffect 加载一次），
+    // 不在重组热路径。只喂给 AccelTimeChart。
+    val accelSamples = remember(lapTelemetry) {
+        lapTelemetry?.let { telemetry ->
+            val derived = deriveAccelerationG(telemetry.samples)
+            FileLogger.d("LapDetail", "accel derived sid=$sessionId idx=$lapIndex count=${derived.size}")
+            derived
+        } ?: emptyList()
+    }
+
+    // 游标关键状态转移埋点（road-test-first 强制）：用 LaunchedEffect 在 cursorAbsoluteTs 每次
+    // 变化时记一条 v 级别日志（25Hz 拖动频率用 v 级别可被 level 过滤）。不内联进 onCursorChange
+    // lambda（保持 `onCursorChange = { cursorAbsoluteTs = it }` 字面量供 contract test 锁定）。
+    LaunchedEffect(cursorAbsoluteTs) {
+        FileLogger.v("LapDetail", "cursor ts=$cursorAbsoluteTs")
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TrackTechColors.Background),
+    ) {
+        LapDetailHeader(onBack = { navController.popBackStack() })
+
+        val telemetry = lapTelemetry
+        if (telemetry == null) {
+            // 降级态（Risk 3）：null lapTelemetry 显式占位，不崩溃不白屏。
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "NO LAP DATA",
+                    style = TrackTechTypography.ScoreSmall,
+                    color = TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            return@Column
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { LapOverviewSection(lapIndex = lapIndex, telemetry = telemetry) }
+            item {
+                ChartCard(title = "SPEED") {
+                    SpeedTimeChart(
+                        samples = telemetry.samples,
+                        cursorAbsoluteTs = cursorAbsoluteTs,
+                        onCursorChange = { cursorAbsoluteTs = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
+                    )
+                }
+            }
+            item {
+                ChartCard(title = "ACCEL G") {
+                    AccelTimeChart(
+                        samples = accelSamples,
+                        cursorAbsoluteTs = cursorAbsoluteTs,
+                        onCursorChange = { cursorAbsoluteTs = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
+                    )
+                }
+            }
+            item {
+                ChartCard(title = "SECTORS") {
+                    SectorBar(
+                        sectorBoundaries = telemetry.sectorBoundaries,
+                        lapStartWallClock = telemetry.lapStartWallClock,
+                        lapEndWallClock = telemetry.lapEndWallClock,
+                        cursorAbsoluteTs = cursorAbsoluteTs,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            item {
+                ChartCard(title = "TRACK") {
+                    TrackPolylineMap(
+                        samples = telemetry.samples,
+                        cursorAbsoluteTs = cursorAbsoluteTs,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * R1 纯函数：从 samples 的 speedKmh + absoluteTsMs 序列反算每个 sample 的 accelerationG（G 单位）。
+ *
+ * 用 [AccelerationSmoother] 得 m/s² 加速度（与输入索引一一对应），`/ GRAVITY_MS2` 转 G，
+ * 只 `copy(accelerationG = gValue)`（absoluteTsMs / elapsedMsInLap / lat / lon / speedKmh 不变，
+ * 保证游标精确相等匹配仍命中同一时间点）。
+ *
+ * - 空列表 → 空列表
+ * - N >= 1 → 每个 accelerationG 非 null（N = 1 时 AccelerationSmoother 返回 [0.0] → accelerationG = 0.0 非 null）
+ *
+ * 抽 internal 纯函数（不引 androidx），便于 JVM 单测断言 spec scenario「accelerationG 非空喂 AccelTimeChart」。
+ */
+internal fun deriveAccelerationG(samples: List<LapTelemetrySample>): List<LapTelemetrySample> {
+    if (samples.isEmpty()) return emptyList()
+    val msPerS2 = AccelerationSmoother.compute(
+        samples.map { TimedSpeedSample(it.absoluteTsMs, it.speedKmh) },
+    )
+    return samples.mapIndexed { index, sample ->
+        sample.copy(accelerationG = msPerS2[index] / GRAVITY_MS2)
+    }
+}
+
+@Composable
+private fun LapDetailHeader(onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(TrackTechColors.Surface)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = TrackTechColors.TextPrimary,
+            )
+        }
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = "LAP DETAIL",
+            style = TrackTechTypography.RacingTitleMedium,
+            color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun LapOverviewSection(
+    lapIndex: Int,
+    telemetry: LapTelemetry,
+) {
+    // top speed in lap（可选）：空 samples 退化 null → "--"
+    val topSpeedKmh = remember(telemetry) {
+        telemetry.samples.maxOfOrNull { it.speedKmh }
+    }
+    CutCornerPanel(
+        modifier = Modifier.fillMaxWidth(),
+        cutSize = 8.dp,
+        cutCorners = cutCornersAll,
+        contentPadding = 16.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "LAP ${lapIndex + 1}",
+                style = TrackTechTypography.RacingTitleMedium,
+                color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 圈时是时间字符串 → Score 字体（V2 约束：MUST NOT Mechanical/DSEG7）
+            OverviewRow(label = "Lap time", value = formatLapDetailTime(telemetry.lapDurationMs))
+            OverviewRow(label = "Track", value = telemetry.trackNameSnapshot ?: "—")
+            OverviewRow(
+                label = "Top speed",
+                value = topSpeedKmh?.let { "%.1f km/h".format(it) } ?: "--",
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChartCard(
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    CutCornerPanel(
+        modifier = Modifier.fillMaxWidth(),
+        cutSize = 8.dp,
+        cutCorners = cutCornersAll,
+        contentPadding = 12.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = title,
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            content()
+        }
+    }
+}
+
+@Composable
+private fun OverviewRow(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = TrackTechTypography.UiTextLabel,
+            color = TrackTechColors.TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.size(12.dp))
+        Text(
+            text = value,
+            style = TrackTechTypography.UiTextBody,
+            color = TrackTechColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 圈时格式化（m:ss.mmm）。与 LapSessionDetailScreen.formatLapTime 同语义（时间字符串 → Score 字体）。 */
+private fun formatLapDetailTime(ms: Long?): String {
+    if (ms == null || ms <= 0L) return "--:--.---"
+    val totalSec = ms / 1000
+    val minutes = totalSec / 60
+    val seconds = totalSec % 60
+    val millis = ms % 1000
+    return "%d:%02d.%03d".format(minutes, seconds, millis)
+}

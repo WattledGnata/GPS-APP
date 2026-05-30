@@ -156,7 +156,23 @@ fun LapSessionDetailScreen(
                 item { EmptyLapRecordsHint() }
             } else {
                 items(derived.lapRecords) { record ->
-                    LapRecordRow(record = record)
+                    // 仅 VALID/BEST 圈可点（Decision 圈行可点范围）：它们的 lapNumber=idx+1 严格对应
+                    // getLapTelemetry(sessionId, lapNumber-1) 的 lapIndex；INVALID/INCOMPLETE 圈
+                    // lapNumber 是合成值，点了 getLapTelemetry 越界返回 null → 白屏，故传 null 禁点。
+                    val onLapClick: (() -> Unit)? = when (record.status) {
+                        UiLapStatus.VALID, UiLapStatus.BEST -> {
+                            {
+                                val lapIndex = record.lapNumber - 1
+                                FileLogger.d(
+                                    "LapDetail",
+                                    "navigate sid=$sessionId lapNumber=${record.lapNumber} -> lapIndex=$lapIndex",
+                                )
+                                navController.navigate("lap_detail/$sessionId/$lapIndex")
+                            }
+                        }
+                        UiLapStatus.INVALID, UiLapStatus.INCOMPLETE -> null
+                    }
+                    LapRecordRow(record = record, onClick = onLapClick)
                 }
             }
         }
@@ -335,7 +351,10 @@ private fun EmptyLapRecordsHint() {
 }
 
 @Composable
-private fun LapRecordRow(record: UiLapRecord) {
+private fun LapRecordRow(
+    record: UiLapRecord,
+    onClick: (() -> Unit)? = null,
+) {
     val timeColor = when (record.status) {
         UiLapStatus.BEST -> TrackTechColors.Purple
         UiLapStatus.VALID -> TrackTechColors.TextPrimary
@@ -357,6 +376,8 @@ private fun LapRecordRow(record: UiLapRecord) {
                 color = borderColor,
                 shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
             )
+            // 仅 VALID/BEST 圈传非 null onClick → 可点导航；INVALID/INCOMPLETE 传 null → 禁点（Decision 圈行可点范围）
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

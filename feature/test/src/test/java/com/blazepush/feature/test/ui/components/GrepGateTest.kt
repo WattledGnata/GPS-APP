@@ -222,14 +222,24 @@ class GrepGateTest {
         prodFiles.forEach { assertTrue("Prod file $it must exist", findFile("feature/test/src/main/java/com/blazepush/feature/test/ui/components/$it").exists()) }
         testFiles.forEach { assertTrue("Test file $it must exist", findFile("feature/test/src/test/java/com/blazepush/feature/test/ui/components/$it").exists()) }
 
-        // (b) Negative: SpeedTimeChart literal outside components dir = 0 hits (exclude .worktrees/ and src/test)
+        // (b) Negative: SpeedTimeChart literal outside components dir = 0 hits
+        // EXCEPT the legitimate M2 consumer screen LapDetailScreen.kt（lap-detail-screen-with-cursor round
+        // 起，组件首次被生产屏组屏接线；W2 时代「无生产 screen import」不变量被 M2 显式超越）。
+        // 仍断言除 LapDetailScreen.kt 外无其他文件逃逸（防误引用扩散）。
         val searchRoot = findFile("feature/test/src/main/java")
         if (searchRoot.exists()) {
-            val outsideHits = searchRoot.walkTopDown()
+            val escapedFiles = searchRoot.walkTopDown()
                 .filter { it.extension == "kt" }
                 .filter { !it.path.contains("/ui/components/") }
-                .sumOf { file -> Regex("""SpeedTimeChart""").findAll(file.readText()).count() }
-            assertEquals("SpeedTimeChart literal must not escape components dir", 0, outsideHits)
+                .filter { it.name != "LapDetailScreen.kt" }
+                .filter { file -> Regex("""SpeedTimeChart""").containsMatchIn(file.readText()) }
+                .map { it.name }
+                .toList()
+            assertEquals(
+                "SpeedTimeChart literal must not escape components dir (除 M2 消费方 LapDetailScreen.kt 外)：逃逸 = $escapedFiles",
+                emptyList<String>(),
+                escapedFiles,
+            )
         }
     }
 }

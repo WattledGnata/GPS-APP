@@ -185,6 +185,22 @@ fun TrackTechAppShell() {
                         onBack = { navController.popBackStack() },
                     )
                 }
+                composable(
+                    route = "lap_detail/{sessionId}/{lapIndex}",
+                    arguments = listOf(
+                        navArgument("sessionId") { type = NavType.StringType },
+                        navArgument("lapIndex") { type = NavType.IntType },
+                    ),
+                ) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                    val lapIndex = backStackEntry.arguments?.getInt("lapIndex") ?: 0
+                    LapDetailScreen(
+                        navController = navController,
+                        sessionId = sessionId,
+                        lapIndex = lapIndex,
+                        sessionViewModel = sessionViewModel,
+                    )
+                }
             }
         }
     }
