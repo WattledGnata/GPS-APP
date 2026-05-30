@@ -79,6 +79,7 @@ import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
@@ -94,7 +95,7 @@ private const val HOLD_TICK_MS = 16L
  * @description landscape lap live session screen
  * @date 2026-05-01
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun LapLiveScreen(
     navController: NavController,
@@ -106,7 +107,24 @@ fun LapLiveScreen(
     val coroutineScope = rememberCoroutineScope()
     val screenLifecycleOwner = LocalLifecycleOwner.current
 
-    val lapLiveState by sessionViewModel.lapLiveState.collectAsState()
+    // redo-video-overlay-visual-gauges round（真机反馈降频）：lapLiveState 上游每 50ms（ticker）+ 每 GPS
+    // 帧发射，直接 collectAsState 会让整个 2x2 HUD dashboard 高频重组。**UI 消费侧**用 sample 节流到 ~10Hz
+    // （只显示最新值，丢弃中间帧；圈速 timer 视觉仍流畅）。**不动 ViewModel 50ms ticker 与 GPS 接收/遥测
+    // 写入链路**——节流只发生在屏幕订阅这一层。initial 给 ViewModel 当前 value 保证首屏不空（sample 首值
+    // 要等一个周期才到）。
+    val throttledLapLiveState = remember(sessionViewModel) {
+        sessionViewModel.lapLiveState.sample(OVERLAY_UI_REFRESH_PERIOD_MS)
+    }
+    val lapLiveState by throttledLapLiveState.collectAsState(
+        initial = sessionViewModel.lapLiveState.value,
+    )
+    LaunchedEffect(Unit) {
+        FileLogger.d(
+            "VideoOverlay",
+            "LapLiveScreen HUD UI 刷新节流生效 throttle=${OVERLAY_UI_REFRESH_PERIOD_MS}ms" +
+                "(${1000 / OVERLAY_UI_REFRESH_PERIOD_MS}Hz, 采样链路仍25Hz不动)",
+        )
+    }
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
     // screen 顶层收集录制状态：供绑定条件 LaunchedEffect + RecIndicator + 资源安全 onDispose 共用
     val recordingState by recordingEngine.recordingState.collectAsState()

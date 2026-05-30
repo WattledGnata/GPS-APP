@@ -8,13 +8,11 @@ import android.content.pm.ActivityInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -54,7 +52,9 @@ import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import kotlin.math.abs
 
-private const val PLAYHEAD_TICK_MS = 33L // ~30fps
+// round redo-video-overlay-visual-gauges：UI 数据刷新降频 30fps→10Hz（采样仍 25Hz 不动，
+// 只降 overlay playhead 驱动的数据刷新/重组频率，减渲染负担）。视频本身由 ExoPlayer 自渲染不受影响。
+private const val PLAYHEAD_TICK_MS = OVERLAY_UI_REFRESH_PERIOD_MS // 100ms = 10Hz
 private const val TAG = "VideoOverlay"
 
 /**
@@ -207,7 +207,11 @@ fun LapVideoPlaybackScreen(
             videoDurationMs = exoPlayer.duration
         }
         if (!isActive) return@LaunchedEffect
-        FileLogger.d(TAG, "video READY duration=$videoDurationMs lapIndex=$lapIndex")
+        FileLogger.d(
+            TAG,
+            "video READY duration=$videoDurationMs lapIndex=$lapIndex " +
+                "uiRefreshThrottle=${PLAYHEAD_TICK_MS}ms(${1000 / PLAYHEAD_TICK_MS}Hz, 采样仍25Hz)",
+        )
 
         // playhead 从圈起点前导秒开始
         var playheadWallClock = playheadStart
@@ -436,75 +440,38 @@ private fun OverlayPanel(
     }
 }
 
+/**
+ * 左上速度角标：round redo-video-overlay-visual-gauges 起改为老式圆形指针速度表（[SpeedometerGauge]），
+ * 替换原 DSEG7 速度数字。仪表自带半透明表盘底，不再套 OverlayPanel（避免双层背景）。
+ */
 @Composable
 private fun SpeedCorner(
     speedKmh: Double?,
     modifier: Modifier = Modifier,
 ) {
-    OverlayPanel(modifier = modifier, content = {
-        Column {
-            Text(
-                text = "SPEED",
-                style = TrackTechTypography.UiTextLabel,
-                color = TrackTechColors.TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(2.dp))
-            val display = speedKmh?.let { "%.0f".format(it) } ?: "--"
-            val speedColor = if ((speedKmh ?: 0.0) >= 120.0) TrackTechColors.Cyan else TrackTechColors.TextPrimary
-            MetricNumber(
-                value = display,
-                unit = "km/h",
-                size = MetricSize.Medium,
-                kind = MetricKind.Mechanical,
-                valueColor = speedColor,
-            )
-        }
-    })
+    SpeedometerGauge(
+        speedKmh = speedKmh,
+        modifier = modifier,
+        diameter = 120.dp,
+    )
 }
 
+/**
+ * 右上 G 值角标：round redo-video-overlay-visual-gauges 起改为摩擦圆 / G 球（[GForceBall]），
+ * 替换原 G 数字。横轴=横向 G（过弯）、纵轴=纵向 G（加速向上 / 制动向下），±1.5G 映射半径边界。
+ */
 @Composable
 private fun GForceCorner(
     latG: Double?,
     lonG: Double?,
     modifier: Modifier = Modifier,
 ) {
-    OverlayPanel(modifier = modifier, content = {
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = "G-FORCE",
-                style = TrackTechTypography.UiTextLabel,
-                color = TrackTechColors.TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(2.dp))
-            GRow(label = "LAT", value = latG)
-            Spacer(Modifier.height(2.dp))
-            GRow(label = "LON", value = lonG)
-        }
-    })
-}
-
-@Composable
-private fun GRow(label: String, value: Double?) {
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(
-            text = label,
-            style = TrackTechTypography.UiTextLabel,
-            color = TrackTechColors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.width(6.dp))
-        MetricNumber(
-            value = value?.let { "%.1f".format(abs(it)) } ?: "--",
-            size = MetricSize.Small,
-            kind = MetricKind.Mechanical,
-            valueColor = TrackTechColors.TextPrimary,
-        )
-    }
+    GForceBall(
+        latG = latG,
+        lonG = lonG,
+        modifier = modifier,
+        diameter = 120.dp,
+    )
 }
 
 @Composable

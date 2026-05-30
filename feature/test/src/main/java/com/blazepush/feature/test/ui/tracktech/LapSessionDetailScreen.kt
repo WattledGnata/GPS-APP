@@ -164,6 +164,29 @@ fun LapSessionDetailScreen(
             }
         }
 
+        // redo-video-overlay-visual-gauges round（真机反馈）：去掉独立 "VIDEO REPLAY" 圈列表区，
+        // 把视频回放入口整合进已有圈成绩单（sector 表 / fallback 圈列表）的每一行：
+        // - session 有视频 → VALID/BEST 圈行末尾显示小播放图标（▶），点图标导航 lap_video/{sid}/{lapIndex}；
+        //   行其余部分仍点进 lap_detail（单圈数据图表）。两入口共存不互斥。
+        // - 无视频 / INVALID/INCOMPLETE 圈 → 不显示播放图标（getLapTelemetry 越界 → 白屏，禁点）。
+        val hasVideo = session?.videoFilePath != null
+        // 视频回放点击工厂：仅 VALID/BEST + 有视频时返回非 null（否则圈行不渲染播放图标）。
+        val onVideoClickFactory: (lapNumber: Int, status: UiLapStatus) -> (() -> Unit)? =
+            { lapNumber, status ->
+                if (hasVideo && (status == UiLapStatus.VALID || status == UiLapStatus.BEST)) {
+                    {
+                        val lapIndex = lapNumber - 1
+                        FileLogger.d(
+                            "VideoOverlay",
+                            "open video replay (from lap row) sid=$sessionId lapNumber=$lapNumber -> lapIndex=$lapIndex",
+                        )
+                        navController.navigate("lap_video/$sessionId/$lapIndex")
+                    }
+                } else {
+                    null
+                }
+            }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize(),
@@ -197,31 +220,6 @@ fun LapSessionDetailScreen(
                     },
                 )
             }
-            // redo-video-playback-per-lap-with-blackout round：仅当 session 有视频时显示"按圈回放"圈列表
-            // 入口（每圈一行：圈号 + 圈速，点进 lap_video/{sessionId}/{lapIndex} 按圈回放视频+overlay）。
-            // 仅 VALID/BEST 圈列出（lapNumber-1 = lapIndex 严格对应 getLapTelemetry；INVALID/INCOMPLETE
-            // 圈无有效起止 wallClock → 不列）。if 分支条件渲染，禁 early-return。
-            if (session?.videoFilePath != null) {
-                val videoLaps = derived.lapRecords.filter {
-                    it.status == UiLapStatus.VALID || it.status == UiLapStatus.BEST
-                }
-                if (videoLaps.isNotEmpty()) {
-                    item { VideoReplayHeader() }
-                    items(videoLaps) { record ->
-                        VideoReplayLapRow(
-                            record = record,
-                            onClick = {
-                                val lapIndex = record.lapNumber - 1
-                                FileLogger.d(
-                                    "VideoOverlay",
-                                    "open video replay sid=$sessionId lapNumber=${record.lapNumber} -> lapIndex=$lapIndex",
-                                )
-                                navController.navigate("lap_video/$sessionId/$lapIndex")
-                            },
-                        )
-                    }
-                }
-            }
             if (table != null) {
                 // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），
                 // INVALID/INCOMPLETE 圈仍用原 LapRecordRow 在表下方列出（别丢）。
@@ -239,6 +237,12 @@ fun LapSessionDetailScreen(
                             )
                             navController.navigate("lap_detail/$sessionId/$lapIndex")
                         },
+                        // sector 表圈行均为 VALID/BEST → 有视频时整行右侧加播放图标导航 lap_video。
+                        onVideoClick = if (hasVideo) {
+                            { lapNumber -> onVideoClickFactory(lapNumber, UiLapStatus.VALID)?.invoke() }
+                        } else {
+                            null
+                        },
                     )
                 }
                 // sector 表只渲染 valid/best 圈（table.laps）；INVALID/INCOMPLETE 圈从
@@ -247,7 +251,11 @@ fun LapSessionDetailScreen(
                     it.status == UiLapStatus.INVALID || it.status == UiLapStatus.INCOMPLETE
                 }
                 items(extraRecords) { record ->
-                    LapRecordRow(record = record, onClick = onLapClickFactory(record))
+                    LapRecordRow(
+                        record = record,
+                        onClick = onLapClickFactory(record),
+                        onVideoClick = onVideoClickFactory(record.lapNumber, record.status),
+                    )
                 }
             } else {
                 // fallback：无 sector 门或 <2 SF → 保持原圈列表（不回归）。
@@ -256,7 +264,11 @@ fun LapSessionDetailScreen(
                     item { EmptyLapRecordsHint() }
                 } else {
                     items(derived.lapRecords) { record ->
-                        LapRecordRow(record = record, onClick = onLapClickFactory(record))
+                        LapRecordRow(
+                            record = record,
+                            onClick = onLapClickFactory(record),
+                            onVideoClick = onVideoClickFactory(record.lapNumber, record.status),
+                        )
                     }
                 }
             }
@@ -458,76 +470,6 @@ private fun CompareEntry(
     }
 }
 
-/**
- * redo-video-playback-per-lap-with-blackout round：按圈回放区标题（"VIDEO REPLAY"）。
- * 文字走 UiTextLabel；Text maxLines=1 + Ellipsis。
- */
-@Composable
-private fun VideoReplayHeader() {
-    Text(
-        text = "VIDEO REPLAY",
-        style = TrackTechTypography.UiTextLabel,
-        color = TrackTechColors.Cyan,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
-
-/**
- * redo-video-playback-per-lap-with-blackout round：按圈回放圈行（圈号 + 圈速 + 播放图标，可点）。
- * 点击导航到 lap_video/{sessionId}/{lapIndex} 按圈回放视频+overlay。
- * 圈速时间字符串走 UiTextBody（V2：MUST NOT DSEG7）；每 Text maxLines=1 + Ellipsis；
- * 主 Row 不用 SpaceBetween，圈速列 weight(1f) 撑开 + 末尾固定播放图标，防换行。
- */
-@Composable
-private fun VideoReplayLapRow(
-    record: UiLapRecord,
-    onClick: () -> Unit,
-) {
-    val accent = TrackTechColors.Cyan
-    val timeColor = if (record.status == UiLapStatus.BEST) TrackTechColors.Purple else TrackTechColors.TextPrimary
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
-            .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.10f))
-            .border(
-                width = 1.dp,
-                color = accent.copy(alpha = 0.6f),
-                shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "Lap ${record.lapNumber}",
-            style = TrackTechTypography.UiTextLabel,
-            color = TrackTechColors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(64.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = formatLapTime(record.timeMs),
-            style = TrackTechTypography.UiTextBody,
-            color = timeColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "▶",
-            style = TrackTechTypography.UiTextBody,
-            color = accent,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
 @Composable
 private fun LapRecordsHeader() {
     Text(
@@ -554,6 +496,9 @@ private fun EmptyLapRecordsHint() {
 private fun LapRecordRow(
     record: UiLapRecord,
     onClick: (() -> Unit)? = null,
+    // redo-video-overlay-visual-gauges round：非 null 时行末显示小播放图标（▶），点图标导航 lap_video。
+    // 仅 VALID/BEST + session 有视频时由调用方传非 null（视频回放入口整合进圈成绩单）。
+    onVideoClick: (() -> Unit)? = null,
 ) {
     val timeColor = when (record.status) {
         UiLapStatus.BEST -> TrackTechColors.Purple
@@ -625,6 +570,27 @@ private fun LapRecordRow(
                 }
             }
             UiLapStatus.BEST, UiLapStatus.INCOMPLETE -> Unit
+        }
+        // 视频回放入口：行末固定小播放图标（V2：末尾固定元素前加 Spacer 保间距）。
+        // 自身 clickable 在图标区域优先消费点击（导航 lap_video），不影响行其余区域的 lap_detail 点击。
+        if (onVideoClick != null) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.18f))
+                    .clickable(onClick = onVideoClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "▶",
+                    style = TrackTechTypography.UiTextBody,
+                    color = TrackTechColors.Cyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -822,6 +788,9 @@ private fun LapSectorTableBlock(
     bestActualLapMs: Long?,
     hScroll: ScrollState,
     onLapClick: (lapNumber: Int) -> Unit,
+    // redo-video-overlay-visual-gauges round：非 null 时每圈行右侧加固定播放图标（不随横滚），
+    // 点图标导航 lap_video（视频回放入口整合进 sector 成绩表）。
+    onVideoClick: ((lapNumber: Int) -> Unit)? = null,
 ) {
     CutCornerPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -875,30 +844,55 @@ private fun LapSectorTableBlock(
                 )
             }
 
-            // 各圈行（valid/best）：Lap N | lapTime | 各 sector split（命中 best 绿色高亮，缺段 "—"）
+            // 各圈行（valid/best）：[Lap N | lapTime | 各 sector split（横滚区）] + 固定播放图标（不随横滚）
+            // 横滚区 weight(1f) 点击导航 lap_detail；右侧固定播放图标点击导航 lap_video（有视频时）。
             table.laps.forEach { lap ->
                 val isBest = bestActualLapMs != null && lap.lapTimeMs == bestActualLapMs
                 val timeColor = if (isBest) TrackTechColors.Purple else TrackTechColors.TextPrimary
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onLapClick(lap.lapNumber) }
-                        .horizontalScroll(hScroll),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SectorCell(SectorTableLapColWidth) {
-                        SectorCellText("Lap ${lap.lapNumber}", TrackTechTypography.UiTextSmall, TrackTechColors.TextSecondary)
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onLapClick(lap.lapNumber) }
+                            .horizontalScroll(hScroll),
+                    ) {
+                        SectorCell(SectorTableLapColWidth) {
+                            SectorCellText("Lap ${lap.lapNumber}", TrackTechTypography.UiTextSmall, TrackTechColors.TextSecondary)
+                        }
+                        SectorCell(SectorTableTimeColWidth) {
+                            SectorCellText(formatLapTime(lap.lapTimeMs), TrackTechTypography.UiTextBody, timeColor)
+                        }
+                        lap.splits.forEachIndexed { i, split ->
+                            val isSectorBest = split != null && split == table.bestSplitPerSector.getOrNull(i)
+                            val splitColor = if (isSectorBest) TrackTechColors.Green else TrackTechColors.TextPrimary
+                            SectorCell(SectorTableSectorColWidth) {
+                                SectorCellText(
+                                    if (split != null) formatSectorSplit(split) else "—",
+                                    TrackTechTypography.UiTextBody,
+                                    splitColor,
+                                )
+                            }
+                        }
                     }
-                    SectorCell(SectorTableTimeColWidth) {
-                        SectorCellText(formatLapTime(lap.lapTimeMs), TrackTechTypography.UiTextBody, timeColor)
-                    }
-                    lap.splits.forEachIndexed { i, split ->
-                        val isSectorBest = split != null && split == table.bestSplitPerSector.getOrNull(i)
-                        val splitColor = if (isSectorBest) TrackTechColors.Green else TrackTechColors.TextPrimary
-                        SectorCell(SectorTableSectorColWidth) {
-                            SectorCellText(
-                                if (split != null) formatSectorSplit(split) else "—",
-                                TrackTechTypography.UiTextBody,
-                                splitColor,
+                    if (onVideoClick != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.18f))
+                                .clickable { onVideoClick(lap.lapNumber) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "▶",
+                                style = TrackTechTypography.UiTextBody,
+                                color = TrackTechColors.Cyan,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
