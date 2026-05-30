@@ -1,0 +1,31 @@
+estimated_days: 0.8
+actual_days: 0.4        # workflow 规划+实现 + 主会话 review/合回 + 真机试装验证
+complexity: "large"     # 新建多圈组件 MultiLapSpeedChart + 新屏 LapComparisonScreen + 圈选择 + 跨圈 elapsed 游标（7 文件 1250 行）
+review_mode: "road-test-first"  # 2026-05-30 批次：去 Codex/Opus；主会话合回前逐 diff review + 真机验证
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无；5 个 design Decision（X-Axis/New-Component/Cursor/Lap-Selection/X-Y-Scale）全按 design 实施"
+phase: "Phase 1"        # 收尾 · M3 核心交付物 2（多圈比较屏）
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []  # 新建多圈组件 + 屏，0 改单圈组件/reader/LapTelemetry 公共契约 → 不触发 #16
+accelerated_escalation: null
+# --- road-test-first 落地（M3 多圈比较屏第一刀）---
+# 用户拍板 X 轴 = 时间轴（elapsedMsInLap），多圈按圈内流逝时间叠加（非距离轴 alignByDistance，距离轴 defer §10.2）。
+# 新建 MultiLapSpeedChart（219 行）：N 圈 speed vs elapsedMsInLap 叠加，各圈一色（assignLapColors [Purple,Cyan,Green,Red]，
+#   BEST 优先 Purple）+ 共享游标竖线 + 每圈 nearestSampleByElapsed 高亮；统一 X（最长圈）+ 统一 Y（全局 speed min/max）。
+# 新建 LapComparisonScreen（477 行）：COMPARE 入口（≥2 VALID/BEST 圈才 enabled）→ 选 2-4 圈 chips（默认 BEST+最快几圈）
+#   → 每圈 getLapTelemetry(lapNumber-1) 加载 → 叠图 + 共享 cursorElapsedMs hoist + 各圈读数；<2 圈降级 SELECT 2+ LAPS。
+# 主会话合回前 review（road-test-first 人工网）全过：
+#   - commit 净度（无 gitignored）✓
+#   - 4 个单圈组件（SpeedTimeChart/AccelTimeChart/SectorBar/TrackPolylineMap）0 改动 ✓（M2 不回归，不触发 #16）
+#   - LapComparisonScreen 0 个 return@ early-return ✓（重组安全，避开 M2 commit 65d6ada 那个 Stack.pop 崩坑）
+#   - COMPARE 入口 validLaps>=2 才 enabled + 导航正确 + FileLogger 埋点 ✓
+# FileLogger（tag=LapCompare）：load 各圈 / null skip / select 变更 / cursor elapsed 转移 / open compare 入口。
+# 测试：MultiLapSpeedChartTest 6 + LapComparisonScreenContractTest 7 + LapComparisonSelectionTest 8；feature:test 整合后 364 test 0 fail；:app 编译 SUCCESSFUL。
+# 真机 vivo V2405A：从 worktree 试装（! adb install Success），用户签收「非常棒」（叠图 + 游标 + chips OK）。
+# 第一刀 scope 收窄到 speed 叠加；follow-up（§10）：accel/sector/map 多圈叠加 / 距离轴 / 预测 time-delta / 降采样。
