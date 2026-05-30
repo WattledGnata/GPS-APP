@@ -24,7 +24,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import kotlin.coroutines.resume
 
 /**
  * 相机录制引擎（CameraX VideoCapture + Recorder）。
@@ -389,6 +392,45 @@ class CameraRecordingEngine(
         _recordingState.value = RecordingState.Stopping
         rec.stop()
         FileLogger.d(TAG, "stopRecording: stop() 已发出，等待 VideoRecordEvent.Finalize（callback=${onFinalized != null}）")
+    }
+
+    /**
+     * 停止录制并挂起等待 Finalize 落盘完成（停圈速退出路径核心）。
+     *
+     * ## 真根因背景（修 SOURCE_INACTIVE）
+     * camera 绑在 screen 级 LifecycleOwner（NavBackStackEntry）。停圈速退出若立即 popBackStack，
+     * NavBackStackEntry 进 DESTROYED → CameraX lifecycle-aware 自动停 camera → 正在录的 VideoCapture
+     * 源失活 → Finalize ERROR_SOURCE_INACTIVE（code=4），moov 未写完视频损坏 + attachVideoToSession 不调。
+     *
+     * 修复主路径：onConfirmEnd 退出前先 await 本方法落盘完成，**期间不 popBackStack**（screen/
+     * NavBackStackEntry 保持存活 → camera lifecycle active → 落盘正常 OK + attachVideoToSession 写库），
+     * 落盘完成后才退出。
+     *
+     * 复用 [stopRecording] 的 onFinalized 回调（OK / ERROR / 非录制态三分支都触发），用
+     * [suspendCancellableCoroutine] 桥接成 suspend。
+     *
+     * MUST 在主线程调用（内部 stopRecording 走 CameraX，要求主线程）。
+     *
+     * @param timeoutMs Finalize 超时上限（默认 8s）。超时也返回（继续退出），FileLogger WARN。
+     *   防 Finalize 始终不回调时永久挂起。
+     */
+    @MainThread
+    suspend fun stopRecordingAndAwait(timeoutMs: Long = 8000L) {
+        FileLogger.d(TAG, "stopRecordingAndAwait: 进入 state=${_recordingState.value::class.simpleName} timeoutMs=$timeoutMs")
+        val finished = withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                // stopRecording 的 onFinalized 在 Finalize OK/ERROR 两分支 + 非 Recording 直接路径都会 invoke
+                stopRecording {
+                    FileLogger.d(TAG, "stopRecordingAndAwait: onFinalized 触发，resume")
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+        }
+        if (finished == null) {
+            FileLogger.e(TAG, "stopRecordingAndAwait: WARN Finalize 在 ${timeoutMs}ms 内未回调，超时返回，继续退出")
+        } else {
+            FileLogger.d(TAG, "stopRecordingAndAwait: 落盘完成（或非录制态直返），返回")
+        }
     }
 
     /**

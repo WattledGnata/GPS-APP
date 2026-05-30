@@ -112,6 +112,9 @@ fun LapLiveScreen(
     val recordingState by recordingEngine.recordingState.collectAsState()
 
     var showEndConfirmation by remember { mutableStateOf(false) }
+    // 停圈速退出时若正在录制：先 await 视频落盘（screen 存活期间 camera 源不断），期间显示"保存视频中…"遮罩。
+    // 大文件 moov 写入可能几秒，MUST 有 UI 反馈避免用户以为卡死。
+    var savingVideo by remember { mutableStateOf(false) }
     val trackName = track?.name?.zh ?: "—"
 
     // camera-preview-in-laplivescreen round v2（横滑独立预览页返工）：
@@ -200,19 +203,23 @@ fun LapLiveScreen(
     // 这样录制开始时 isRecording false→true，settledPage==1 → shouldBind 一直 true，不翻转 → effect 不重跑 → 不 rebind。
     // 横滑回 page0 且录制中：isRecording=true → shouldBind=true → 不 unbind，录制继续。
     // 横滑回 page0 无录制：shouldBind=false → unbind 省电。
-    val isRecording = recordingState is RecordingState.Recording
-    val shouldBind = (pagerState.settledPage == 1 || isRecording) && hasCamera && cameraPermissionGranted
+    // 二次陷阱修复（SOURCE_INACTIVE 复发）：stopRecordingAndAwait → stopRecording 把 state 置 Stopping，
+    // 此时若 isRecording 只认 Recording 则 shouldBind 翻 false → LaunchedEffect 重算 unbind camera →
+    // 正在 Finalize 的录制源失活 → code=4 复发。故 Stopping 态也必须保持绑定，直到 Finalize 完成 state→Idle
+    // （此时 await 已 resume、即将 popBackStack，unbind 安全）。
+    val isRecordingActive = recordingState is RecordingState.Recording || recordingState is RecordingState.Stopping
+    val shouldBind = (pagerState.settledPage == 1 || isRecordingActive) && hasCamera && cameraPermissionGranted
     LaunchedEffect(shouldBind) {
         if (shouldBind) {
             FileLogger.d(
                 "CamRec",
-                "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecording=$isRecording → 绑定 camera（screen lifecycle）",
+                "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive → 绑定 camera（screen lifecycle）",
             )
             recordingEngine.bind(screenLifecycleOwner, context, RecordingConfig.DEFAULT)
         } else {
             FileLogger.d(
                 "CamRec",
-                "unbind: shouldBind=false settledPage=${pagerState.settledPage} isRecording=$isRecording hasCamera=$hasCamera granted=$cameraPermissionGranted",
+                "unbind: shouldBind=false settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive hasCamera=$hasCamera granted=$cameraPermissionGranted",
             )
             recordingEngine.unbind(context, reason = "shouldBind=false settledPage=${pagerState.settledPage}")
         }
@@ -225,12 +232,16 @@ fun LapLiveScreen(
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             view.keepScreenOn = false
-            // screen 销毁资源安全：
+            // screen 销毁资源安全（best-effort 兜底，非主路径）：
+            //   主路径已由 onConfirmEnd 的 stopRecordingAndAwait 保障——退出前先等落盘完成再 popBackStack，
+            //   screen 存活期间 camera 源不断 → Finalize OK。
+            //   本 onDispose 仅兜底极端路径（系统强杀 / 非 onConfirmEnd 触发的销毁）。此时 NavBackStackEntry 已
+            //   开始销毁，camera 可能已被 lifecycle 停 → 此路径 Finalize 仍可能 SOURCE_INACTIVE，best-effort 而已。
             //   录制中 → stopRecording 异步落盘，Finalize 回调里才 unbind（避免 VideoCapture 管道被提前拆断）
             //   非录制 → 直接 unbind（省电释放）
             val currentState = recordingEngine.recordingState.value
             if (currentState is RecordingState.Recording) {
-                FileLogger.d("CamRec", "screen 销毁：录制中，stop 后等落盘完成再 unbind（Finalize 回调触发）")
+                FileLogger.d("CamRec", "screen 销毁兜底：录制中，stop 后等落盘完成再 unbind（best-effort，主路径已由 onConfirmEnd await 保障）")
                 recordingEngine.stopRecording {
                     FileLogger.d("CamRec", "screen 销毁：落盘完成，执行延迟 unbind")
                     recordingEngine.unbind(context, reason = "screen 销毁·落盘完成")
@@ -246,6 +257,18 @@ fun LapLiveScreen(
 
     val onConfirmEnd: () -> Unit = {
         coroutineScope.launch {
+            // 真根因修复（SOURCE_INACTIVE / code=4）：camera 绑在 screen 级 LifecycleOwner（NavBackStackEntry）。
+            // 停圈速退出若立即 popBackStack → NavBackStackEntry DESTROYED → CameraX 自动停 camera →
+            // 正在录的 VideoCapture 源失活 → Finalize ERROR_SOURCE_INACTIVE，视频损坏 + 不写库。
+            // 修复：录制中先 stopRecordingAndAwait 等落盘完成（screen 仍存活 → camera 源不断 → Finalize OK +
+            // attachVideoToSession 写库），**期间不 popBackStack**，落盘完成后才 finishActiveLapSession + 退出。
+            if (recordingState is RecordingState.Recording) {
+                FileLogger.d("CamRec", "停圈速退出：录制中，先等视频落盘再退出（screen 存活→camera 源不断→Finalize OK）")
+                savingVideo = true
+                recordingEngine.stopRecordingAndAwait()
+                savingVideo = false
+                FileLogger.d("CamRec", "停圈速退出：落盘完成，继续 finishActiveLapSession + popBackStack")
+            }
             val result = sessionViewModel.finishActiveLapSession()
             if (result != null) {
                 LapSessionSaveBus.emit(result)
@@ -298,6 +321,25 @@ fun LapLiveScreen(
                 onConfirmEnd()
             },
         )
+    }
+
+    // 停圈速退出·视频落盘中遮罩：await Finalize 期间（大文件 moov 写入可能几秒）覆盖整屏，
+    // 居中"保存视频中…"避免用户以为卡死。半透明黑底吃掉点击（不再用 if/else early-return，整体 if 渲染）。
+    if (savingVideo) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(TrackTechColors.Background.copy(alpha = 0.85f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "保存视频中…",
+                style = TrackTechTypography.RacingTitleSmall,
+                color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
