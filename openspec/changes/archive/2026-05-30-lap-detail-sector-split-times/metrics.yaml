@@ -1,0 +1,23 @@
+estimated_days: 0.2
+actual_days: 0.1        # 主会话直实现（数据现成 + 复用 OverviewRow/formatLapDetailTime）
+complexity: "small"     # 1 纯函数 + SECTORS 卡渲染（~25 行）+ 1 测试；零公共契约改动
+review_mode: "road-test-first"  # 2026-05-30 批次：去 Codex/Opus；真机即时验证
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无"
+phase: "Phase 1"        # M2 follow-up（用户路测反馈）
+model_apply: "opus"     # 主会话直实现
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []  # 纯消费 sectorBoundaries，不改契约
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 用户路测反馈：看圈速关注 sector 耗时，原 SectorBar 只是装饰条。
+# computeSectorSplits 从 getLapTelemetry 已派生的多段 sectorBoundaries（future-sector-derivation round）相邻差得各段耗时。
+# SECTORS 卡 SectorBar 下方列各 sector 耗时（OverviewRow，Score 字体单行 Ellipsis）；无 sector 门显示「无 sector 分段」。
+# 单测 5 case（含和==圈时不变式）全绿；真机 vivo V2405A 用户签收 OK。
+# code commit 5f9cc4f。
+# 下个 round（用户拍板）：lap-session-theoretical-best —— 理论最佳圈放 LapSessionDetailScreen 圈列表屏顶部（跨圈 session 级）。
