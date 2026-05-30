@@ -225,14 +225,20 @@ fun LapLiveScreen(
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             view.keepScreenOn = false
-            // screen 销毁资源安全：录制中先 stop，再 unbind，防泄漏
+            // screen 销毁资源安全：
+            //   录制中 → stopRecording 异步落盘，Finalize 回调里才 unbind（避免 VideoCapture 管道被提前拆断）
+            //   非录制 → 直接 unbind（省电释放）
             val currentState = recordingEngine.recordingState.value
             if (currentState is RecordingState.Recording) {
-                FileLogger.d("CamRec", "screen 销毁：录制中，先 stopRecording")
-                recordingEngine.stopRecording()
+                FileLogger.d("CamRec", "screen 销毁：录制中，stop 后等落盘完成再 unbind（Finalize 回调触发）")
+                recordingEngine.stopRecording {
+                    FileLogger.d("CamRec", "screen 销毁：落盘完成，执行延迟 unbind")
+                    recordingEngine.unbind(context, reason = "screen 销毁·落盘完成")
+                }
+            } else {
+                FileLogger.d("CamRec", "screen 销毁：未录制，直接 unbind camera")
+                recordingEngine.unbind(context, reason = "screen 销毁")
             }
-            FileLogger.d("CamRec", "screen 销毁：unbind camera")
-            recordingEngine.unbind(context, reason = "screen 销毁")
         }
     }
 

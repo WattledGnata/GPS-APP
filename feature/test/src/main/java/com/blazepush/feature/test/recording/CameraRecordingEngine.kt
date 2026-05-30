@@ -91,6 +91,11 @@ class CameraRecordingEngine(
     private var _capturedWallClock: Long = 0L
     private var _capturedSessionId: String? = null
 
+    // stopRecording 落盘完成回调（onDispose 路径延迟 unbind 用）。
+    // 在 VideoRecordEvent.Finalize（OK 或 ERROR 两分支）末尾 invoke，然后清空。
+    // 仅在 MainExecutor 回调内读写，无竞态。
+    private var pendingOnFinalized: (() -> Unit)? = null
+
     // =========================================================================
     // 新 API（recording-persist-across-pages-and-hud-indicator round）
     // 把"绑定 use-case"与"连接 PreviewView surface"解耦：
@@ -354,13 +359,20 @@ class CameraRecordingEngine(
     /**
      * 停止录制。MUST 在主线程调用。
      * Idle 状态下调用为 no-op。
+     *
+     * @param onFinalized 落盘完成（VideoRecordEvent.Finalize OK 或 ERROR）后回调。
+     *   null = 不需要回调（手动 STOP 按钮路径）。
+     *   非 null = onDispose 路径：等落盘完成后才执行 unbind，避免 VideoCapture 管道被提前拆断。
+     *   无论 Finalize OK/ERROR 都会 invoke，保证 onDispose 路径 camera 不泄漏。
      */
     @MainThread
-    fun stopRecording() {
-        FileLogger.d(TAG, "stopRecording: request state=${_recordingState.value::class.simpleName}")
+    fun stopRecording(onFinalized: (() -> Unit)? = null) {
+        FileLogger.d(TAG, "stopRecording: request state=${_recordingState.value::class.simpleName} hasCallback=${onFinalized != null}")
 
         if (_recordingState.value !is RecordingState.Recording) {
             FileLogger.d(TAG, "stopRecording: 非 Recording 状态，忽略")
+            // 非录制中时 onFinalized 不会通过 Finalize 触发，直接 invoke 防调用方 camera 泄漏
+            onFinalized?.invoke()
             return
         }
 
@@ -368,12 +380,15 @@ class CameraRecordingEngine(
         if (rec == null) {
             FileLogger.d(TAG, "stopRecording: activeRecording 为 null，重置到 Idle")
             _recordingState.value = RecordingState.Idle
+            onFinalized?.invoke()
             return
         }
 
+        // 存储回调；Finalize OK/ERROR 两分支都会 invoke + 清空
+        pendingOnFinalized = onFinalized
         _recordingState.value = RecordingState.Stopping
         rec.stop()
-        FileLogger.d(TAG, "stopRecording: stop() 已发出，等待 VideoRecordEvent.Finalize")
+        FileLogger.d(TAG, "stopRecording: stop() 已发出，等待 VideoRecordEvent.Finalize（callback=${onFinalized != null}）")
     }
 
     /**
@@ -418,6 +433,11 @@ class CameraRecordingEngine(
                     val errMsg = "VideoRecordEvent.Finalize ERROR: code=${event.error} cause=${event.cause?.message}"
                     FileLogger.e(TAG, errMsg)
                     _recordingState.value = RecordingState.Error(errMsg)
+                    // ERROR 分支也必须 invoke onFinalized，防 onDispose 路径 camera 永不解绑泄漏
+                    val cb = pendingOnFinalized
+                    pendingOnFinalized = null
+                    FileLogger.d(TAG, "VideoRecordEvent.Finalize ERROR: invoke pendingOnFinalized=${cb != null}")
+                    cb?.invoke()
                 } else {
                     val filePath = outputFile.absolutePath
                     val fileSize = outputFile.length()
@@ -448,6 +468,11 @@ class CameraRecordingEngine(
                     _capturedWallClock = 0L
                     _capturedSessionId = null
                     _recordingState.value = RecordingState.Idle
+                    // OK 分支：invoke onFinalized（onDispose 路径在此触发延迟 unbind）
+                    val cb = pendingOnFinalized
+                    pendingOnFinalized = null
+                    FileLogger.d(TAG, "VideoRecordEvent.Finalize OK: invoke pendingOnFinalized=${cb != null}")
+                    cb?.invoke()
                 }
             }
 
