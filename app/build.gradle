@@ -67,6 +67,7 @@ dependencies {
     implementation project(':core:domain')
     implementation project(':core:data')
     implementation project(':core:bluetooth')
+    implementation project(':core:camera')
     implementation project(':feature:test')
 
     // AndroidX Core
