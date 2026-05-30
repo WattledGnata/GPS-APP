@@ -43,6 +43,7 @@ import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
+import com.blazepush.feature.test.usecase.GaugeMath
 import com.blazepush.feature.test.usecase.ReferenceLapIndex
 import com.blazepush.feature.test.usecase.VideoOverlayTelemetry
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,9 @@ private data class LapPlaybackContext(
     val lapStartWallClock: Long,
     val lapEndWallClock: Long,
     val lapNumber: Int,
+    /** 本 session 最高尾速（km/h）；来自 session.topSpeedKmh，null 时 fallback 到 samples 最大值。
+     *  用于速度表动态量程 [GaugeMath.speedGaugeMax]。 */
+    val topSpeedKmh: Double?,
 )
 
 /**
@@ -347,11 +351,13 @@ fun LapVideoPlaybackScreen(
                 )
             }
             // overlay 四角浮最上层（黑屏段也照常叠）
+            val gaugeMaxKmh = GaugeMath.speedGaugeMax(ctx.topSpeedKmh).toDouble()
             OverlayHud(
                 frame = overlayFrame,
                 lap = overlayLap,
                 deltaMs = overlayDeltaMs,
                 trackPoints = ctx.trackPoints,
+                gaugeMaxKmh = gaugeMaxKmh,
             )
         }
     }
@@ -395,10 +401,12 @@ private fun OverlayHud(
     lap: VideoOverlayTelemetry.LapResolution?,
     deltaMs: Long?,
     trackPoints: List<GeoPoint>,
+    gaugeMaxKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
 ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         SpeedCorner(
             speedKmh = frame?.speedKmh,
+            maxSpeedKmh = gaugeMaxKmh,
             modifier = Modifier.align(Alignment.TopStart),
         )
         GForceCorner(
@@ -443,14 +451,17 @@ private fun OverlayPanel(
 /**
  * 左上速度角标：round redo-video-overlay-visual-gauges 起改为老式圆形指针速度表（[SpeedometerGauge]），
  * 替换原 DSEG7 速度数字。仪表自带半透明表盘底，不再套 OverlayPanel（避免双层背景）。
+ * maxSpeedKmh 由 [GaugeMath.speedGaugeMax] 按 session.topSpeedKmh 动态计算（向上取整到 20 粒度）。
  */
 @Composable
 private fun SpeedCorner(
     speedKmh: Double?,
+    maxSpeedKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
     modifier: Modifier = Modifier,
 ) {
     SpeedometerGauge(
         speedKmh = speedKmh,
+        maxSpeedKmh = maxSpeedKmh,
         modifier = modifier,
         diameter = 120.dp,
     )
@@ -612,6 +623,12 @@ private suspend fun loadLapPlaybackData(
     val bestReference = buildBestReference(sessionId, repo, session.bestLapMs)
     val trackPoints = resolveTrackPoints(session.trackId, trackCatalog)
 
+    // 最高尾速：优先 session.topSpeedKmh（endSession 时 binary 全扫派生，可靠），
+    // null 时 fallback 到已加载 overlay 样本的最大 speedKmh（进屏重算，成本可接受）。
+    val topSpeedKmh: Double? = session.topSpeedKmh
+        ?: frames.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 }
+    FileLogger.d(TAG, "topSpeedKmh=${topSpeedKmh} (session=${session.topSpeedKmh}) sid=$sessionId")
+
     return session to LapPlaybackContext(
         frames = frames,
         sampleWallClocks = sampleWallClocks,
@@ -622,6 +639,7 @@ private suspend fun loadLapPlaybackData(
         lapStartWallClock = targetLap.lapStartWallClock,
         lapEndWallClock = targetLap.lapEndWallClock,
         lapNumber = lapIndex + 1,
+        topSpeedKmh = topSpeedKmh,
     )
 }
 

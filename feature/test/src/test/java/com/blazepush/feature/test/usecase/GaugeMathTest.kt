@@ -122,4 +122,54 @@ class GaugeMathTest {
         assertEquals(0.0, x, eps)
         assertEquals(0.0, y, eps)
     }
+
+    // ── speedGaugeMax ────────────────────────────────────────────────
+
+    @Test
+    fun `speedGaugeMax - 172km_h 向上取整到 180`() {
+        assertEquals(180, GaugeMath.speedGaugeMax(172.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - 200km_h 正好整除返回 200`() {
+        assertEquals(200, GaugeMath.speedGaugeMax(200.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - 43km_h 下界兜底返回 60`() {
+        assertEquals(60, GaugeMath.speedGaugeMax(43.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - null 返回下界 60`() {
+        assertEquals(60, GaugeMath.speedGaugeMax(null))
+    }
+
+    @Test
+    fun `speedGaugeMax - 0 返回下界 60`() {
+        assertEquals(60, GaugeMath.speedGaugeMax(0.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - 负数返回下界 60`() {
+        assertEquals(60, GaugeMath.speedGaugeMax(-10.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - 160km_h 正好整除返回 160（不触发下界）`() {
+        assertEquals(160, GaugeMath.speedGaugeMax(160.0))
+    }
+
+    @Test
+    fun `speedGaugeMax - 161km_h 向上取整到 180`() {
+        assertEquals(180, GaugeMath.speedGaugeMax(161.0))
+    }
+
+    @Test
+    fun `speedGaugeMax 与 speedToNeedleAngle 适配 - 172时量程180 半速86在中点`() {
+        val max = GaugeMath.speedGaugeMax(172.0).toDouble() // 180
+        val half = max / 2.0
+        val expected = GaugeMath.SPEEDO_START_ANGLE_DEG + GaugeMath.SPEEDO_SWEEP_ANGLE_DEG / 2.0
+        assertEquals(expected, GaugeMath.speedToNeedleAngle(half, maxKmh = max), eps)
+    }
 }

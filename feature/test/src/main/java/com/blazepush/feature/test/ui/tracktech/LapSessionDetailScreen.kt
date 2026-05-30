@@ -378,12 +378,20 @@ private fun OverviewSection(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            // 辅助信息（Top speed / Duration / Distance）用 row 风格 label-value，避免三列均分时
-            // value+unit 字符长（如 "171.3 km/h"）撑爆单元格被截断
-            OverviewRow(
-                label = "Top speed",
-                value = topSpeedKmh?.let { "%.1f km/h".format(it) } ?: "--",
+            // 最高尾速：纯数字仪表读数 → V2 规范允许 DSEG7（MetricKind.Mechanical），单位 km/h 拆到 unit。
+            // session.topSpeedKmh 由 endSession 时 binary 全扫派生（persist-session-summary-fields），
+            // null 表示旧数据或无 GPS 速度记录，降级显示 "--"。
+            MetricTile(
+                label = "TOP SPEED",
+                value = topSpeedKmh?.let { "%.1f".format(it) } ?: "--",
+                unit = if (topSpeedKmh != null) "km/h" else null,
+                modifier = Modifier.fillMaxWidth(),
+                accentColor = TrackTechColors.Red,
+                valueSize = MetricSize.Medium,
+                valueKind = MetricKind.Mechanical,
             )
+            Spacer(Modifier.height(4.dp))
+            // 辅助信息（Duration / Distance）用 row 风格 label-value
             OverviewRow(
                 label = "Duration",
                 value = durationMs?.let(::formatDuration) ?: "--",

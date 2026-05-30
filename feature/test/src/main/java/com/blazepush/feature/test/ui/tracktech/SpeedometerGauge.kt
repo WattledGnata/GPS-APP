@@ -29,13 +29,16 @@ import kotlin.math.sin
  *
  * 中心读数（纯数字瞬时仪表读数）按 V2 视觉约束允许 DSEG7（MechanicalSmall）；单位 km/h 用小字标注。
  *
- * @param speedKmh   当前速度（km/h，null → 指针停在量程起点 + 读数 "--"）
- * @param diameter   表盘直径（默认 120dp，别太大挡画面）
+ * @param speedKmh      当前速度（km/h，null → 指针停在量程起点 + 读数 "--"）
+ * @param maxSpeedKmh   量程上界（km/h，默认 [GaugeMath.SPEEDO_MAX_KMH]）；
+ *                      建议用 [GaugeMath.speedGaugeMax] 按最高尾速动态计算后传入。
+ * @param diameter      表盘直径（默认 120dp，别太大挡画面）
  */
 @Composable
 fun SpeedometerGauge(
     speedKmh: Double?,
     modifier: Modifier = Modifier,
+    maxSpeedKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
     diameter: Dp = 120.dp,
 ) {
     val speed = speedKmh ?: 0.0
@@ -44,7 +47,7 @@ fun SpeedometerGauge(
     val tickMinorColor = TrackTechColors.TextMuted
     val labelColor = TrackTechColors.TextMuted
     // 指针：高速段（>=量程 70%）红色警示，否则 cyan
-    val needleColor = if (speed >= GaugeMath.SPEEDO_MAX_KMH * 0.7) TrackTechColors.Red else TrackTechColors.Cyan
+    val needleColor = if (speed >= maxSpeedKmh * 0.7) TrackTechColors.Red else TrackTechColors.Cyan
     val hubColor = TrackTechColors.TextPrimary
 
     Box(
@@ -76,9 +79,9 @@ fun SpeedometerGauge(
             val tickMajorLen = radius * 0.16f
             val tickMinorLen = radius * 0.08f
             var v = 0.0
-            while (v <= GaugeMath.SPEEDO_MAX_KMH + 1e-6) {
+            while (v <= maxSpeedKmh + 1e-6) {
                 val isMajor = (v % majorStep) < 1e-6
-                val angleDeg = GaugeMath.speedToNeedleAngle(v)
+                val angleDeg = GaugeMath.speedToNeedleAngle(v, maxKmh = maxSpeedKmh)
                 val rad = Math.toRadians(angleDeg)
                 val cosA = cos(rad).toFloat()
                 val sinA = sin(rad).toFloat()
@@ -116,7 +119,7 @@ fun SpeedometerGauge(
             }
 
             // 指针
-            val needleAngleDeg = GaugeMath.speedToNeedleAngle(speed)
+            val needleAngleDeg = GaugeMath.speedToNeedleAngle(speed, maxKmh = maxSpeedKmh)
             val needleRad = Math.toRadians(needleAngleDeg)
             val needleLen = radius * 0.72f
             val tip = Offset(

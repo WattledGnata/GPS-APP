@@ -1,6 +1,8 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.usecase
 
+import kotlin.math.ceil
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
@@ -21,8 +23,29 @@ import kotlin.math.sqrt
 object GaugeMath {
 
     // ── 速度指针表常量（便于调） ───────────────────────────────────────
-    /** 速度表量程上界（km/h）。 */
+    /** 速度表默认量程上界（km/h）。动态量程请用 [speedGaugeMax] 计算后传给 [speedToNeedleAngle]。 */
     const val SPEEDO_MAX_KMH: Double = 260.0
+
+    /** 动态量程计算步长（km/h）：向上取整到此粒度。 */
+    private const val SPEEDO_STEP_KMH = 20
+
+    /** 动态量程下界（km/h）：防 topSpeed 很小时量程过小。 */
+    private const val SPEEDO_MIN_MAX_KMH = 60
+
+    /**
+     * 根据最高尾速计算速度表量程上界（km/h）。
+     *
+     * 规则：ceil(topSpeedKmh / 20) * 20，并设下界 60。
+     * 例：172 → 180；200 → 200；43 → 60；0 → 60。
+     *
+     * @param topSpeedKmh 本 session 最高尾速（km/h）；null 或 <=0 → 返回默认下界
+     * @return 量程上界（km/h，≥60 且为 20 的整数倍）
+     */
+    fun speedGaugeMax(topSpeedKmh: Double?): Int {
+        if (topSpeedKmh == null || topSpeedKmh <= 0.0) return SPEEDO_MIN_MAX_KMH
+        val raw = ceil(topSpeedKmh / SPEEDO_STEP_KMH).toInt() * SPEEDO_STEP_KMH
+        return max(raw, SPEEDO_MIN_MAX_KMH)
+    }
 
     /** 指针起始角（度，Compose 角度系：0°=3点钟、顺时针为正）。135° = 左下。 */
     const val SPEEDO_START_ANGLE_DEG: Double = 135.0
