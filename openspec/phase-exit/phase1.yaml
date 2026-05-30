@@ -1,0 +1,95 @@
+# Phase 1 Exit Review · 单圈数据图表 + 多圈比较
+# 治理留痕落点（roadmap §5.5：disposition 必须进 git 可审计，非 message-only；Phase 0 的 e2a42a1 是 message-only 缺陷，本次修正）
+# 生成：2026-05-30 · road-test-first 模式
+
+phase: "Phase 1"
+title: "单圈数据图表 + 多圈比较"
+exit_date: "2026-05-30"
+review_mode: "road-test-first"   # 2026-05-29 user 授权批次：去 Codex + 跳 Opus 子 agent，FileLogger + 真机攒批兜底
+
+# ── 1. Phase 1 已闭环 round（全部 archived + pushed 到 origin/feature/track-tech-v2 d935b9e）──
+rounds_completed:
+  data_base:        # 数据底座（早先 + 本 session 补）
+    - "lap-data-readers (W1) · getLapTelemetry + getDataPointsForResult"
+    - "chart-and-map-components (W2) · 4 chart/map 组件"
+    - "lap-comparison-time-align (W3) · alignByDistance 距离对齐算法（M3 距离轴 follow-up 复用）"
+    - "wire-laptime-to-gps-filter (W4) · lap timing 接 GpsDataFilter"
+    - "phase1-hardening-w2-w3-w4-mimo-debt · 22 项 P0/P1 还债"
+    - "future-sector-derivation · getLapTelemetry 多段 sectorBoundaries 派生（1 轮 Opus 对抗 review verdict=PASS）"
+  b_c_lines:        # B/C 线（本 session）
+    - "fix-lap-debug-mode-sector-chain-test-after-min-count-1 · 宽容闭合"
+    - "wire-mock-telemetry-to-w1-real-classes · chart 吃真实 LapTelemetry"
+    - "unify-lap-count-pairing-semantics · 三站点圈配对键统一 wallClock"
+    - "improve-test-execution-progress-bar (线C) · 进度条起步阈值"
+    - "unify-perftest-anchor-cross-clock · reader sentinel guard"
+    - "redesign-realtime-delta-projection-search (线A) · projectDelta stateless O(n)"
+  ui_deliverables:  # 用户可见交付物（本 session 核心）
+    - "lap-detail-screen-with-cursor (M2) · 单圈详情屏（速度/加速度/轨迹 + 游标）· 真机签收"
+    - "  └ fix(lap-detail) · Compose early-return 重组崩溃修复（65d6ada）"
+    - "  └ fix(accel-chart) · G 值 2 位小数（eeddbbf）"
+    - "lap-detail-sector-split-times · 详情屏本圈各 sector 耗时 · 真机签收"
+    - "ui-redo-lap-sector-table · 圈列表带 sector 列表格 + 每列最快段高亮 + 理论最佳圈（supersede lap-session-theoretical-best 大面板）· 真机签收"
+    - "lap-comparison-screen-with-cursor (M3) · 多圈比较屏（time-axis speed 叠加 + 共享游标）· 真机签收「非常棒」"
+
+# ── 2. 硬 gate：W4 无 L2 trail（roadmap §5.7）──
+w4_l2_gate:
+  status: "waived"
+  rationale: >
+    W4 (wire-laptime-to-gps-filter) 是 Phase 1 唯一 mimo 期跳过 L2 的归档 round。
+    2026-05-29 user 授权 road-test-first 批次（去 Codex + 跳 Opus 子 agent，FileLogger 持久日志 + 真机攒批兜底）覆盖 lap-timing 全批。
+    据该授权 W4 L2 显式豁免，不补跑 Opus 子 agent。兜底：W4 改动（GpsDataFilter 接入 + LAP_INVALIDATED_DEBOUNCE_MIN_COUNT 3→1）
+    已被 fix-lap-debug-mode round（本 session）的 fixture 回归修复 + LapFilterIntegrationTest 5 cases + 真机路测覆盖。
+  audit_trail: "本文件即留痕（roadmap §5.7 要求 user 显式豁免留痕，已落 git）"
+
+# ── 3. deferred memo / §10 backlog disposition（roadmap §7 强制逐个决议）──
+disposition:
+  # 3a. 推后到 Phase 2（视频管线）——
+  to_phase2:
+    - item: "restore-strict-migrations-pre-release"
+      reason: "Room version=5 + fallbackToDestructiveMigration 债；Phase 2 session-video-metadata-persist 加 video 字段（v5→v6）前置硬依赖。medium。"
+    - item: "automate-design-drift-detection (memo #10 / OQ5)"
+      reason: "F1 #17 governance root-cause（/opsx:ff skill 注入 metrics schema + commit hook drift 抓）；Phase 2 启动时评估，非阻塞。medium。"
+    - item: "phase2-video-pipeline-entry-readiness.md（含 3 L0 已定：横屏/录音频/有预览 + 优先级 app-first）"
+      reason: "Phase 2 entry 完整输入；L0 全清，第一刀 camera-module-and-permission 工件本 session 已起草待 review。"
+  # 3b. future round（trigger-based，非阻塞，路测/反馈触发）——
+  future_trigger_based:
+    - item: "chart-downsample-virtualization"
+      reason: "25Hz 全量渲染降采样；M2+M3 已认领 defer；触发=真机长圈（>5000 sample / 4 圈叠加 ~18000 点）滑动卡顿/OOM。medium。"
+    - item: "lap-comparison-accel-sector-map-overlay"
+      reason: "M3 第一刀只做 speed 叠加；accel/sector/map 多圈叠加复用 LapSeries+cursor 骨架。medium~large。"
+    - item: "lap-comparison-distance-axis"
+      reason: "距离轴比较（alignByDistance + gridIndex），补 time-axis 第一刀 trade-off；改单圈组件 API 触发 #16。large。"
+    - item: "lap-comparison-predicted-time-delta"
+      reason: "圈对圈 time-delta 曲线（距离基），依赖 distance-axis。medium。"
+    - item: "transparent-overlay-export (GoPro/外部素材合成)"
+      reason: "2026-05-30 决策 app-first，透明层导出延后；图层数据驱动架构已留低成本后路（chroma-key/PNG序列/真alpha）。Phase 3 future。"
+    - item: "sector 耗时格式 ss.mmm / 窄屏横滚 edge fade / 列宽极端值微调 / best-sector 高亮联动"
+      reason: "trivial 视觉 polish，触发=用户路测反馈。"
+  # 3c. release 前 / 低优先（不阻塞 Phase 2/3 功能）——
+  release_or_low_priority:
+    - item: "perftest-cascade-orphan-cleanup-deferred.md"
+      reason: "PERFORMANCE 删除 cascade 不彻底；release 前 cleanup 类。"
+    - item: "records-by-track-filter-deferred.md"
+      reason: "UI/查询 layer 优化；不与功能冲突。"
+    - item: "lap-alignment-trajectory-divergence-warning / vincenty-fallback deferred.md"
+      reason: "W3 期沉淀；距离对齐精度增强，低优先，distance-axis round 立项时一并评估。"
+  # 3d. 已闭环（Phase 1 内消化，仅留档）——
+  done_in_phase1:
+    - "speed-curve-real-data-persistence (memo #5) → 并入 lap-data-readers W1"
+    - "lap-perftest-anchor-cross-clock (memo #8) → unify-perftest-anchor-cross-clock"
+    - "fix-lap-debug-mode (memo #9) → 本 session 闭环"
+    - "laptime-ts-hygiene / lap-crossing-clock-hygiene / perftest-binary-ts-hygiene → Phase 0 已闭环"
+
+# ── 4. Phase 2 entry 就绪状态 ──
+phase2_entry:
+  gate: "本 exit commit 通过 = Phase 2 entry 硬 gate 满足"
+  l0_all_decided: true     # 横屏 + 录音频 + 有预览（见 phase2-video-pipeline-entry-readiness §9.4）
+  first_round: "camera-module-and-permission（large/architectural：CAMERA + RECORD_AUDIO 双 dangerous 权限 + CameraX 依赖 + core:camera 模块；工件本 session 已起草）"
+  prerequisite: "restore-strict-migrations-pre-release 建议在 session-video-metadata-persist（schema 改）之前插入"
+
+# ── 5. retrospective ──
+retrospective: >
+  Phase 1 在 road-test-first 模式下高速闭环：单 session 内做完 M2 单圈详情屏 + M3 多圈比较屏 + 完整 sector 分析
+  （本圈耗时 / 跨圈最快段表 / 理论最佳圈），全部真机签收 + push。road-test-first 的真机兜底网抓到 1 个单测无法覆盖的
+  Compose 重组崩溃（M2 early-return），印证「去 review + 真机攒批」对 UI 重组态 bug 的有效性。M3 用 worktree 试装
+  「先验后合」流程顺畅。Phase 1 → Phase 2 切换前架构讨论澄清了「图层数据驱动 + app-first」关键决策。
