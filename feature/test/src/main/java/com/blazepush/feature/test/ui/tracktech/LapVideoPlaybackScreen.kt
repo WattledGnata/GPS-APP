@@ -36,15 +36,13 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
-import com.blazepush.core.domain.model.LapTelemetry
-import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.export.LapPlaybackLoader
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.GaugeMath
-import com.blazepush.feature.test.usecase.ReferenceLapIndex
 import com.blazepush.feature.test.usecase.VideoOverlayTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -61,30 +59,11 @@ private const val TAG = "VideoOverlay"
 /**
  * 进屏一次性读好的"单圈"按圈回放上下文（轮询时只查表不算 IO）。
  *
- * @property frames            整 session 帧（overlay 数据，按样本预算好的 G/速度/经纬度）
- * @property sampleWallClocks  与 frames 一一对应的 absoluteTsMs 升序列表（供二分查最近邻）
- * @property lapWindows        全 session 各圈窗口（resolveCurrentLap 仍可正确显示圈号/elapsed）
- * @property bestReference     best 圈索引（实时 delta 投影；无 best → null）
- * @property trackPoints       赛道轮廓（小地图）
- * @property videoStartedAtWallClock 视频录制开始 wallClock（与样本同时钟域）
- * @property lapStartWallClock 当前回放圈开圈 crossing wallClock
- * @property lapEndWallClock   当前回放圈收圈 crossing wallClock
- * @property lapNumber         当前回放圈号（1-based）
+ * round video-export-burned-overlay Round B：原 data class 下沉到 [LapPlaybackLoader.LapPlaybackContext]
+ * 供回放屏 + 导出管线共享同源加载（避免导出端另起一套加载逻辑导致 overlay 数据与回放漂移）。
+ * 回放屏内部沿用 `LapPlaybackContext` 名字（typealias），代码无需改动。
  */
-private data class LapPlaybackContext(
-    val frames: List<VideoOverlayTelemetry.OverlayFrame>,
-    val sampleWallClocks: List<Long>,
-    val lapWindows: List<VideoOverlayTelemetry.LapWindow>,
-    val bestReference: ReferenceLapIndex?,
-    val trackPoints: List<GeoPoint>,
-    val videoStartedAtWallClock: Long,
-    val lapStartWallClock: Long,
-    val lapEndWallClock: Long,
-    val lapNumber: Int,
-    /** 本 session 最高尾速（km/h）；来自 session.topSpeedKmh，null 时 fallback 到 samples 最大值。
-     *  用于速度表动态量程 [GaugeMath.speedGaugeMax]。 */
-    val topSpeedKmh: Double?,
-)
+private typealias LapPlaybackContext = LapPlaybackLoader.LapPlaybackContext
 
 /**
  * 按圈回放的视频实时叠加遥测 HUD 播放屏
@@ -149,7 +128,7 @@ fun LapVideoPlaybackScreen(
 
     LaunchedEffect(sessionId, lapIndex) {
         val loaded = withContext(Dispatchers.IO) {
-            loadLapPlaybackData(sessionId, lapIndex, telemetryRepository, trackCatalog)
+            LapPlaybackLoader.load(sessionId, lapIndex, telemetryRepository, trackCatalog)
         }
         if (loaded == null) {
             loadFailed = true
@@ -579,111 +558,6 @@ private fun formatDelta(ms: Long?): String {
     if (ms == null) return "--"
     val sign = if (ms >= 0) "+" else "-"
     return "%s%.2f".format(sign, abs(ms) / 1000.0)
-}
-
-/**
- * 进屏一次性读 session metadata + 当前圈起止 wallClock + 整 session overlay 上下文（在 Dispatchers.IO 调）。
- * 返回 null 表示无法播放（无 session / 无 video / 无目标圈 / 无样本）。
- *
- * 注：overlay 帧 / 圈窗口 / best reference 仍按整 session 构建（resolveCurrentLap / delta 投影需要
- * 全圈窗口与 best 圈），但播放时间轴由 lapIndex 指向的目标圈起止 wallClock 主导。
- */
-private suspend fun loadLapPlaybackData(
-    sessionId: String,
-    lapIndex: Int,
-    repo: TelemetryRepository,
-    trackCatalog: TrackCatalog,
-): Pair<TelemetrySession, LapPlaybackContext>? {
-    val session = repo.getSession(sessionId) ?: return null
-    val videoStartedAt = session.videoStartedAtWallClock ?: return null
-    if (session.videoFilePath == null) return null
-
-    // 目标圈：lapIndex 指向的圈（lapNumber = lapIndex + 1，与详情屏 VALID/BEST 圈一致）
-    val targetLap: LapTelemetry = repo.getLapTelemetry(sessionId, lapIndex) ?: return null
-
-    // 逐圈拼接整 session 样本（升序 absoluteTsMs）+ 各圈窗口（overlay 仍需全 session 上下文）
-    val allSamples = mutableListOf<LapTelemetrySample>()
-    val lapWindows = mutableListOf<VideoOverlayTelemetry.LapWindow>()
-    var i = 0
-    while (true) {
-        val lap = repo.getLapTelemetry(sessionId, i) ?: break
-        allSamples.addAll(lap.samples)
-        lapWindows.add(
-            VideoOverlayTelemetry.LapWindow(
-                lapNumber = i + 1,
-                lapStartWallClock = lap.lapStartWallClock,
-                lapEndWallClock = lap.lapEndWallClock,
-            ),
-        )
-        i++
-        if (i > 1000) break // 安全上界防意外死循环
-    }
-    if (allSamples.isEmpty()) return null
-
-    // 样本可能跨圈有重叠（圈尾==下圈头）；按 absoluteTsMs 升序排序
-    val sorted = allSamples.sortedBy { it.absoluteTsMs }
-    val frames = VideoOverlayTelemetry.buildFrames(sorted)
-    val sampleWallClocks = frames.map { it.absoluteTsMs }
-
-    val bestReference = buildBestReference(sessionId, repo, session.bestLapMs)
-    val trackPoints = resolveTrackPoints(session.trackId, trackCatalog)
-
-    // 最高尾速：优先 session.topSpeedKmh（endSession 时 binary 全扫派生，可靠），
-    // null 时 fallback 到已加载 overlay 样本的最大 speedKmh（进屏重算，成本可接受）。
-    val topSpeedKmh: Double? = session.topSpeedKmh
-        ?: frames.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 }
-    FileLogger.d(TAG, "topSpeedKmh=${topSpeedKmh} (session=${session.topSpeedKmh}) sid=$sessionId")
-
-    return session to LapPlaybackContext(
-        frames = frames,
-        sampleWallClocks = sampleWallClocks,
-        lapWindows = lapWindows,
-        bestReference = bestReference,
-        trackPoints = trackPoints,
-        videoStartedAtWallClock = videoStartedAt,
-        lapStartWallClock = targetLap.lapStartWallClock,
-        lapEndWallClock = targetLap.lapEndWallClock,
-        lapNumber = lapIndex + 1,
-        topSpeedKmh = topSpeedKmh,
-    )
-}
-
-/** 定位 bestLapMs 对应的圈并构建 ReferenceLapIndex；无 best / 样本不足 → null。 */
-private suspend fun buildBestReference(
-    sessionId: String,
-    repo: TelemetryRepository,
-    bestLapMs: Long?,
-): ReferenceLapIndex? {
-    if (bestLapMs == null) return null
-    var lapIndex = 0
-    while (lapIndex <= 1000) {
-        val lap = repo.getLapTelemetry(sessionId, lapIndex) ?: break
-        if (lap.lapDurationMs == bestLapMs) {
-            val ref = VideoOverlayTelemetry.buildReferenceFromSamples(
-                bestLapSamples = lap.samples,
-                lapStartWallClock = lap.lapStartWallClock,
-                lapDurationMs = lap.lapDurationMs,
-            )
-            FileLogger.d(TAG, "best ref built lapIndex=$lapIndex dur=$bestLapMs pts=${lap.samples.size} ok=${ref != null}")
-            return ref
-        }
-        lapIndex++
-    }
-    FileLogger.d(TAG, "no best lap matched bestLapMs=$bestLapMs")
-    return null
-}
-
-/** 解析赛道轮廓点；trackId null / 解析不到 → 空列表（小地图降级隐藏）。 */
-private suspend fun resolveTrackPoints(
-    trackId: String?,
-    trackCatalog: TrackCatalog,
-): List<GeoPoint> {
-    if (trackId == null) return emptyList()
-    runCatching { trackCatalog.getAllTracks() }
-    val track = trackCatalog.getTrack(trackId)
-    val points = track?.referencePath?.points ?: emptyList()
-    FileLogger.d(TAG, "track geometry trackId=$trackId pts=${points.size}")
-    return points
 }
 
 private tailrec fun Context.findPlaybackActivity(): Activity? = when (this) {

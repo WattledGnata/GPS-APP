@@ -19,7 +19,18 @@
     <!-- 视频录制 (Phase 2 · camera-module-and-permission · L0-2 录音频) -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    
+
+    <!-- 视频导出 (Phase 2 · video-export-burned-overlay · Round B) -->
+    <!-- API 28：MediaStore.Video 写需 WRITE_EXTERNAL_STORAGE（仅 28 申请；API29+ scoped storage 无需权限） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!-- 前台 Service 跑导出 drain loop -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- 前台 Service 数据处理类型（导出烧录=CPU/编解码数据处理；mediaProcessing 是 API35 与 compileSdk34 不兼容，用 dataSync） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- API 33：进度通知可见（不强制；缺失仅通知不显示，Service 仍运行） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
 
 
     <uses-feature
@@ -49,6 +60,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 视频导出前台 Service (video-export-burned-overlay · Round B) -->
+        <service
+            android:name="com.blazepush.feature.test.export.VideoExportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

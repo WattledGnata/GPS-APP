@@ -163,19 +163,18 @@ class CameraPreviewContractTest {
         )
     }
 
-    @Test
-    fun `lap live screen must NOT introduce VideoCapture or recording (recording is round 3)`() {
-        val source = readSource(LAP_LIVE_PATH)
-        // spec MUST 5 反例：本 round LapLiveScreen 也 MUST NOT 触碰录制路径。
-        assertFalse(
-            "LapLiveScreen.kt MUST NOT introduce VideoCapture (录制是 round 3)",
-            source.contains("VideoCapture"),
-        )
-        assertFalse(
-            "LapLiveScreen.kt MUST NOT introduce Recorder (录制是 round 3)",
-            source.contains("Recorder"),
-        )
-    }
+    // [已作废 · 契约演进记录] 原 round 2(camera-preview-in-laplivescreen) 阶段性反例契约：
+    // 断言 LapLiveScreen MUST NOT 引入 VideoCapture/Recorder（彼时录制规划在 round 3）。
+    // round 3(camera-recording-and-gps-sync) + round 4(录制跨页持续) 已合法给 LapLiveScreen
+    // 接入录制（经 CameraRecordingEngine 引擎封装；LapLiveScreen 注释亦含 "VideoCapture 继续录" 字样
+    // → source.contains 命中）。此阶段性反例约束正当作废，按规则注释保留以记录演进，不删。
+    // 录制相关契约见 round 3/4 实现与 metrics。
+    // @Test
+    // fun `lap live screen must NOT introduce VideoCapture or recording (recording is round 3)`() {
+    //     val source = readSource(LAP_LIVE_PATH)
+    //     assertFalse("LapLiveScreen MUST NOT introduce VideoCapture", source.contains("VideoCapture"))
+    //     assertFalse("LapLiveScreen MUST NOT introduce Recorder", source.contains("Recorder"))
+    // }
 
     @Test
     fun `lap live screen must NOT touch orientation lock or back handler`() {
