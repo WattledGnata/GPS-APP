@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -27,13 +28,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -78,6 +81,7 @@ private const val HOLD_TICK_MS = 16L
  * @description landscape lap live session screen
  * @date 2026-05-01
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LapLiveScreen(
     navController: NavController,
@@ -93,10 +97,19 @@ fun LapLiveScreen(
     var showEndConfirmation by remember { mutableStateOf(false) }
     val trackName = track?.name?.zh ?: "—"
 
-    // camera-preview-in-laplivescreen round（Decision 4/5 + spec MUST 1/7）：
-    // 相机预览默认关（opt-in），hasCamera 降级 gate 查一次。
-    var cameraEnabled by remember { mutableStateOf(false) }
+    // camera-preview-in-laplivescreen round v2（横滑独立预览页返工）：
+    // 页 0 = 纯 HUD（驾驶页，绝不开相机），页 1 = 相机取景页（仅在该页 current 时才绑相机 = 省电省热）。
+    // hasCamera 降级 gate 查一次；cameraPermissionGranted 由懒请求 launcher 回填。
     var hasCamera by remember { mutableStateOf(false) }
+    var cameraPermissionGranted by remember {
+        mutableStateOf(
+            RequiredCameraPermissions.forSdk(Build.VERSION.SDK_INT).all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            },
+        )
+    }
+
+    val pagerState = rememberPagerState(pageCount = { 2 })
 
     LaunchedEffect(Unit) {
         CameraAvailability.hasCamera(context) { available ->
@@ -114,12 +127,12 @@ fun LapLiveScreen(
     ) { result ->
         when (PermissionRequestOutcome.from(requestedCameraPermissions, result)) {
             PermissionRequestOutcome.AllGranted -> {
-                cameraEnabled = true
-                FileLogger.d("CamPreview", "permission AllGranted → cameraEnabled=true")
+                cameraPermissionGranted = true
+                FileLogger.d("CamPreview", "permission AllGranted → cameraPermissionGranted=true")
             }
             is PermissionRequestOutcome.MissingPermissions -> {
-                cameraEnabled = false
-                FileLogger.d("CamPreview", "permission MissingPermissions → cameraEnabled=false")
+                cameraPermissionGranted = false
+                FileLogger.d("CamPreview", "permission MissingPermissions → cameraPermissionGranted=false")
                 val activity = context.findActivity()
                 // 永久拒绝（!shouldShowRequestPermissionRationale）→ 引导跳 app 设置页（spec MUST 3）。
                 val permanentlyDenied = activity != null && requestedCameraPermissions.any {
@@ -144,24 +157,24 @@ fun LapLiveScreen(
         }
     }
 
-    // toggle 点击处理（spec MUST 1/2/7）：无相机不响应；已授权直接翻；未授权懒请求。
-    val onToggleCamera: () -> Unit = {
+    // 显式请求一次（页 1 “授权”按钮 + 进预览页懒请求复用）：无相机不响应；已授权 no-op。
+    val requestCameraPermission: () -> Unit = {
         if (!hasCamera) {
-            FileLogger.d("CamPreview", "toggle ignored: hasCamera=false")
-        } else if (cameraEnabled) {
-            cameraEnabled = false
-            FileLogger.d("CamPreview", "toggle off → cameraEnabled=false")
+            FileLogger.d("CamPreview", "permission request ignored: hasCamera=false")
+        } else if (cameraPermissionGranted) {
+            FileLogger.d("CamPreview", "permission request skipped: already granted")
         } else {
-            val alreadyGranted = requestedCameraPermissions.all {
-                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-            }
-            if (alreadyGranted) {
-                cameraEnabled = true
-                FileLogger.d("CamPreview", "toggle on (already granted) → cameraEnabled=true")
-            } else {
-                FileLogger.d("CamPreview", "toggle on → launch permission request")
-                cameraPermissionLauncher.launch(requestedCameraPermissions.toTypedArray())
-            }
+            FileLogger.d("CamPreview", "launch camera permission request")
+            cameraPermissionLauncher.launch(requestedCameraPermissions.toTypedArray())
+        }
+    }
+
+    // 横滑到预览页（settledPage==1）且有相机但未授权 → 懒请求一次（spec MUST 进预览页懒请求）。
+    LaunchedEffect(pagerState.settledPage, hasCamera, cameraPermissionGranted) {
+        FileLogger.d("CamPreview", "settledPage=${pagerState.settledPage} hasCamera=$hasCamera granted=$cameraPermissionGranted")
+        if (pagerState.settledPage == 1 && hasCamera && !cameraPermissionGranted) {
+            FileLogger.d("CamPreview", "entered preview page without permission → lazy request")
+            cameraPermissionLauncher.launch(requestedCameraPermissions.toTypedArray())
         }
     }
 
@@ -187,20 +200,63 @@ fun LapLiveScreen(
         }
     }
 
-    Box(
+    // camera-preview-in-laplivescreen round v2（横滑独立预览页返工 · spec MUST 4 重写）：
+    // HorizontalPager 2 页：页 0 = 纯 HUD（驾驶页），页 1 = 相机取景页。
+    // beyondBoundsPageCount 不设（默认 0）→ 页 1 不会在停留页 0 时被预组合 → 页 0 时相机绝不绑定（省电省热）。
+    // M2 重组陷阱：所有页/权限/相机显隐分支 MUST 用 if/else，绝不 return@HorizontalPager。
+    HorizontalPager(
+        state = pagerState,
         modifier = Modifier
             .fillMaxSize()
+            .background(TrackTechColors.Background),
+    ) { page ->
+        if (page == 0) {
+            LapHudPage(
+                trackName = trackName,
+                lapLiveState = lapLiveState,
+                onConfirmEnd = onConfirmEnd,
+                hasCamera = hasCamera,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            CameraPreviewPage(
+                isCurrent = pagerState.settledPage == 1,
+                hasCamera = hasCamera,
+                permissionGranted = cameraPermissionGranted,
+                onRequestPermission = requestCameraPermission,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+
+    if (showEndConfirmation) {
+        EndConfirmationDialog(
+            onContinue = { showEndConfirmation = false },
+            onEnd = {
+                showEndConfirmation = false
+                onConfirmEnd()
+            },
+        )
+    }
+}
+
+/**
+ * 页 0 = 纯 HUD 驾驶页（top strip / abnormal banner 或 Lap2x2Dashboard / HOLD TO END）。
+ * 绝不含任何相机预览（驾驶时纯 HUD = 省电省热）。右缘加不显眼的横滑提示（chevron + 2 dot）。
+ */
+@Composable
+private fun LapHudPage(
+    trackName: String,
+    lapLiveState: LapLiveState,
+    onConfirmEnd: () -> Unit,
+    hasCamera: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
             .background(TrackTechColors.Background)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        // camera-preview-in-laplivescreen round（Decision 1 + spec MUST 4）：
-        // 预览层是 root Box 第一个子元素（最底），HUD Column 保持其后绘制 → Compose 后绘者在上，
-        // HUD 浮在预览之上（屏上合成，本 round 不录不烧录）。
-        // M2 重组陷阱：用 if（无 else 分支也不 early-return）控制显隐，绝不 return@Box。
-        if (cameraEnabled && hasCamera) {
-            CameraPreview(modifier = Modifier.fillMaxSize())
-        }
-
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -233,31 +289,122 @@ fun LapLiveScreen(
             )
         }
 
-        // camera-preview-in-laplivescreen round（Decision 4/5 + spec MUST 7）：
-        // 相机 toggle 角落浮层（top-end），hasCamera 降级时隐藏（无相机不显示 / 不响应）。
-        // 浮在 HUD 之上但不破坏现有 Column 布局（绝对定位在 Box 角落）。
+        // 横滑提示（spec MUST 5）：右缘小 chevron + 2 个 dot 页指示器，不喧宾夺主。
+        // 仅在有相机时提示（无相机机型预览页只显示降级文案，仍可横滑但不强调）。
         if (hasCamera) {
-            IconButton(
-                onClick = onToggleCamera,
-                modifier = Modifier.align(Alignment.TopEnd),
-            ) {
-                Icon(
-                    imageVector = if (cameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
-                    contentDescription = if (cameraEnabled) "Camera on" else "Camera off",
-                    tint = if (cameraEnabled) TrackTechColors.Cyan else TrackTechColors.TextMuted,
-                )
-            }
+            SwipeToCameraHint(
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
         }
     }
+}
 
-    if (showEndConfirmation) {
-        EndConfirmationDialog(
-            onContinue = { showEndConfirmation = false },
-            onEnd = {
-                showEndConfirmation = false
-                onConfirmEnd()
-            },
+/**
+ * 右缘横滑提示：小 chevron + 2 个 page dot（当前 HUD 页高亮第 0 个）。V2 单行不喧宾夺主。
+ */
+@Composable
+private fun SwipeToCameraHint(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(TrackTechColors.Cyan),
         )
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(TrackTechColors.TextMuted),
+        )
+        Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = "Swipe to camera",
+            tint = TrackTechColors.TextMuted,
+        )
+    }
+}
+
+/**
+ * 页 1 = 相机取景页（spec MUST 4/6/7）。三态分流（全用 if/else，绝不 early-return）：
+ *  - 无相机机型（hasCamera=false）→ 显示“无可用相机”。
+ *  - 有相机但未授权 → 显示“需要相机/麦克风权限” + “授权”按钮（再点再请求）。
+ *  - 有相机且已授权 → 仅当 isCurrent（settledPage==1）时渲染 CameraPreview。
+ *
+ * isCurrent gate 是省电核心：回到页 0 → isCurrent=false → CameraPreview 不在 composition →
+ * CameraPreview 的 DisposableEffect onDispose unbindAll 释放相机。
+ */
+@Composable
+private fun CameraPreviewPage(
+    isCurrent: Boolean,
+    hasCamera: Boolean,
+    permissionGranted: Boolean,
+    onRequestPermission: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .background(TrackTechColors.Background),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!hasCamera) {
+            Text(
+                text = "无可用相机",
+                style = TrackTechTypography.UiTextBody,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else if (!permissionGranted) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "需要相机/麦克风权限",
+                    style = TrackTechTypography.UiTextBody,
+                    color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = onRequestPermission) {
+                    Text(
+                        text = "授权",
+                        style = TrackTechTypography.RacingTitleSmall,
+                        color = TrackTechColors.Cyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        } else if (isCurrent) {
+            // 仅当本页为当前停留页时才绑相机（省电核心）。离页 → 不在 composition → onDispose unbindAll。
+            CameraPreview(modifier = Modifier.fillMaxSize())
+            // 角落小标题“CAMERA / 取景”，浮在预览之上。
+            Text(
+                text = "CAMERA · 取景",
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.Cyan,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp),
+            )
+        } else {
+            // 已授权但当前不在本页（settledPage!=1）→ 占位，不绑相机（防 beyondBounds 预组合时误绑）。
+            Text(
+                text = "横滑查看相机",
+                style = TrackTechTypography.UiTextBody,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
