@@ -1,0 +1,38 @@
+estimated_days: 0.5
+actual_days: 0.3        # workflow 规划+实现 + 主会话逐 diff review（gate 放宽 + onClick + 骨架）/ 合回 / 归档
+complexity: "medium"    # 新建 340 行 screen + 路由 + 圈行 onClick + 4 组件组屏 + 共享游标 + R1 UI 层派生；M2 核心可见交付物
+review_mode: "road-test-first"  # 2026-05-29 批次：去 Codex/Opus；CC 主会话合回前逐 diff review（gate/onClick/骨架）+ 真机攒批兜底
+review_rounds_l1: 0     # M2 不跑 Opus 子 agent（user 指令：review 给 future-sector，M2 走 road-test-first）
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "无；5 个 design Decision（R1/R2/Cursor/Downsample/圈行可点范围）全按 design 实施"
+phase: "Phase 1"        # 收尾 · M2 核心交付物 1（第一个用户可见单圈数据分析屏）
+model_apply: "opus"     # workflow 子 agent 继承主循环 Opus
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []  # 纯组屏；R1 accelerationG 在 UI 层派生不改 reader/LapTelemetry 契约 → 不触发 #16
+accelerated_escalation: null
+# --- road-test-first 落地（M2 核心可见交付物）---
+# 新建 LapDetailScreen.kt（340 行）：点 VALID/BEST 圈进单圈详情屏，4 组件（SpeedTimeChart/AccelTimeChart/
+#   SectorBar/TrackPolylineMap）共享游标回放联动。LaunchedEffect 调 getLapTelemetry 加载；null 降级 "NO LAP DATA"。
+# 设计决策（road-test-first 下 CC 拍）：
+#   R1 accelerationG = UI 层 deriveAccelerationG 纯函数（AccelerationSmoother.compute 从 speedKmh 反算 /GRAVITY_MS2
+#     转 G，copy 保 absoluteTsMs 不变保游标命中），只喂 AccelTimeChart；reader 恒返回 null 不改 → 不触发 #16。
+#   R2 sectorBoundaries = 直接消费 future-sector-derivation 已合回的多段，SectorBar 画多段。
+#   Cursor = 单一 hoisted cursorAbsoluteTs（同圈 4 组件共享 samples，absoluteTsMs 精确相等匹配；gridIndex 跨圈是 M3）。
+#   Downsample = defer + 立 future round backlog chart-downsample-virtualization（§5.3 不留悬空 risk；25Hz×典型圈 ~1500-4500
+#     sample Compose Canvas 首版全量可接受；真机攒批若 >5000 卡顿再启动）。
+#   圈行可点 = 仅 VALID/BEST（lapIndex=lapNumber-1 与 deriveDetailMetrics 同源）；INVALID/INCOMPLETE 传 null 禁点防越界白屏。
+# 主会话合回前 review（road-test-first 人工网）：
+#   - GrepGateTest §8.10(b) 放宽：白名单放行首个组屏消费方 LapDetailScreen.kt，仍断言其余文件 0 逃逸（保护力保留，
+#     非 gut）—— 与 unify-lap-count 的 gate 放宽同范式（W2 时代「组件无生产屏消费」不变量被 M2 显式超越）。
+#   - 圈行 onClick 仅 VALID/BEST + lapIndex 同源 + null 禁点：核实正确防御。
+#   - 骨架核实：cursor hoisting / deriveAccelerationG 保 absoluteTsMs / null 降级 均正确。
+# V2 视觉（contract test 锁）：圈时走 Score 字体非 DSEG7；屏内 6 个直接 Text 全 maxLines=1+Ellipsis；OverviewRow weight(1f,fill=false)。
+# FileLogger（tag=LapDetail，5 锚点）：load 成功/null 降级 / accel 派生 / cursor 转移（v 级）/ navigate（核对 lapNumber→lapIndex）。
+# 测试：LapDetailScreenContractTest 7 + LapDetailAccelDeriveTest 4；feature:test 整合后 332 test 0 fail；:app:compileDebugKotlin SUCCESSFUL。
+# ⚠️ 真机视觉验证 MANDATORY（road-test-first 攒批）：点 VALID 圈进屏→4 组件渲染→拖游标 4 组件同步高亮→
+#   accelerationG 非空（AccelTimeChart 非 "NO ACCEL DATA"）→圈号/圈时正确；vivo V2405A 小屏验长 track name/圈时单行不换行。
+# follow-up（§10）：chart-downsample-virtualization（25Hz 长圈降采样，触发=真机 >5000 sample 卡顿）。
