@@ -149,10 +149,17 @@ fun TrackMiniMap(
     // 共享绘制层颜色容器（真相源仍是 TrackTechColors）。
     // round video-export-burned-overlay Round A：Canvas 块下沉到 OverlayCanvasPainter，回放端薄壳。
     val startMarkerArgb = if (startPoint != null) TrackTechColors.Cyan.toArgb() else 0
+    // thumbnail 场景（startPoint != null）轮廓线用鲜明不透明 Cyan（与起点圆同款）；
+    // overlay 播放页场景保持 BorderAlpha60（淡色，不抢当前位置点）。
+    val trackLineColor = if (startPoint != null) {
+        TrackTechColors.Cyan.toArgb()
+    } else {
+        TrackTechColors.BorderAlpha60.toArgb()
+    }
     Canvas(modifier = modifier) {
         val strokePx = strokeWidthDp * density
         val paints = OverlayCanvasPainter.MiniMapPaints(
-            lineColor = TrackTechColors.BorderAlpha60.toArgb(),
+            lineColor = trackLineColor,
             dotColor = TrackTechColors.Cyan.toArgb(),
             strokeWidth = strokePx,
             startMarkerColor = startMarkerArgb,

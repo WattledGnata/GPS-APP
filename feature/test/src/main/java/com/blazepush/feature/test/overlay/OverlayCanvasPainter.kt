@@ -49,8 +49,8 @@ object OverlayCanvasPainter {
     // ── 赛道小地图场景常量 ────────────────────────────────────────────────────────────
     /** overlay 播放页小地图轮廓线宽（px）：保持原细线 */
     const val MINIMAP_STROKE_OVERLAY = 2f
-    /** thumbnail 预览场景轮廓线宽（px）：加粗 2.5× 在小尺寸卡片下清晰可见 */
-    const val MINIMAP_STROKE_THUMBNAIL = 5f
+    /** thumbnail 预览场景轮廓线宽（px）：4px（略细于原 5px，视觉更精致） */
+    const val MINIMAP_STROKE_THUMBNAIL = 4f
     /** thumbnail 起点标记半径（px）：比线宽大、足够醒目 */
     const val MINIMAP_START_MARKER_RADIUS = 8f
 
@@ -98,7 +98,7 @@ object OverlayCanvasPainter {
     /**
      * 赛道小地图绘制 Paint 容器。
      *
-     * @property lineColor        赛道轮廓 polyline（BorderAlpha60）
+     * @property lineColor        赛道轮廓 polyline（overlay 场景=BorderAlpha60 淡色；thumbnail 场景=Cyan 鲜明不透明，由调用方区分传入）
      * @property dotColor         当前位置高亮点（Cyan）
      * @property strokeWidth      轮廓线宽（px）；overlay 播放页小地图传 [MINIMAP_STROKE_OVERLAY]（细线），
      *                            thumbnail 预览场景传 [MINIMAP_STROKE_THUMBNAIL]（粗线）
@@ -277,7 +277,7 @@ object OverlayCanvasPainter {
      * 场景区分：
      * - **overlay 播放页小地图**：[MiniMapPaints.strokeWidth] = [MINIMAP_STROKE_OVERLAY]（细线 2px），
      *   [MiniMapPaints.startMarkerColor] = 0（不画起点标记），另有 currentLat/Lon 驱动的当前位置点。
-     * - **thumbnail 预览场景**：[MiniMapPaints.strokeWidth] = [MINIMAP_STROKE_THUMBNAIL]（粗线 5px），
+     * - **thumbnail 预览场景**：[MiniMapPaints.strokeWidth] = [MINIMAP_STROKE_THUMBNAIL]（4px），
      *   [MiniMapPaints.startMarkerColor] = Cyan ARGB（画实心圆起点标记），currentLat/Lon = null。
      *
      * @param canvas     目标 Canvas
