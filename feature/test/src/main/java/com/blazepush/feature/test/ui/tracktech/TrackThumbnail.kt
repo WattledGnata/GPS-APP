@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.feature.test.model.track.GeoPoint
+import com.blazepush.feature.test.overlay.OverlayCanvasPainter
 
 /**
  * 赛道缩略图渲染器（资产接入唯一入口，Laps tab 与 Records tab 共用）。
@@ -85,12 +86,15 @@ fun TrackThumbnail(
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (hasOutline) {
-            // 状态 2/3：无静态图（或加载失败）但有轨迹 → 动态画俯视轮廓，不画当前位置点
+            // 状态 2/3：无静态图（或加载失败）但有轨迹 → 动态画俯视轮廓，不画当前位置点。
+            // thumbnail 场景：加粗线宽 + 标起点（points.first() 投影后即 polyline[0]）。
             TrackMiniMap(
                 points = points!!,
                 currentLat = null,
                 currentLon = null,
                 modifier = Modifier.fillMaxSize(),
+                strokeWidthDp = OverlayCanvasPainter.MINIMAP_STROKE_THUMBNAIL,
+                startPoint = points.first(),
             )
         } else {
             // 状态 4：既无图又无足量轨迹点 → NO PREVIEW 占位（与原 design.md D7 一致）

@@ -46,6 +46,14 @@ object OverlayCanvasPainter {
     private const val SPEEDO_MAJOR_STEP_KMH = 20.0
     private const val SPEEDO_MINOR_STEP_KMH = 10.0
 
+    // ── 赛道小地图场景常量 ────────────────────────────────────────────────────────────
+    /** overlay 播放页小地图轮廓线宽（px）：保持原细线 */
+    const val MINIMAP_STROKE_OVERLAY = 2f
+    /** thumbnail 预览场景轮廓线宽（px）：加粗 2.5× 在小尺寸卡片下清晰可见 */
+    const val MINIMAP_STROKE_THUMBNAIL = 5f
+    /** thumbnail 起点标记半径（px）：比线宽大、足够醒目 */
+    const val MINIMAP_START_MARKER_RADIUS = 8f
+
     // ── G 球绘制参数（与 GForceBall.kt 原 DrawScope 块 1:1 一致） ──────────────────
     // 同心刻度圈占外圈比例：0.5G / 1.0G / 1.5G(外圈)。
 
@@ -90,12 +98,18 @@ object OverlayCanvasPainter {
     /**
      * 赛道小地图绘制 Paint 容器。
      *
-     * @property lineColor 赛道轮廓 polyline（BorderAlpha60）
-     * @property dotColor  当前位置高亮点（Cyan）
+     * @property lineColor        赛道轮廓 polyline（BorderAlpha60）
+     * @property dotColor         当前位置高亮点（Cyan）
+     * @property strokeWidth      轮廓线宽（px）；overlay 播放页小地图传 [MINIMAP_STROKE_OVERLAY]（细线），
+     *                            thumbnail 预览场景传 [MINIMAP_STROKE_THUMBNAIL]（粗线）
+     * @property startMarkerColor 起点标记填充色（ARGB int）；0（透明）= 不画起点标记（overlay 播放页默认）；
+     *                            thumbnail 场景传 Cyan ARGB
      */
     data class MiniMapPaints(
         val lineColor: Int,
         val dotColor: Int,
+        val strokeWidth: Float = MINIMAP_STROKE_OVERLAY,
+        val startMarkerColor: Int = 0,
     )
 
     /**
@@ -256,18 +270,24 @@ object OverlayCanvasPainter {
     }
 
     /**
-     * 画赛道小地图（轮廓 polyline 闭环 + 当前位置高亮点）。
+     * 画赛道小地图（轮廓 polyline 闭环 + 当前位置高亮点 + 可选起点标记）。
      * 与 `TrackMiniMap.kt:138-163` 原 DrawScope 块图元 1:1 对应。
      * `points` < 2 时（投影返回 null）不画任何内容（不崩，与回放端 `?: return@Canvas` 一致）。
+     *
+     * 场景区分：
+     * - **overlay 播放页小地图**：[MiniMapPaints.strokeWidth] = [MINIMAP_STROKE_OVERLAY]（细线 2px），
+     *   [MiniMapPaints.startMarkerColor] = 0（不画起点标记），另有 currentLat/Lon 驱动的当前位置点。
+     * - **thumbnail 预览场景**：[MiniMapPaints.strokeWidth] = [MINIMAP_STROKE_THUMBNAIL]（粗线 5px），
+     *   [MiniMapPaints.startMarkerColor] = Cyan ARGB（画实心圆起点标记），currentLat/Lon = null。
      *
      * @param canvas     目标 Canvas
      * @param width      画布宽（px）
      * @param height     画布高（px）
      * @param padding    四周留边（px，回放端 = 6dp.toPx()）
      * @param points     赛道轮廓
-     * @param currentLat 当前帧纬度（null 不画点）
+     * @param currentLat 当前帧纬度（null 不画当前位置点）
      * @param currentLon 当前帧经度
-     * @param paints     颜色容器
+     * @param paints     颜色容器（含 strokeWidth + startMarkerColor 场景区分参数）
      */
     fun drawTrackMiniMap(
         canvas: Canvas,
@@ -298,16 +318,33 @@ object OverlayCanvasPainter {
                 lineTo(projected.polyline.first().x, projected.polyline.first().y)
             }
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 2f
+            paint.strokeWidth = paints.strokeWidth
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.strokeJoin = Paint.Join.ROUND
             paint.color = paints.lineColor
             canvas.drawPath(path, paint)
         }
 
-        // 当前位置高亮点
+        // 当前位置高亮点（overlay 播放页场景）
         projected.current?.let { c ->
             paint.style = Paint.Style.FILL
             paint.color = paints.dotColor
             canvas.drawCircle(c.x, c.y, 5f, paint)
+        }
+
+        // 起点标记（thumbnail 场景）：startMarkerColor != 0 时画实心圆 + 轮廓环
+        // 起点 = points.first() 投影后的 polyline[0]
+        if (paints.startMarkerColor != 0 && projected.polyline.isNotEmpty()) {
+            val startPt = projected.polyline.first()
+            // 外圈轮廓环（深色，增对比）
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 2f
+            paint.color = android.graphics.Color.BLACK
+            canvas.drawCircle(startPt.x, startPt.y, MINIMAP_START_MARKER_RADIUS, paint)
+            // 实心填充（Cyan / 起点色）
+            paint.style = Paint.Style.FILL
+            paint.color = paints.startMarkerColor
+            canvas.drawCircle(startPt.x, startPt.y, MINIMAP_START_MARKER_RADIUS, paint)
         }
     }
 

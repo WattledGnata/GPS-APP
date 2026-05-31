@@ -3,7 +3,6 @@ package com.blazepush.feature.test.ui.tracktech
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -122,12 +121,21 @@ object TrackMiniMapProjection {
 }
 
 /**
- * 赛道小地图 Composable：画轮廓 polyline + 当前位置高亮点。
+ * 赛道小地图 Composable：画轮廓 polyline + 当前位置高亮点 + 可选起点标记。
  * points < 2 时调用方应隐藏本组件（这里若仍渲染则不画任何内容，不崩）。
  *
- * @param points     赛道轮廓
- * @param currentLat 当前帧纬度（null 不画点）
- * @param currentLon 当前帧经度
+ * 场景区分：
+ * - **overlay 播放页小地图**：strokeWidth 默认（[OverlayCanvasPainter.MINIMAP_STROKE_OVERLAY] 细线），
+ *   startPoint = null（不画起点标记），currentLat/Lon 驱动当前位置点。
+ * - **thumbnail 预览场景**（由 [TrackThumbnail] 调用）：
+ *   strokeWidth = [OverlayCanvasPainter.MINIMAP_STROKE_THUMBNAIL]（粗线），
+ *   startPoint = referencePath.points.first()（画 Cyan 实心圆起点标记），currentLat/Lon = null。
+ *
+ * @param points      赛道轮廓
+ * @param currentLat  当前帧纬度（null 不画当前位置点）
+ * @param currentLon  当前帧经度
+ * @param strokeWidth 轮廓线宽（dp）；overlay 播放页传默认值，thumbnail 场景传粗线常量
+ * @param startPoint  起点 GeoPoint（null 不画起点标记）；thumbnail 场景传 referencePath.points.first()
  */
 @Composable
 fun TrackMiniMap(
@@ -135,16 +143,22 @@ fun TrackMiniMap(
     currentLat: Double?,
     currentLon: Double?,
     modifier: Modifier = Modifier,
+    strokeWidthDp: Float = OverlayCanvasPainter.MINIMAP_STROKE_OVERLAY,
+    startPoint: GeoPoint? = null,
 ) {
     // 共享绘制层颜色容器（真相源仍是 TrackTechColors）。
     // round video-export-burned-overlay Round A：Canvas 块下沉到 OverlayCanvasPainter，回放端薄壳。
-    val paints = remember {
-        OverlayCanvasPainter.MiniMapPaints(
+    val startMarkerArgb = if (startPoint != null) TrackTechColors.Cyan.toArgb() else 0
+    Canvas(modifier = modifier) {
+        val strokePx = strokeWidthDp * density
+        val paints = OverlayCanvasPainter.MiniMapPaints(
             lineColor = TrackTechColors.BorderAlpha60.toArgb(),
             dotColor = TrackTechColors.Cyan.toArgb(),
+            strokeWidth = strokePx,
+            startMarkerColor = startMarkerArgb,
         )
-    }
-    Canvas(modifier = modifier) {
+        // 起点标记位置 = points.first()（referencePath 首点）→ 投影后即 polyline[0]，
+        // drawTrackMiniMap 内部用 projected.polyline.first() 画标记，无需修改 points 列表。
         drawIntoCanvas { c ->
             OverlayCanvasPainter.drawTrackMiniMap(
                 canvas = c.nativeCanvas,
