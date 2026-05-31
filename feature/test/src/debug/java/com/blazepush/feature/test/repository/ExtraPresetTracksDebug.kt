@@ -9,6 +9,7 @@
 // 修改请重新运行脚本（详见 docs/design/rcz-format-decoding.md），勿手工编辑。
 package com.blazepush.feature.test.repository
 
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.model.track.GeoLine
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.model.track.GeoVector
@@ -27,6 +28,9 @@ private val boyuLoopTrack: Track = Track(
     ),
     lengthKm = 2.591,
     thumbnailAssetPath = null,
+    // 静态预览矢量图（一次性离线投影生成，见 res/drawable/track_preview_boyu.xml）。
+    // thumbnail 走此 drawable 后不再实时 Canvas 绘制（性能优化）。
+    thumbnailDrawableResId = R.drawable.track_preview_boyu,
     referencePath = TrackPath(
         points = listOf(
             GeoPoint(30.3997702, 104.0614972),

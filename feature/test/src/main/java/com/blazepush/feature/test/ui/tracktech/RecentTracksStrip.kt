@@ -79,6 +79,7 @@ private fun RecentTrackCard(
     ) {
         TrackThumbnail(
             assetPath = track.thumbnailAssetPath,
+            drawableResId = track.thumbnailDrawableResId,
             points = track.referencePath.points,
             modifier = Modifier
                 .fillMaxWidth()

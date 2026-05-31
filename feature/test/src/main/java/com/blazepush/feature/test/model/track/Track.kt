@@ -9,6 +9,17 @@ data class Track(
     val name: TrackName,
     val lengthKm: Double,
     val thumbnailAssetPath: String? = null,
+    /**
+     * 可选静态预览 VectorDrawable 资源 id（R.drawable.xxx）。
+     *
+     * 引入理由（round `track-preview-static-vector`）：赛道几何固定，预览是一次性活儿，
+     * 运行时 Canvas 逐帧投影 + drawPath 成本高（列表多 thumbnail 尤甚）。轨迹一次性
+     * 离线投影成矢量 path 存成 drawable 后，thumbnail 直接 `painterResource` 显示静态
+     * 矢量图，不再实时绘制。优先级最高（见 [com.blazepush.feature.test.ui.tracktech.TrackThumbnail]）。
+     *
+     * null（默认）= 该赛道无预生成矢量图，退到 asset PNG → 动态轮廓 → NO PREVIEW。
+     */
+    val thumbnailDrawableResId: Int? = null,
     val source: TrackSource = TrackSource.Preset,
     val referencePath: TrackPath,
     val startFinishGate: TimingGate,
