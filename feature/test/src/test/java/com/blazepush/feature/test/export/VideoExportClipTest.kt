@@ -79,6 +79,106 @@ class VideoExportClipTest {
     }
 
     // ────────────────────────────────────────────────────────────────
+    // lapCoverage（三态：NONE / PARTIAL / FULL）
+    // round move-export-to-playback-and-relax-replay-gate
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `圈本体完整落在视频覆盖段内 - Coverage FULL`() {
+        // 圈 [10000, 40000] ⊂ [1000, 61000]
+        assertEquals(
+            VideoExportClip.Coverage.FULL,
+            VideoExportClip.lapCoverage(10_000L, 40_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈尾晚于视频终点但有重叠 - Coverage PARTIAL`() {
+        // 圈 [10000, 65000]，videoEnd=61000：圈头在覆盖内、圈尾超出 → 部分覆盖
+        assertEquals(
+            VideoExportClip.Coverage.PARTIAL,
+            VideoExportClip.lapCoverage(10_000L, 65_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈头早于视频起点但有重叠 - Coverage PARTIAL`() {
+        // 圈 [500, 40000]，videoStart=1000：圈头超出、圈尾在覆盖内 → 部分覆盖
+        assertEquals(
+            VideoExportClip.Coverage.PARTIAL,
+            VideoExportClip.lapCoverage(500L, 40_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈完全落在视频覆盖段之后（圈头晚于视频终点）- Coverage NONE`() {
+        // 圈 [70000, 80000]，videoEnd=61000：lapStart > videoEnd → 无重叠
+        assertEquals(
+            VideoExportClip.Coverage.NONE,
+            VideoExportClip.lapCoverage(70_000L, 80_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈完全落在视频覆盖段之前（圈尾早于视频起点）- Coverage NONE`() {
+        // 圈 [-50000, -40000]，videoStart=1000：lapEnd < videoStart → 无重叠
+        assertEquals(
+            VideoExportClip.Coverage.NONE,
+            VideoExportClip.lapCoverage(-50_000L, -40_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈头尾都超出视频两端但中段有覆盖 - Coverage PARTIAL`() {
+        // 圈 [-5000, 70000] 完全包住视频 [1000, 61000]：圈头尾都超出，中段覆盖 → 部分覆盖
+        assertEquals(
+            VideoExportClip.Coverage.PARTIAL,
+            VideoExportClip.lapCoverage(-5_000L, 70_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈本体边界恰好贴合视频起止 - Coverage FULL`() {
+        assertEquals(
+            VideoExportClip.Coverage.FULL,
+            VideoExportClip.lapCoverage(1_000L, 61_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `圈尾恰好等于视频起点（单点接触）- Coverage PARTIAL`() {
+        // lapEnd == videoStart：lapEnd < videoStart 为 false → 有重叠（边界点），但 lapStart < videoStart → PARTIAL
+        assertEquals(
+            VideoExportClip.Coverage.PARTIAL,
+            VideoExportClip.lapCoverage(-5_000L, 1_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `视频时长未知（0）- Coverage NONE`() {
+        assertEquals(
+            VideoExportClip.Coverage.NONE,
+            VideoExportClip.lapCoverage(10_000L, 40_000L, videoStart, 0L),
+        )
+    }
+
+    @Test
+    fun `异常圈 lapEnd 小于 lapStart - Coverage NONE`() {
+        assertEquals(
+            VideoExportClip.Coverage.NONE,
+            VideoExportClip.lapCoverage(40_000L, 10_000L, videoStart, videoDuration),
+        )
+    }
+
+    @Test
+    fun `lapCoverage FULL 与 isLapFullyCovered 口径一致`() {
+        // FULL 当且仅当 isLapFullyCovered 为 true
+        val full = VideoExportClip.lapCoverage(10_000L, 40_000L, videoStart, videoDuration)
+        assertEquals(VideoExportClip.Coverage.FULL, full)
+        assertTrue(VideoExportClip.isLapFullyCovered(10_000L, 40_000L, videoStart, videoDuration))
+    }
+
+    // ────────────────────────────────────────────────────────────────
     // computeClipRange
     // ────────────────────────────────────────────────────────────────
 

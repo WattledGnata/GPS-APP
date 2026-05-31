@@ -1,34 +1,48 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.ui.tracktech
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -39,6 +53,9 @@ import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.export.LapPlaybackLoader
+import com.blazepush.feature.test.export.VideoExportClip
+import com.blazepush.feature.test.export.VideoExportProgressBus
+import com.blazepush.feature.test.export.VideoExportService
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
@@ -166,6 +183,61 @@ fun LapVideoPlaybackScreen(
     var overlayDeltaMs by remember { mutableStateOf<Long?>(null) }
     // 当前是否落在视频覆盖段外（true → 黑屏遮罩盖 PlayerView）
     var blackout by remember { mutableStateOf(true) }
+    // round move-export-to-playback-and-relax-replay-gate：视频时长（ExoPlayer READY 后回填），
+    // 用于在播放页算当前圈相对视频覆盖段的覆盖程度（决定导出按钮 enable/disable）。<=0 表示未知。
+    var videoDurationMs by remember { mutableStateOf(0L) }
+
+    // 当前圈相对视频覆盖段的覆盖程度（导出按钮 gate）：
+    // FULL → 导出可点；PARTIAL → 置灰 + Toast 提示视频不完整；NONE → 理论上进不来（回放入口已挡），保险也禁用。
+    val coverage = remember(playbackContext, videoDurationMs) {
+        val ctx = playbackContext
+        if (ctx == null || videoDurationMs <= 0L) {
+            VideoExportClip.Coverage.NONE
+        } else {
+            VideoExportClip.lapCoverage(
+                ctx.lapStartWallClock, ctx.lapEndWallClock,
+                ctx.videoStartedAtWallClock, videoDurationMs,
+            )
+        }
+    }
+
+    // 改动 1：POST_NOTIFICATIONS 运行时请求（Android 13+ / API33 TIRAMISU）。
+    // manifest 已声明权限但缺运行时请求 → 13+ 导出前台 Service 进度通知不显示。
+    // 复用工程 rememberLauncherForActivityResult 范式（LapLiveScreen 相机权限同款）。
+    // 授予/拒绝都继续启动导出（拒绝降级：导出照跑，仅无进度通知 + Toast 提示）。
+    val startExport: () -> Unit = {
+        val ctx = playbackContext
+        if (ctx != null) {
+            FileLogger.d(TAG, "start export sid=$sessionId lapIndex=$lapIndex lapNumber=${ctx.lapNumber}")
+            VideoExportService.start(context, sessionId, lapIndex)
+        }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) {
+            FileLogger.d(TAG, "POST_NOTIFICATIONS denied → 导出降级（无进度通知）")
+            Toast.makeText(context, "未授权通知，导出在后台进行", Toast.LENGTH_SHORT).show()
+        } else {
+            FileLogger.d(TAG, "POST_NOTIFICATIONS granted")
+        }
+        // 授予/拒绝都启动导出
+        startExport()
+    }
+    // 点导出：13+ 未授予通知权限 → 先请求（回调里再 startExport）；否则直接导。
+    val onExportClick: () -> Unit = {
+        if (coverage != VideoExportClip.Coverage.FULL) {
+            Toast.makeText(context, "该圈视频不完整，暂不可导出", Toast.LENGTH_SHORT).show()
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            FileLogger.d(TAG, "request POST_NOTIFICATIONS before export")
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startExport()
+        }
+    }
 
     // 圈时间轴主导播放循环（状态机）：
     // playheadWallClock 状态 + isWithinCoverage 布尔。
@@ -182,17 +254,19 @@ fun LapVideoPlaybackScreen(
         val playheadEnd = range.last
 
         // 等 ExoPlayer READY 拿到 duration（黑屏段也要 duration 判定覆盖段右边界）
-        var videoDurationMs = exoPlayer.duration
-        while (isActive && (videoDurationMs <= 0L || exoPlayer.playbackState == Player.STATE_IDLE ||
+        var localDurationMs = exoPlayer.duration
+        while (isActive && (localDurationMs <= 0L || exoPlayer.playbackState == Player.STATE_IDLE ||
                 exoPlayer.playbackState == Player.STATE_BUFFERING)
         ) {
             delay(PLAYHEAD_TICK_MS)
-            videoDurationMs = exoPlayer.duration
+            localDurationMs = exoPlayer.duration
         }
         if (!isActive) return@LaunchedEffect
+        // round move-export-to-playback-and-relax-replay-gate：回填外层 state → 触发 coverage 重算 → 导出按钮 gate 生效。
+        videoDurationMs = localDurationMs
         FileLogger.d(
             TAG,
-            "video READY duration=$videoDurationMs lapIndex=$lapIndex " +
+            "video READY duration=$localDurationMs lapIndex=$lapIndex " +
                 "uiRefreshThrottle=${PLAYHEAD_TICK_MS}ms(${1000 / PLAYHEAD_TICK_MS}Hz, 采样仍25Hz)",
         )
 
@@ -200,11 +274,11 @@ fun LapVideoPlaybackScreen(
         var playheadWallClock = playheadStart
         // 进圈初始定位：若起点已在视频覆盖段内 → seek + play；否则黑屏 ticker 起步
         var wasWithinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
-            playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+            playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
         )
         if (wasWithinCoverage) {
             val seekPos = VideoTelemetrySync.playheadToVideoPosition(
-                playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+                playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
             )
             exoPlayer.seekTo(seekPos)
             exoPlayer.play()
@@ -223,7 +297,7 @@ fun LapVideoPlaybackScreen(
         while (isActive) {
             val nowRealtime = System.currentTimeMillis()
             val withinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
-                playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+                playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
             )
 
             if (withinCoverage) {
@@ -231,7 +305,7 @@ fun LapVideoPlaybackScreen(
                 if (!wasWithinCoverage) {
                     // 黑屏段 → 覆盖段：seek 视频到 position 0（圈头早于视频，刚追到 videoStart）+ play
                     val seekPos = VideoTelemetrySync.playheadToVideoPosition(
-                        playheadWallClock, ctx.videoStartedAtWallClock, videoDurationMs,
+                        playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
                     )
                     exoPlayer.seekTo(seekPos)
                     exoPlayer.play()
@@ -338,7 +412,160 @@ fun LapVideoPlaybackScreen(
                 trackPoints = ctx.trackPoints,
                 gaugeMaxKmh = gaugeMaxKmh,
             )
+            // 改动 2：导出按钮移到播放页。顶部居中（避开四角 overlay：左上速度/右上G/左下圈速/右下地图）。
+            // 完整覆盖 → 可点启动导出；部分覆盖 → 置灰，点击 Toast 提示视频不完整（onExportClick 内处理）。
+            ExportButton(
+                enabled = coverage == VideoExportClip.Coverage.FULL,
+                onClick = onExportClick,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp),
+            )
+            // 导出进度遮罩（观察 VideoExportProgressBus；完成弹分享 / 失败 Toast）。
+            // 导出从本屏发起，进度/分享在本屏显示。M2：三态 if/else 禁 early-return。
+            VideoExportProgressOverlay(sessionId = sessionId)
         }
+    }
+}
+
+/**
+ * 导出进度遮罩对话框（观察 [VideoExportProgressBus]）。
+ * - Running：全屏半透明遮罩 + 进度面板（"导出中 N%" + 取消按钮）。
+ * - Done：Toast "已保存到相册" + 拉起系统分享 Intent（ACTION_SEND video/mp4，content URI）。
+ * - Failed：Toast 提示。
+ * M2 教训：三态用 when/if 渲染，不在 scope 内 early-return。
+ *
+ * round move-export-to-playback-and-relax-replay-gate：从 LapSessionDetailScreen 迁来（导出入口移播放页）。
+ */
+@Composable
+private fun VideoExportProgressOverlay(sessionId: String) {
+    val context = LocalContext.current
+    val state by VideoExportProgressBus.state.collectAsState()
+
+    // 终态副作用：完成弹分享 / 失败 Toast，消费后 reset。
+    LaunchedEffect(state) {
+        when (val s = state) {
+            is VideoExportProgressBus.State.Done -> {
+                Toast.makeText(context, "已保存到相册", Toast.LENGTH_LONG).show()
+                val uri = s.uri
+                if (uri != null) {
+                    runCatching {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "video/mp4"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(share, "分享圈速视频"))
+                    }
+                }
+                VideoExportProgressBus.reset()
+            }
+            is VideoExportProgressBus.State.Failed -> {
+                Toast.makeText(context, s.message, Toast.LENGTH_LONG).show()
+                VideoExportProgressBus.reset()
+            }
+            else -> Unit
+        }
+    }
+
+    val running = state as? VideoExportProgressBus.State.Running
+    // 仅当前 session 的导出在本屏显示进度面板（避免别的 session 残留态串显）。
+    if (running != null && running.sessionId == sessionId) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.6f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            CutCornerPanel(
+                cutSize = 8.dp,
+                cutCorners = cutCornersAll,
+                contentPadding = 20.dp,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "导出 Lap ${running.lapNumber} 视频",
+                        style = TrackTechTypography.UiTextLabel,
+                        color = TrackTechColors.Cyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "导出中 ${running.percent}%",
+                        style = TrackTechTypography.ScoreMedium,
+                        color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(TrackTechColors.Red.copy(alpha = 0.18f))
+                            .clickable {
+                                FileLogger.d(TAG, "user cancel export sid=$sessionId")
+                                VideoExportService.cancel(context)
+                            }
+                            .padding(horizontal = 18.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = TrackTechTypography.UiTextBody,
+                            color = TrackTechColors.Red,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 改动 2：播放页顶部导出按钮（chip 风格：下载图标 + "导出" 文字）。
+ *
+ * enabled（完整覆盖）→ Cyan 高亮可点；disabled（部分覆盖）→ 置灰但仍接收点击（onClick 内 Toast 提示不可导）。
+ * V2 视觉：单行 Ellipsis + 末尾固定元素前 Spacer。
+ */
+@Composable
+private fun ExportButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val accent = if (enabled) TrackTechColors.Cyan else TrackTechColors.TextMuted
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                color = if (enabled) {
+                    TrackTechColors.Surface.copy(alpha = 0.72f)
+                } else {
+                    TrackTechColors.Surface.copy(alpha = 0.45f)
+                },
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "⬇",
+            style = TrackTechTypography.UiTextBody,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (enabled) "导出" else "视频不完整",
+            style = TrackTechTypography.UiTextLabel,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

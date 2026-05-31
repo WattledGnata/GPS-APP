@@ -50,6 +50,53 @@ object VideoExportClip {
     class EmptyClipException(message: String) : IllegalStateException(message)
 
     /**
+     * 圈本体相对视频覆盖段的覆盖程度（三态）。
+     *
+     * round move-export-to-playback-and-relax-replay-gate：回放入口放宽到"有任何覆盖段即可进"，
+     * 导出入口仍要求完整覆盖。故需区分三态：
+     * - [NONE]：圈本体与视频覆盖段无任何重叠 → 纯黑（无可叠真实画面）→ 回放禁入 + 导出禁用。
+     * - [PARTIAL]：圈本体与视频覆盖段有重叠但非完整覆盖（圈头/尾有黑帧段）→ 可回放（半圈也能看 + 将来导某几秒），导出禁用。
+     * - [FULL]：圈本体完整落在视频覆盖段内 → 可回放 + 可导出。
+     */
+    enum class Coverage { NONE, PARTIAL, FULL }
+
+    /**
+     * 判定圈本体 [lapStart, lapEnd]（不含 leadIn 前导）相对视频覆盖段的覆盖程度。
+     *
+     * 重叠判定基于圈本体与视频覆盖段 [videoStart, videoEnd] 的交集是否非空：
+     * - 无重叠（`lapEnd < videoStart || lapStart > videoEnd`）→ [Coverage.NONE]
+     * - 完整覆盖（`lapStart >= videoStart && lapEnd <= videoEnd`，复用 [isLapFullyCovered] 口径）→ [Coverage.FULL]
+     * - 否则（有重叠但非完整）→ [Coverage.PARTIAL]
+     *
+     * 防御：videoDurationMs <= 0（duration 未知）→ [Coverage.NONE]；lapEnd < lapStart（异常圈）→ [Coverage.NONE]。
+     *
+     * @param lapStartWallClock 圈开圈 crossing 真壁钟
+     * @param lapEndWallClock   圈收圈 crossing 真壁钟
+     * @param videoStartedAtWallClock 视频录制开始 wallClock（与样本同时钟域）
+     * @param videoDurationMs   视频时长毫秒
+     * @return 覆盖程度三态
+     */
+    fun lapCoverage(
+        lapStartWallClock: Long,
+        lapEndWallClock: Long,
+        videoStartedAtWallClock: Long,
+        videoDurationMs: Long,
+    ): Coverage {
+        if (videoDurationMs <= 0L) return Coverage.NONE
+        if (lapEndWallClock < lapStartWallClock) return Coverage.NONE
+        val videoEnd = videoStartedAtWallClock + videoDurationMs
+        // 无交集：圈尾早于视频起点 或 圈头晚于视频终点
+        if (lapEndWallClock < videoStartedAtWallClock || lapStartWallClock > videoEnd) {
+            return Coverage.NONE
+        }
+        return if (lapStartWallClock >= videoStartedAtWallClock && lapEndWallClock <= videoEnd) {
+            Coverage.FULL
+        } else {
+            Coverage.PARTIAL
+        }
+    }
+
+    /**
      * 圈本体 [lapStart, lapEnd] 是否被视频覆盖段完整覆盖。
      *
      * 完整覆盖 = `lapStart >= videoStart && lapEnd <= videoEnd`（videoEnd = videoStart + videoDuration）。

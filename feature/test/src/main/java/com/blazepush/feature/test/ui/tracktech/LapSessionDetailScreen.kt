@@ -24,10 +24,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import android.content.Intent
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -51,8 +49,6 @@ import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.export.VideoExportClip
-import com.blazepush.feature.test.export.VideoExportProgressBus
-import com.blazepush.feature.test.export.VideoExportService
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.Dispatchers
@@ -82,12 +78,12 @@ fun LapSessionDetailScreen(
     sessionViewModel: TestSessionViewModel = koinViewModel(),
     trackCatalog: TrackCatalog = koinInject(),
 ) {
-    val context = LocalContext.current
     var session by remember { mutableStateOf<TelemetrySession?>(null) }
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
-    // video-export-burned-overlay Round B：被视频完整覆盖的圈号集合（lapNumber，1-based）。
-    // 仅这些圈显示可用的"导出"入口；不完整覆盖（有黑帧段）的圈导出入口置灰禁用。
-    var exportableLaps by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    // round move-export-to-playback-and-relax-replay-gate：各圈相对视频的覆盖程度（lapNumber → Coverage）。
+    // 回放入口放宽到 coverage != NONE（完整 or 半圈都可进）；完全无覆盖（NONE）禁入。
+    // 导出入口已移到播放页（详情页不再有导出 section）。
+    var lapCoverageMap by remember { mutableStateOf<Map<Int, VideoExportClip.Coverage>>(emptyMap()) }
 
     val currentTrack by sessionViewModel.currentSelectedTrack.collectAsState()
 
@@ -98,37 +94,34 @@ fun LapSessionDetailScreen(
         // 不再每次进入 detail 屏全扫 binary（endSession 时已派生持久化）
     }
 
-    // video-export-burned-overlay Round B：算各圈是否被视频完整覆盖（决定导出入口 enable）。
-    // 后台 IO：probe 视频时长 + 逐圈 getLapTelemetry 取 lapStart/lapEnd → VideoExportClip.isLapFullyCovered。
+    // round move-export-to-playback-and-relax-replay-gate：算各圈相对视频的覆盖程度（决定回放入口可达）。
+    // 后台 IO：probe 视频时长 + 逐圈 getLapTelemetry 取 lapStart/lapEnd → VideoExportClip.lapCoverage（三态）。
     LaunchedEffect(session) {
         val s = session
         val videoPath = s?.videoFilePath
         val videoStart = s?.videoStartedAtWallClock
         if (videoPath == null || videoStart == null) {
-            exportableLaps = emptySet()
+            lapCoverageMap = emptyMap()
             return@LaunchedEffect
         }
-        val covered = withContext(Dispatchers.IO) {
+        val map = withContext(Dispatchers.IO) {
             val durationMs = probeVideoDurationMs(videoPath)
-            val result = mutableSetOf<Int>()
+            val result = mutableMapOf<Int, VideoExportClip.Coverage>()
             var i = 0
             while (i <= 1000) {
                 val lap = telemetryRepository.getLapTelemetry(sessionId, i) ?: break
-                if (VideoExportClip.isLapFullyCovered(
-                        lap.lapStartWallClock, lap.lapEndWallClock, videoStart, durationMs,
-                    )
-                ) {
-                    result.add(i + 1) // lapNumber = lapIndex + 1
-                }
+                result[i + 1] = VideoExportClip.lapCoverage(
+                    lap.lapStartWallClock, lap.lapEndWallClock, videoStart, durationMs,
+                ) // lapNumber = lapIndex + 1
                 i++
             }
             FileLogger.d(
                 "VideoExport",
-                "exportable laps sid=$sessionId durationMs=$durationMs covered=$result",
+                "lap coverage sid=$sessionId durationMs=$durationMs map=$result",
             )
             result
         }
-        exportableLaps = covered
+        lapCoverageMap = map
     }
 
     val derived = remember(crossings) { deriveDetailMetrics(crossings) }
@@ -209,21 +202,26 @@ fun LapSessionDetailScreen(
             }
         }
 
-        // redo-video-overlay-visual-gauges round（真机反馈）：去掉独立 "VIDEO REPLAY" 圈列表区，
-        // 把视频回放入口整合进已有圈成绩单（sector 表 / fallback 圈列表）的每一行：
-        // - session 有视频 → VALID/BEST 圈行末尾显示小播放图标（▶），点图标导航 lap_video/{sid}/{lapIndex}；
-        //   行其余部分仍点进 lap_detail（单圈数据图表）。两入口共存不互斥。
-        // - 无视频 / INVALID/INCOMPLETE 圈 → 不显示播放图标（getLapTelemetry 越界 → 白屏，禁点）。
+        // round move-export-to-playback-and-relax-replay-gate（真机反馈）：把视频回放入口整合进
+        // 圈成绩单（sector 表 / fallback 圈列表）每一行末尾的小相机图标。回放可达条件放宽：
+        // - session 有视频 + VALID/BEST + 该圈 coverage != NONE（完整 or 半圈都可进）→ 显示图标可点。
+        // - 完全无视频覆盖（coverage == NONE，纯黑无可叠真实画面）→ 不显示图标（禁入）。
+        // - 加载期（lapCoverageMap 还没该圈条目）→ null != NONE → 默认允许进（避免图标闪烁）；算完后纯黑圈隐藏。
+        // - 行其余部分仍点进 lap_detail（单圈数据图表）。两入口共存不互斥。
+        // 导出入口已移到播放页 LapVideoPlaybackScreen（详情页不再有导出 section）。
         val hasVideo = session?.videoFilePath != null
-        // 视频回放点击工厂：仅 VALID/BEST + 有视频时返回非 null（否则圈行不渲染播放图标）。
         val onVideoClickFactory: (lapNumber: Int, status: UiLapStatus) -> (() -> Unit)? =
             { lapNumber, status ->
-                if (hasVideo && (status == UiLapStatus.VALID || status == UiLapStatus.BEST)) {
+                val coveredEnough = lapCoverageMap[lapNumber] != VideoExportClip.Coverage.NONE
+                if (hasVideo && coveredEnough &&
+                    (status == UiLapStatus.VALID || status == UiLapStatus.BEST)
+                ) {
                     {
                         val lapIndex = lapNumber - 1
                         FileLogger.d(
                             "VideoOverlay",
-                            "open video replay (from lap row) sid=$sessionId lapNumber=$lapNumber -> lapIndex=$lapIndex",
+                            "open video replay (from lap row) sid=$sessionId lapNumber=$lapNumber " +
+                                "-> lapIndex=$lapIndex coverage=${lapCoverageMap[lapNumber]}",
                         )
                         navController.navigate("lap_video/$sessionId/$lapIndex")
                     }
@@ -231,31 +229,6 @@ fun LapSessionDetailScreen(
                     null
                 }
             }
-
-        // video-export-burned-overlay Round B：导出入口工厂。
-        // - None：无视频 / 非 VALID-BEST → 不显示导出图标。
-        // - Disabled：有视频 + VALID/BEST 但不在 exportableLaps（不完整覆盖，有黑帧段）→ 显示置灰禁点。
-        // - Enabled：在 exportableLaps（完整覆盖）→ 显示可点，启动 VideoExportService。
-        val onExportFactory: (lapNumber: Int, status: UiLapStatus) -> ExportEntry =
-            { lapNumber, status ->
-                if (!hasVideo || (status != UiLapStatus.VALID && status != UiLapStatus.BEST)) {
-                    ExportEntry.None
-                } else if (exportableLaps.contains(lapNumber)) {
-                    ExportEntry.Enabled {
-                        val lapIndex = lapNumber - 1
-                        FileLogger.d(
-                            "VideoExport",
-                            "start export sid=$sessionId lapNumber=$lapNumber -> lapIndex=$lapIndex",
-                        )
-                        VideoExportService.start(context, sessionId, lapIndex)
-                    }
-                } else {
-                    ExportEntry.Disabled
-                }
-            }
-
-        // 导出进度对话框（观察 VideoExportProgressBus；完成弹分享 / 失败 Toast）。M2：三态 if/else 禁 early-return。
-        VideoExportProgressOverlay(sessionId = sessionId)
 
         LazyColumn(
             modifier = Modifier
@@ -343,23 +316,8 @@ fun LapSessionDetailScreen(
                 }
             }
 
-            // video-export-burned-overlay Round B：导出带数据视频专区（仅有视频时显示）。
-            // 列出所有 VALID/BEST 圈的导出入口：完整覆盖=亮可点，不完整覆盖=置灰禁用（user 锁定）。
-            // 独立 section（不挤进 sector 表/圈行，避免破坏列对齐）。
-            if (hasVideo) {
-                val exportableRecords = derived.lapRecords.filter {
-                    it.status == UiLapStatus.VALID || it.status == UiLapStatus.BEST
-                }
-                if (exportableRecords.isNotEmpty()) {
-                    item { ExportSectionHeader() }
-                    items(exportableRecords) { record ->
-                        ExportLapRow(
-                            lapNumber = record.lapNumber,
-                            entry = onExportFactory(record.lapNumber, record.status),
-                        )
-                    }
-                }
-            }
+            // round move-export-to-playback-and-relax-replay-gate：导出入口已移到播放页
+            // （LapVideoPlaybackScreen 顶部导出按钮），详情页不再有独立导出 section。
         }
     }
 }
@@ -667,27 +625,36 @@ private fun LapRecordRow(
             }
             UiLapStatus.BEST, UiLapStatus.INCOMPLETE -> Unit
         }
-        // 视频回放入口：行末固定小播放图标（V2：末尾固定元素前加 Spacer 保间距）。
-        // 自身 clickable 在图标区域优先消费点击（导航 lap_video），不影响行其余区域的 lap_detail 点击。
+        // 改动 3：视频回放入口 UI 优化——行末克制的小播放图标（去掉突兀的青色背景方块），
+        // 与成绩数字对齐、低饱和 tint 不抢视觉。V2：末尾固定元素前加 Spacer 保间距。
         if (onVideoClick != null) {
             Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.18f))
-                    .clickable(onClick = onVideoClick),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "▶",
-                    style = TrackTechTypography.UiTextBody,
-                    color = TrackTechColors.Cyan,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            VideoReplayIcon(onClick = onVideoClick)
         }
+    }
+}
+
+/**
+ * 改动 3：圈成绩单行尾"有视频可回放"克制标识。
+ *
+ * 旧版（青色背景圆角方块 + "▶" 字符）真机反馈太突兀。改为：无背景、PlayCircleOutline 轮廓图标、
+ * 20dp 小尺寸、低饱和 Cyan tint（alpha 0.8）不抢成绩数字；外包 32dp 透明点击区保证可点。
+ */
+@Composable
+private fun VideoReplayIcon(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.PlayCircleOutline,
+            contentDescription = "Replay video",
+            tint = TrackTechColors.Cyan.copy(alpha = 0.8f),
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -746,6 +713,16 @@ private fun formatSectorSplit(ms: Long): String {
     }
 }
 
+/**
+ * 改动 4：分段配色三态 → TrackTechColors tint。
+ * PURPLE → 全场最快段（最高荣誉）；GREEN → 比最快圈对应段快；WHITE → 其余（用 TextPrimary 偏白）。
+ */
+private fun sectorColorToTint(color: SectorColorClass.SectorColor): Color = when (color) {
+    SectorColorClass.SectorColor.PURPLE -> TrackTechColors.Purple
+    SectorColorClass.SectorColor.GREEN -> TrackTechColors.Green
+    SectorColorClass.SectorColor.WHITE -> TrackTechColors.TextPrimary
+}
+
 private fun formatDuration(ms: Long): String {
     val totalSec = ms / 1000
     val hours = totalSec / 3600
@@ -764,190 +741,12 @@ private fun formatDateTime(epochMs: Long): String {
 }
 
 // ────────────────────────────────────────────────────────────────
-// video-export-burned-overlay Round B：导出入口 + 进度对话框 + 分享
+// round move-export-to-playback-and-relax-replay-gate：导出入口 + 进度对话框 + 分享已移到
+// 播放页 LapVideoPlaybackScreen（ExportButton + VideoExportProgressOverlay）。本屏仅保留
+// 视频时长探测（用于算各圈覆盖程度 → 回放入口可达条件）。
 // ────────────────────────────────────────────────────────────────
 
-/** 导出入口三态（决定圈行是否显示 + 可点）。 */
-private sealed class ExportEntry {
-    /** 不显示导出入口（无视频 / 非 VALID-BEST）。 */
-    object None : ExportEntry()
-
-    /** 显示但置灰禁点（不完整覆盖，有黑帧段）。 */
-    object Disabled : ExportEntry()
-
-    /** 显示可点（完整覆盖），点击 [onClick] 启动导出 Service。 */
-    data class Enabled(val onClick: () -> Unit) : ExportEntry()
-}
-
-@Composable
-private fun ExportSectionHeader() {
-    Text(
-        text = "Export Video",
-        style = TrackTechTypography.UiTextLabel,
-        color = TrackTechColors.Cyan,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
-
-/**
- * 导出专区单圈行：圈号 + "导出带数据视频"标签 + 导出 chip（完整覆盖亮可点 / 不完整置灰）。
- * V2 视觉：单行 Ellipsis + 末尾固定元素前 Spacer + 文本 weight 约束。
- */
-@Composable
-private fun ExportLapRow(
-    lapNumber: Int,
-    entry: ExportEntry,
-) {
-    val enabled = entry is ExportEntry.Enabled
-    val accent = if (enabled) TrackTechColors.Cyan else TrackTechColors.TextMuted
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll))
-            .background(TrackTechColors.Surface)
-            .border(
-                width = 1.dp,
-                color = TrackTechColors.BorderAlpha60,
-                shape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersAll),
-            )
-            .clickable(enabled = enabled) {
-                (entry as? ExportEntry.Enabled)?.onClick?.invoke()
-            }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "Lap $lapNumber",
-            style = TrackTechTypography.UiTextLabel,
-            color = TrackTechColors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(64.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = if (enabled) "导出带数据视频" else "无完整视频画面",
-            style = TrackTechTypography.UiTextBody,
-            color = if (enabled) TrackTechColors.TextPrimary else TrackTechColors.TextMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(accent.copy(alpha = 0.18f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "⬇",
-                style = TrackTechTypography.UiTextBody,
-                color = accent,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/**
- * 导出进度遮罩对话框（观察 [VideoExportProgressBus]）。
- * - Running：全屏半透明遮罩 + 进度面板（"导出中 N%" + 取消按钮）。
- * - Done：Toast "已保存到相册" + 拉起系统分享 Intent（ACTION_SEND video/mp4，content URI）。
- * - Failed：Toast 提示。
- * M2 教训：三态用 when/if 渲染，不在 scope 内 early-return。
- */
-@Composable
-private fun VideoExportProgressOverlay(sessionId: String) {
-    val context = LocalContext.current
-    val state by VideoExportProgressBus.state.collectAsState()
-
-    // 终态副作用：完成弹分享 / 失败 Toast，消费后 reset。
-    LaunchedEffect(state) {
-        when (val s = state) {
-            is VideoExportProgressBus.State.Done -> {
-                Toast.makeText(context, "已保存到相册", Toast.LENGTH_LONG).show()
-                val uri = s.uri
-                if (uri != null) {
-                    runCatching {
-                        val share = Intent(Intent.ACTION_SEND).apply {
-                            type = "video/mp4"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(share, "分享圈速视频"))
-                    }
-                }
-                VideoExportProgressBus.reset()
-            }
-            is VideoExportProgressBus.State.Failed -> {
-                Toast.makeText(context, s.message, Toast.LENGTH_LONG).show()
-                VideoExportProgressBus.reset()
-            }
-            else -> Unit
-        }
-    }
-
-    val running = state as? VideoExportProgressBus.State.Running
-    // 仅当前 session 的导出在本屏显示进度面板（避免别的 session 残留态串显）。
-    if (running != null && running.sessionId == sessionId) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.6f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            CutCornerPanel(
-                cutSize = 8.dp,
-                cutCorners = cutCornersAll,
-                contentPadding = 20.dp,
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        text = "导出 Lap ${running.lapNumber} 视频",
-                        style = TrackTechTypography.UiTextLabel,
-                        color = TrackTechColors.Cyan,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "导出中 ${running.percent}%",
-                        style = TrackTechTypography.ScoreMedium,
-                        color = TrackTechColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(TrackTechColors.Red.copy(alpha = 0.18f))
-                            .clickable {
-                                FileLogger.d("VideoExport", "user cancel export sid=$sessionId")
-                                VideoExportService.cancel(context)
-                            }
-                            .padding(horizontal = 18.dp, vertical = 8.dp),
-                    ) {
-                        Text(
-                            text = "取消",
-                            style = TrackTechTypography.UiTextBody,
-                            color = TrackTechColors.Red,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** 用 MediaMetadataRetriever 探测源视频时长（ms）；失败返回 0（→ 圈视为非完整覆盖，导出入口禁用）。 */
+/** 用 MediaMetadataRetriever 探测源视频时长（ms）；失败返回 0（→ 圈视为无覆盖，回放入口禁入）。 */
 private fun probeVideoDurationMs(path: String): Long {
     val retriever = android.media.MediaMetadataRetriever()
     return try {
@@ -1109,7 +908,9 @@ private fun LapSectorTableBlock(
                 }
             }
 
-            // THEORETICAL 行：OPT | 拼接总时间 | 各 sector 最快段（绿色高亮）
+            // THEORETICAL 行：OPT | 拼接总时间 | 各 sector 最快段。
+            // 改动 4：各 sector 段本就是"全场最快段"（overall best sector）→ 按规范显紫（与圈行紫色 sector 统一）；
+            // "OPT" 标签 + 拼接总时间保持绿色，标识这是合成理论行（非真实跑出的圈）。
             Row(modifier = Modifier.horizontalScroll(hScroll)) {
                 SectorCell(SectorTableLapColWidth) {
                     SectorCellText("OPT", TrackTechTypography.UiTextLabel, TrackTechColors.Green)
@@ -1123,7 +924,7 @@ private fun LapSectorTableBlock(
                 }
                 table.bestSplitPerSector.forEach { ms ->
                     SectorCell(SectorTableSectorColWidth) {
-                        SectorCellText(formatSectorSplit(ms), TrackTechTypography.UiTextBody, TrackTechColors.Green)
+                        SectorCellText(formatSectorSplit(ms), TrackTechTypography.UiTextBody, TrackTechColors.Purple)
                     }
                 }
             }
@@ -1138,6 +939,15 @@ private fun LapSectorTableBlock(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+
+            // 改动 4：分段成绩紫/绿/白配色（赛车计时通用规范）。
+            // - 紫 = 该 sector 全场最快（overallBestSectorMs = table.bestSplitPerSector[i]）。
+            // - 绿 = 比最快圈（best lap）对应 sector 快（bestLapSectorMs = 最快圈该 sector 段）。
+            // - 白 = 其他。
+            // best lap 的各 sector split 基准：取 lapTimeMs == bestActualLapMs 的圈行的 splits。
+            val bestLapSplits: List<Long?> = bestActualLapMs?.let { bestMs ->
+                table.laps.firstOrNull { it.lapTimeMs == bestMs }?.splits
+            } ?: emptyList()
 
             // 各圈行（valid/best）：[Lap N | lapTime | 各 sector split（横滚区）] + 固定播放图标（不随横滚）
             // 横滚区 weight(1f) 点击导航 lap_detail；右侧固定播放图标点击导航 lap_video（有视频时）。
@@ -1161,8 +971,18 @@ private fun LapSectorTableBlock(
                             SectorCellText(formatLapTime(lap.lapTimeMs), TrackTechTypography.UiTextBody, timeColor)
                         }
                         lap.splits.forEachIndexed { i, split ->
-                            val isSectorBest = split != null && split == table.bestSplitPerSector.getOrNull(i)
-                            val splitColor = if (isSectorBest) TrackTechColors.Green else TrackTechColors.TextPrimary
+                            // 缺段（split == null）→ 白色 "—"；否则按规范三态配色。
+                            val splitColor = if (split == null) {
+                                TrackTechColors.TextPrimary
+                            } else {
+                                sectorColorToTint(
+                                    SectorColorClass.sectorColorClass(
+                                        sectorMs = split,
+                                        overallBestSectorMs = table.bestSplitPerSector.getOrNull(i),
+                                        bestLapSectorMs = bestLapSplits.getOrNull(i),
+                                    ),
+                                )
+                            }
                             SectorCell(SectorTableSectorColWidth) {
                                 SectorCellText(
                                     if (split != null) formatSectorSplit(split) else "—",
@@ -1174,22 +994,8 @@ private fun LapSectorTableBlock(
                     }
                     if (onVideoClick != null) {
                         Spacer(Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(TrackTechColors.CyanAlpha60.copy(alpha = 0.18f))
-                                .clickable { onVideoClick(lap.lapNumber) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "▶",
-                                style = TrackTechTypography.UiTextBody,
-                                color = TrackTechColors.Cyan,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                        // 改动 3：sector 表圈行尾同款克制播放图标（与 LapRecordRow 一致）。
+                        VideoReplayIcon(onClick = { onVideoClick(lap.lapNumber) })
                     }
                 }
             }
