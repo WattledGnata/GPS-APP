@@ -1,0 +1,32 @@
+estimated_days: 0.3
+actual_days: 0.4        # 含 robustRange 纯函数 + 4处曲线适配 + 9单测
+complexity: "small"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2:
+  - "P2(主会话自审): G曲线对称(±max)、速度非对称(底0)，两条路径在 robustRange 调用处分别处理，边界设计合理"
+  - "P2(主会话自审): 数据<4点 fallback raw min/max，防 IQR 在小数据集下退化"
+divergence_reason: >
+  根因：smooth-perftest round 只平滑直道G曲线高频抖动+clip，从未触碰 Y 轴缩放逻辑，
+  单根尖刺(外设抖动、GPS噪声)撑满 Y 轴问题遗留至今。
+  本 round 在4处曲线(SpeedTimeChart.computeChartBounds / MultiLapSpeedChart.computeMultiLapBounds /
+  SpeedChart.maxSpeed / GForceChart.maxG)统一引入 IQR Tukey 上下界(Q1-1.5IQR~Q3+1.5IQR)排离群，
+  超界点 clamp 贴边展示，数据<4点 fallback raw。
+phase: "独立 bug fix（数据分析侧图表，非 Phase 2）"
+model_apply: "sonnet"
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地（单 commit 闭环）---
+# commit：fd46b7d。
+# 改动：robustRange() 纯函数(IQR Tukey) + 4处曲线 Y 轴适配 + 6单测 + 3 contract 测试扩展。
+# 真机验证通过(华为 8KE0219522008434)：曲线尖刺压平、正常数据铺开。
+# FileLogger 锚点：无需新增(纯计算层，无 IO / 异步路径)。
+# follow-up backlog：
+#   - IQR 倍数(1.5) 用户可调参(当前硬编码)
+#   - 小屏机型(vivo V2405A)图表 gate 未做
+#   - OPT行紫色(绿色值标注)待产品确认配色

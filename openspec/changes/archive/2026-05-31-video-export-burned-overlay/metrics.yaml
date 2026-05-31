@@ -1,0 +1,39 @@
+estimated_days: 2.0
+actual_days: 2.5        # round A(抽共享绘制层) + round B(GL离屏烧录) + 收尾修复(API35崩+入口迭代)
+complexity: "large"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2:
+  - "P0(主会话自审收尾): round B agent 截断返回(final 混入未执行 Bash)，主会话接手时发现 foregroundServiceType=mediaProcessing(API35) + startForeground type 8192 在 compileSdk34 环境编译通过但运行时崩 → 改 dataSync(=1) 对齐"
+  - "P1(主会话收尾): 过时 CameraPreviewContractTest VideoCapture 反例注释回归(同 round1 问题)，再次注释掉"
+  - "P1(用户反馈): 导出入口从 session 页移到播放页(完整覆盖圈才 enable) + 回放放宽到有覆盖段(coverage!=NONE)"
+  - "P2(用户反馈): 分段配色改进(紫/绿/白)，通知权限 API13+ 运行时请求补齐"
+  - "P2(主会话自审): 共享 OverlayCanvasPainter 双端复用验证(回放+导出路径均读同一 Painter 对象)"
+divergence_reason: >
+  round B workflow agent 在 build/commit 前截断返回(final response 混入未执行 Bash block)，
+  主会话接手收尾时抓到 P0 运行时崩：foregroundServiceType=mediaProcessing 是 API35 新增常量，
+  compileSdk34 下常量不存在但 int 值 8192 静默编译通过，运行时 startForeground 类型校验失败崩溃；
+  改 dataSync(=1) 修复。用户路测后反馈导出入口位置 + 回放覆盖判断 + 通知权限 + 分段配色，88de789 一次收尾。
+phase: "Phase 2"
+model_apply: "opus"
+design_decisions_diverged_during_apply:
+  - "导出入口位置变更(session页→播放页，用户路测反馈驱动，inline design 修订)"
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地（workflow A→B 串行 + 主会话收尾）---
+# round A(b03567b)：抽共享 OverlayCanvasPainter 绘制层，回放+导出双端复用，拒绝 GL 重画。
+# round B(ecdc893)：GL 离屏烧录管线，MediaCodec Surface 输入，EGL 离屏渲染。
+# 收尾(88de789)：API35 崩修复 + 导出入口移播放页 + 回放放宽 coverage!=NONE +
+#   POST_NOTIFICATIONS 13+运行时请求 + 分段紫绿白配色 + 视频标识UI优化。
+# 真机验证通过(华为 8KE0219522008434)：导出结果user签"导出结果看着没事儿"。
+# 纯 platform API，0 第三方；MediaStore minSdk28 兼容(29+ scoped / 28 WRITE_EXTERNAL)。
+# FileLogger 锚点 tag=VideoExport：encode frame / mux segment / finalize / tag=CamRec：service bind/state。
+# follow-up backlog：
+#   - 任意秒段导出(当前仅按圈)
+#   - 导出进度条优化(当前无 ETA)
+#   - 分段录制健壮性(长时段导出 OOM 风险)
+#   - 横屏/音频策略(L0 待拍板)

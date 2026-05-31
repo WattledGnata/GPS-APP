@@ -1,0 +1,41 @@
+estimated_days: 2.0
+actual_days: 3.5        # 含整段播放→按圈回放重构 + 落盘修复3版 + 视觉迭代
+complexity: "large"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2:
+  - "P0(主会话自审): 落盘 SOURCE_INACTIVE 修3版——初版(e390a3f)误诊为 unbind 抢跑、延迟 unbind 无效；真因是退出 popBackStack 销毁 screen-level lifecycle → CameraX 自动停 camera → VideoCapture 源失活 code=4；4dbea82 改退出前 await 落盘(screen 存活期 camera 不停) + 主会话追加修 Stopping 态计入 shouldBind 防二次 unbind"
+  - "P1(用户路测反馈): 整段播放交互不符行业惯例 → 5a22927 重构为按圈回放、圈时间轴主导、圈起点前3秒/黑屏叠数据"
+  - "P1(用户行业规范反馈): 纯 DSEG7 数字不直观 → 9ffd232 改模拟指针表 + G球摩擦圆 + 降频10Hz"
+  - "P2(用户反馈): 量程写死不合理 → 1665489 改按最高尾速动态取整上界"
+  - "P2(主会话自审): CameraPreviewContractTest VideoCapture 反例注释已过时(round3/4 已合法引入录制)，注释掉避免误导"
+  - "P2(M2教训守住): 多屏 Compose self-audit grep 验证无 return@Box/Column early-return 逃逸"
+divergence_reason: >
+  落盘修复经历3版迭代：
+  初版(c7094d1)整段播放叠 overlay；
+  e390a3f 误诊 unbind 抢跑延迟 unbind 无效；
+  真因(4dbea82)退出时 popBackStack 销毁 screen lifecycle → CameraX 自动停 → VideoCapture code=4 失活，
+  改"退出前 await 落盘，screen 存活期 camera 不停" + Stopping 态计入 shouldBind 防二次 unbind；
+  5a22927 响应用户路测反馈整体重构为按圈回放模型；
+  9ffd232/1665489 响应用户视觉反馈改指针表+G球+动态量程。
+phase: "Phase 2"
+model_apply: "opus/sonnet 混合"
+design_decisions_diverged_during_apply:
+  - "整段播放→按圈回放(用户路测反馈驱动，5a22927 全重构圈时间轴主导模型，视为 design drift + inline 修订 design)"
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地（多轮路测+视觉迭代）---
+# commit 链：c7094d1(初版整段播放 overlay) → e390a3f(落盘修复尝试1) → 4dbea82(落盘修复真因修复) →
+#   5a22927(按圈回放重构) → 9ffd232(指针表+G球+降频10Hz) → 1665489(量程动态+最高尾速)。
+# 真机验证通过(华为 8KE0219522008434)：
+#   overlay 播放 / 按圈回放(圈起点前3秒/黑屏叠数据) / 指针表 / G球 / 降频流畅 / 落盘 Finalize OK。
+# FileLogger 锚点 tag=VideoOverlay：playback seek / lap timeline / frame render / tag=CamRec：source inactive / bind state。
+# follow-up backlog：
+#   - 分段录制健壮性(长时段跨 activity recreate)
+#   - 小屏机型(vivo V2405A)视觉 gate 未做
+#   - 任意秒段导出(当前仅按圈)
+#   - 横向G曲线低速噪声 clamp 优化
