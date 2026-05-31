@@ -141,6 +141,17 @@ class BleConnection(
             isWritingDescriptor = false
             // 继续处理下一个特征
             processNextDescriptor(gatt)
+            // 握手完成即判定已连接（不再依赖"收到第一帧数据"）：
+            // 所有通知 CCCD 都写完（无 pending + 当前没在写）→ BLE 链路 + notify 已就绪 → CONNECTED。
+            // 适配"无 GPS fix 不主动推数据"的设备（如 blazepush-peter，GPS 模块无卫星不输出）：
+            // 否则室内卫星=0 时永远等不到数据帧 → connect() 连接超时 → 转圈重连。
+            // 有数据后照常走 onCharacteristicChanged 更新 lastDataTime + 数据流超时监控。
+            if (pendingCharacteristics.isEmpty() && !isWritingDescriptor &&
+                _connectionState.value != ConnectionState.CONNECTED
+            ) {
+                Log.d(TAG, "所有通知启用完成，握手成功 → 判定已连接（不等数据帧）")
+                _connectionState.value = ConnectionState.CONNECTED
+            }
         }
 
         override fun onCharacteristicChanged(
