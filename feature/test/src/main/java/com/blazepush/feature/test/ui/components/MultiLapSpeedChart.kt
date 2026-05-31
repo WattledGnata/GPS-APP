@@ -68,8 +68,7 @@ internal fun computeMultiLapBounds(series: List<LapSeries>): MultiLapBounds {
     if (allSamples.isEmpty()) return MultiLapBounds(1L, 0.0, 1.0)
     val maxElapsedMs = max(allSamples.maxOf { it.elapsedMsInLap }, 1L)
     val speeds = allSamples.map { it.speedKmh }
-    val minVal = speeds.min()
-    val maxVal = speeds.max()
+    val (minVal, maxVal) = robustRange(speeds)
     val range = max(maxVal - minVal, 1.0)
     return MultiLapBounds(
         maxElapsedMs = maxElapsedMs,

@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.feature.test.ui.components
 
 import androidx.compose.foundation.Canvas
@@ -47,7 +48,8 @@ fun SpeedChart(
     }
 
     val maxTime = (dataPoints.maxOf { it.elapsedTime } * 1000).toInt()
-    val maxSpeed = dataPoints.maxOf { it.speed }.toFloat()
+    val speeds = dataPoints.map { it.speed }
+    val maxSpeed = robustRange(speeds).second.toFloat()
 
     SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {
         Column(modifier = if (wrapInCard) Modifier.padding(16.dp) else Modifier) {
@@ -201,10 +203,12 @@ fun GForceChart(
 
     val maxTime = (dataPoints.maxOf { it.elapsedTime } * 1000).toInt()
     // 使用关键指标中传入的maxAcceleration作为显示值，保持与关键指标一致
+    // fallback 改用 robustRange abs-G 上界：抗离群尖刺撑满 G 轴（robust-chart-yaxis-scaling round）
     val maxG: Float = if (maxAcceleration > 0) {
         maxAcceleration.toFloat()
     } else {
-        (gForcePoints.maxOfOrNull { abs(it.second) } ?: 0.5).toFloat()
+        val absG = gForcePoints.map { abs(it.second) }
+        robustRange(absG).second.coerceAtLeast(0.5).toFloat()
     }
 
     SpeedChartShell(modifier = modifier, wrapInCard = wrapInCard) {

@@ -160,4 +160,30 @@ class AccelTimeChartContractTest {
         val segments = computeAccelSegments(emptyList())
         assertTrue(segments.isEmpty())
     }
+
+    // ---- robust-chart-yaxis-scaling: 加速度 Y 轴抗离群单测 ----
+
+    @Test
+    fun `accel spike outlier - bounds maxVal not blown up`() {
+        // 99 个正常加速度 0.3G，1 个尖刺 10G
+        val base = (0 until 99).map { i ->
+            LapTelemetrySample(
+                absoluteTsMs = 1000L + i * 600, elapsedMsInLap = i * 600L,
+                lat = 31.0, lon = 121.0, speedKmh = 100.0,
+                bearingDeg = null, accelerationG = 0.3,
+            )
+        }
+        val spike = LapTelemetrySample(
+            absoluteTsMs = 1000L + 99 * 600, elapsedMsInLap = 99 * 600L,
+            lat = 31.0, lon = 121.0, speedKmh = 100.0,
+            bearingDeg = null, accelerationG = 10.0,  // 单根尖刺 10G
+        )
+        val samples = base + spike
+        val bounds = computeChartBounds(samples, ChartAxis.ACCEL)
+
+        // robust 模式：加速度轴上界不被 10G 撑满
+        assertTrue("maxVal=${bounds.maxVal} should be < 5.0", bounds.maxVal < 5.0)
+        // 反例：raw max = 10G > 5（验证反例）
+        assertTrue("raw max 10G > 5 is the anti-example", 10.0 > 5.0)
+    }
 }

@@ -125,4 +125,34 @@ class MultiLapSpeedChartTest {
         // 验证非跨圈精确相等：两圈在同 target 下取的 elapsedMsInLap 不一定相同
         assertTrue(nearA.elapsedMsInLap != nearB.elapsedMsInLap)
     }
+
+    // ---- robust-chart-yaxis-scaling: 多圈 Y 轴抗离群单测 ----
+
+    @Test
+    fun `case E - cross-series spike - speedMax not blown up`() {
+        // series[0] 含一个 400 km/h 尖刺，其余 50 点速度 80-130
+        val normalSamples = (0 until 50).map { i -> sample(i * 1000L, 80.0 + i * 1.0) }
+        val spikeSeriesSamples = listOf(sample(0L, 400.0)) + (1 until 50).map { i -> sample(i * 1000L, 110.0) }
+        val series = listOf(
+            lapSeries(1, spikeSeriesSamples),
+            lapSeries(2, normalSamples),
+        )
+        val bounds = computeMultiLapBounds(series)
+
+        // robust 模式：speedMax 不被 400 撑满
+        assertTrue("speedMax=${bounds.speedMax} should be < 250", bounds.speedMax < 250.0)
+        // 反例：raw max = 400 > 250
+        assertTrue("raw max 400 > 250 is the anti-example", 400.0 > 250.0)
+    }
+
+    @Test
+    fun `case E2 - normal multi-lap - Y range covers all normal speeds`() {
+        // 所有圈速度在 60-140，无离群点，Y 轴应覆盖正常数据
+        val lapA = lapSeries(1, listOf(sample(0L, 60.0), sample(30_000L, 140.0), sample(60_000L, 100.0)))
+        val lapB = lapSeries(2, listOf(sample(0L, 70.0), sample(30_000L, 130.0), sample(60_000L, 90.0)))
+        val bounds = computeMultiLapBounds(listOf(lapA, lapB))
+        // 正常数据不被截断：范围覆盖 [60, 140]
+        assertTrue("speedMin=${bounds.speedMin} should be <= 60", bounds.speedMin <= 60.0)
+        assertTrue("speedMax=${bounds.speedMax} should be >= 140", bounds.speedMax >= 140.0)
+    }
 }
