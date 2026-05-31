@@ -272,6 +272,7 @@ private fun CurrentTrackPanel(track: Track?, onClick: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             TrackThumbnail(
                 assetPath = track?.thumbnailAssetPath,
+                points = track?.referencePath?.points,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp),

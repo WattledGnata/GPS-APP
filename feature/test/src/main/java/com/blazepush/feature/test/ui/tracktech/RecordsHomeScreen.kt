@@ -710,6 +710,7 @@ private fun CurrentTrackRecordCard(
                 )
                 TrackThumbnail(
                     assetPath = track?.thumbnailAssetPath,
+                    points = track?.referencePath?.points,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = 24.dp, bottom = 4.dp),

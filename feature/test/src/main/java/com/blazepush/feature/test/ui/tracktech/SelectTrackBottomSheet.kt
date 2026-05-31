@@ -152,6 +152,7 @@ private fun TrackSelectionRow(
     ) {
         TrackThumbnail(
             assetPath = track.thumbnailAssetPath,
+            points = track.referencePath.points,
             modifier = Modifier
                 .size(width = 96.dp, height = 64.dp),
         )
