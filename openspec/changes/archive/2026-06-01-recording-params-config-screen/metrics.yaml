@@ -1,0 +1,34 @@
+estimated_days: 2.3      # memo §271 估算（6 task 组 / 跨 3 层）
+actual_days: 0.9         # 实际更快：5 参数 + overlay + 13 单测；含 road-test 反馈两轮修订
+complexity: "medium"     # 200-500 行 + 2-3 module + 引入新 capability recording-params-config
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []     # road-test-first 去 Codex
+codex_l2_findings: []
+review_findings_l1: []    # road-test-first 跳 Opus 子 agent
+review_findings_l2: []
+divergence_reason: >
+  路测反馈驱动两轮修订（road-test-first 模式核心价值）：
+  ① 设置面板从独立 NavHost 路由屏 → overlay 浮层（route 屏跳转丢横屏 + 看不到实时效果）；
+  ② 曝光从原始 index 范围(±24) → EV 档显示，最终 -5~+5 EV / 0.2 跳，映射设备最近原生 index；
+  ③ 前置切换自动降级 4K→1080p（不留"选中但灰显"的 4K）。
+phase: "Phase 2 视频管线 follow-up（录制可配置化）"
+model_apply: "opus"       # 主会话 Opus 直跑（road-test-first 单会话 grind）
+design_decisions_diverged_during_apply:
+  - "Decision 1 形态 route 屏→overlay 浮层（road-test 反馈，已同步 design 修订note + spec 入口 Requirement 三 scenario + tasks §9.3）"
+  - "spec drift: resolveEffectiveQuality(Quality 域)→resolveEffectiveResolution(RecordingResolution 域)，为可 JVM 单测；spec 4K 降级 Requirement 已 inline 对齐（非 design Decision 修订）"
+cross_round_field_drift_resolved: []  # RecordingConfig 扩 5 字段全带默认值，仅本 round 引擎消费；RecordableCameraPreview 默认 DEFAULT 无 drift
+accelerated_escalation: null  # road-test-first 模式，非加速通道
+# --- road-test-first 落地 ---
+# commit：bddcf8a(G球) / cd49d88(lead-out) / 408e8b8(TTS) / 44c905f(录制参数主轮)，feature/track-tech-v2，未 push。
+# 注：G球/lead-out/TTS 是同批攒一起的 Phase 1 路测三条修复，与本 round 同 apk 验证，分功能拆 commit。
+# 依赖：feature/test 加 implementation(camera-camera2)（对焦 Camera2Interop，artifact 已在 classpath，非新下载）。
+# FileLogger 锚点：CamRec(bind apply effective/facing/audio/focus/ev + applyFocusInterop + applyExposure + audioEnabled)
+#                  / RecCapDetect(detect caps) / RecSettings(overlay 探测 + 前置自动降级)。
+# 真机：vivo V2405A 基本路测过（用旧路测点模拟发送）；华为 8KE0219522008434 未单独验。
+# follow-up backlog（已沉 memo / 已排期）：
+#   - 视频存储管理（round A，轻量清理，范围已定）
+#   - 视频分片数据模型（docs/design/video-segmentation-data-model-deferred.md，下个阶段）
+#   - 60fps（需 compileSdk35+CameraX1.4，round C）/ H.265（round B）/ 防抖
+#   - 录制前快捷面板（C 方案，design Decision 1 Alternative C）
