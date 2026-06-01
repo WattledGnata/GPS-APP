@@ -25,8 +25,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -85,9 +89,14 @@ fun LapSessionDetailScreen(
     // 导出入口已移到播放页（详情页不再有导出 section）。
     var lapCoverageMap by remember { mutableStateOf<Map<Int, VideoExportClip.Coverage>>(emptyMap()) }
 
+    // video-storage-cleanup round：成绩页单删视频（保留成绩）。删后 bump refreshTick 重载 session。
+    var refreshTick by remember { mutableStateOf(0) }
+    var showDeleteVideoDialog by remember { mutableStateOf(false) }
+    val deleteScope = rememberCoroutineScope()
+
     val currentTrack by sessionViewModel.currentSelectedTrack.collectAsState()
 
-    LaunchedEffect(sessionId) {
+    LaunchedEffect(sessionId, refreshTick) {
         session = telemetryRepository.getSession(sessionId)
         crossings = telemetryRepository.getCrossings(sessionId)
         // persist-session-summary-fields round 起：topSpeedKmh 直接读 entity.topSpeedKmh，
@@ -165,6 +174,27 @@ fun LapSessionDetailScreen(
     }
 
     val sessionDateLabel = session?.startTs?.let(::formatDateTime) ?: "—"
+
+    if (showDeleteVideoDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteVideoDialog = false },
+            title = { Text("删除本场视频?") },
+            text = { Text("仅删除录像文件，圈速成绩与分段数据保留。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteVideoDialog = false
+                    deleteScope.launch {
+                        telemetryRepository.deleteSessionVideo(sessionId)
+                        FileLogger.d("VideoStorage", "成绩页删视频 sid=$sessionId，成绩保留")
+                        refreshTick++
+                    }
+                }) { Text("删除", color = TrackTechColors.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteVideoDialog = false }) { Text("取消") }
+            },
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -262,6 +292,23 @@ fun LapSessionDetailScreen(
                         navController.navigate("lap_comparison/$sessionId")
                     },
                 )
+            }
+            // video-storage-cleanup round：有视频时给"删本场视频(留成绩)"入口（成绩页存储治理）
+            if (hasVideo) {
+                item {
+                    TextButton(
+                        onClick = { showDeleteVideoDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "删除本场视频（保留成绩）",
+                            style = TrackTechTypography.UiTextBody,
+                            color = TrackTechColors.Red,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
             if (table != null) {
                 // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），

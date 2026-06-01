@@ -550,7 +550,13 @@ class CameraRecordingEngine(
                             }
                         }
                     } else {
-                        FileLogger.d(TAG, "attachVideoToSession: SKIP（孤立视频 sessionId=null，不写库）")
+                        // video-storage-cleanup round：无 active session = UI 不可达孤儿 → 删（不堆垃圾，Decision 4）。
+                        // 白名单防御：只删 filesDir/video/ 下文件（outputFile 由引擎生成，必在此目录）。
+                        val deleted = outputFile.absolutePath.contains("/video/") && outputFile.delete()
+                        FileLogger.d(
+                            TAG,
+                            "Finalize: 无 session 孤儿 sessionId=null → ${if (deleted) "已删" else "未删(白名单不符/删失败)"} path=$filePath",
+                        )
                     }
 
                     // 清空临时状态字段

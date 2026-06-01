@@ -119,6 +119,13 @@ interface TelemetrySessionDao {
     )
 
     /**
+     * 置空 video 元数据（video-storage-cleanup round · 成绩页单删视频，保留圈速成绩）。
+     * 调用方负责先删视频文件；本 query 只清字段，不删 session 行。
+     */
+    @Query("UPDATE telemetry_sessions SET videoFilePath = NULL, videoStartedAtWallClock = NULL WHERE sessionId = :sessionId")
+    suspend fun clearVideo(sessionId: String)
+
+    /**
      * 按 entity 删除单条 session metadata（add-history-deletion round 引入）。
      * 由 [com.blazepush.core.data.repository.TelemetryRepository.deleteSession] 调用，
      * 调用方负责先清 crossing_events 关联行 + binary 文件 cascade。

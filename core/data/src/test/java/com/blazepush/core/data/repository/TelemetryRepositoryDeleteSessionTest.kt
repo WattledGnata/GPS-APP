@@ -185,6 +185,53 @@ class TelemetryRepositoryDeleteSessionTest {
         )
     }
 
+    // --- video-storage-cleanup round A 测试 ---
+
+    /** 成绩页单删视频：删文件 + 置空字段，session 行保留（spec 手动删 Requirement）。 */
+    @Test
+    fun `deleteSessionVideo - removes file and clears fields but keeps session`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val videoFile = File(File(tempDir, "video").apply { mkdirs() }, "v.mp4").apply { writeText("x") }
+        repo.attachVideoToSession(sessionId, videoFile.absolutePath, 123L)
+        assertTrue(videoFile.exists())
+
+        repo.deleteSessionVideo(sessionId)
+
+        assertFalse("video file deleted", videoFile.exists())
+        val entity = fakeSessionDao.queryBySessionId(sessionId)
+        assertNotNull("session row kept", entity)
+        assertNull("videoFilePath cleared", entity?.videoFilePath)
+    }
+
+    /** 同 session 重录覆盖前删旧文件（spec 重录 Requirement）。 */
+    @Test
+    fun `attachVideoToSession - deletes old file on re-record`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val videoDir = File(tempDir, "video").apply { mkdirs() }
+        val oldFile = File(videoDir, "old.mp4").apply { writeText("o") }
+        val newFile = File(videoDir, "new.mp4").apply { writeText("n") }
+        repo.attachVideoToSession(sessionId, oldFile.absolutePath, 100L)
+
+        repo.attachVideoToSession(sessionId, newFile.absolutePath, 200L)
+
+        assertFalse("old file deleted on re-record", oldFile.exists())
+        assertTrue("new file kept", newFile.exists())
+        assertEquals(newFile.absolutePath, fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
+    }
+
+    /** 白名单外路径不删文件（spec 删除安全反例），但字段仍置空。 */
+    @Test
+    fun `deleteSessionVideo - whitelist rejects path outside video or telemetry`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val strayFile = File(tempDir, "stray.mp4").apply { writeText("x") }
+        repo.attachVideoToSession(sessionId, strayFile.absolutePath, 100L)
+
+        repo.deleteSessionVideo(sessionId)
+
+        assertTrue("stray file NOT deleted (whitelist)", strayFile.exists())
+        assertNull(fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
+    }
+
     // --- Fake DAO 实现（与 baseline TelemetryRepositoryTest 同款） ---
 
     private class FakeTelemetrySessionDao : TelemetrySessionDao {
@@ -235,8 +282,14 @@ class TelemetryRepositoryDeleteSessionTest {
         override fun getRecentSessionsForTrack(trackId: String, limit: Int) =
             kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
 
-        // session-video-metadata-persist round：同步 abstract 方法。本套件不消费视频路径，no-op。
+        // video-storage-cleanup round：升级为真存（A 测试消费视频路径）。
+        override suspend fun clearVideo(sessionId: String) {
+            val idx = sessions.indexOfFirst { it.sessionId == sessionId }
+            if (idx >= 0) sessions[idx] = sessions[idx].copy(videoFilePath = null, videoStartedAtWallClock = null)
+        }
         override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {
+            val idx = sessions.indexOfFirst { it.sessionId == sessionId }
+            if (idx >= 0) sessions[idx] = sessions[idx].copy(videoFilePath = videoFilePath, videoStartedAtWallClock = videoStartedAtWallClock)
         }
 
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {

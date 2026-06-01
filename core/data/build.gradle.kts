@@ -32,6 +32,11 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+    testOptions {
+        // 与 core/bluetooth / feature:test 对齐：JVM 单测里 android.util.Log 等返回默认值不抛
+        // （video-storage-cleanup round：A 测试首次在 core/data 跑到 repository 的 Log.d 路径）。
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

@@ -225,6 +225,7 @@ class TelemetryRepositoryTest {
             kotlinx.coroutines.flow.flowOf<List<TelemetrySessionEntity>>(emptyList())
 
         // session-video-metadata-persist round：同步 abstract 方法。本套件不消费视频路径，no-op。
+        override suspend fun clearVideo(sessionId: String) {}
         override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {
         }
 

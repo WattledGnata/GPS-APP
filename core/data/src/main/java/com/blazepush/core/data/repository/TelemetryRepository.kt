@@ -260,24 +260,42 @@ class TelemetryRepository(
                 file.delete()
             }
         }
-        // 删视频文件（session-video-metadata-persist round）
-        val videoPath = entity.videoFilePath
-        if (videoPath != null) {
-            val videoFile = File(videoPath)
-            val allowedPaths = listOf("/telemetry/", "/video/")
-            val canonicalPath = videoFile.canonicalPath
-            if (allowedPaths.any { canonicalPath.contains(it) }) {
-                if (!videoFile.exists()) {
-                    Log.d("deleteSession", "video file not found, skip: $videoPath")
-                } else if (videoFile.delete()) {
-                    Log.d("deleteSession", "deleted video: $videoPath")
-                } else {
-                    Log.e("deleteSession", "failed to delete video: $videoPath")
-                }
-            } else {
-                Log.d("deleteSession", "video path not in whitelist, skip: $videoPath")
-            }
+        // 删视频文件（session-video-metadata-persist round；video-storage-cleanup round 抽 helper 复用）
+        deleteVideoFileIfPresent(entity.videoFilePath, "deleteSession")
+    }
+
+    /**
+     * 统一视频文件删除（video-storage-cleanup round · Decision 5）。
+     * 白名单（canonicalPath 含 `/video/` 或 `/telemetry/`）防路径穿越；不存在 skip；删失败埋日志不抛。
+     * deleteSession / attachVideoToSession(删旧) / deleteSessionVideo 三处复用，白名单单点维护。
+     */
+    private fun deleteVideoFileIfPresent(videoPath: String?, tag: String) {
+        if (videoPath == null) return
+        val videoFile = File(videoPath)
+        val canonicalPath = videoFile.canonicalPath
+        val allowedPaths = listOf("/telemetry/", "/video/")
+        if (allowedPaths.none { canonicalPath.contains(it) }) {
+            Log.d(tag, "video path not in whitelist, skip: $videoPath")
+            return
         }
+        if (!videoFile.exists()) {
+            Log.d(tag, "video file not found, skip: $videoPath")
+        } else if (videoFile.delete()) {
+            Log.d(tag, "deleted video: $videoPath")
+        } else {
+            Log.e(tag, "failed to delete video: $videoPath")
+        }
+    }
+
+    /**
+     * 单删 session 视频（video-storage-cleanup round · 成绩页"删视频"，保留圈速成绩）。
+     * 删视频文件 + 置空 video 字段；MUST NOT 动圈速 / crossing / binary / session 行。
+     */
+    suspend fun deleteSessionVideo(sessionId: String) {
+        val entity = sessionDao.queryBySessionId(sessionId) ?: return
+        deleteVideoFileIfPresent(entity.videoFilePath, "deleteSessionVideo")
+        sessionDao.clearVideo(sessionId)
+        Log.d("deleteSessionVideo", "video removed, lap data kept: sessionId=$sessionId")
     }
 
     /**
@@ -295,6 +313,11 @@ class TelemetryRepository(
         videoFilePath: String,
         videoStartedAtWallClock: Long,
     ) {
+        // video-storage-cleanup round：覆盖前删旧文件（同 session 重录的源头断孤儿）。
+        val oldPath = sessionDao.queryBySessionId(sessionId)?.videoFilePath
+        if (oldPath != null && oldPath != videoFilePath) {
+            deleteVideoFileIfPresent(oldPath, "attachVideoToSession-replaceOld")
+        }
         sessionDao.updateVideoMetadata(
             sessionId = sessionId,
             videoFilePath = videoFilePath,

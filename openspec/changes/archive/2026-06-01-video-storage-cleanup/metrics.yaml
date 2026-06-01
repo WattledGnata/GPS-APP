@@ -1,0 +1,29 @@
+estimated_days: 0.5
+actual_days: 0.4
+complexity: "small"      # 2 module（core/data + feature/test）、无 schema 改、无新依赖
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: >
+  user 否决"全盘目录扫描清理"（脆弱 + 撞未来视频分片），改生命周期驱动删除：
+  重录删旧（attach 内）+ 成绩页手动删视频保留成绩 + 无 session 录制 Finalize 自动删孤儿。
+  抽 deleteVideoFileIfPresent helper 三处复用，白名单单点维护。
+phase: "Phase 2 视频管线 follow-up（存储治理）"
+model_apply: "opus"
+design_decisions_diverged_during_apply: []   # 无 design Decision drift
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 改动：core/data TelemetryRepository(helper + attach 删旧 + deleteSessionVideo) + TelemetrySessionDao(clearVideo)
+#       + feature/test CameraRecordingEngine(无 session Finalize 删孤儿) + LapSessionDetailScreen(删视频按钮+确认+刷新)。
+# 盲点 #14：clearVideo 加到 interface 后，8 个 fake TelemetrySessionDao 全补 stub（脚本批量）。
+# 测试基建：core/data 补 testOptions.unitTests.isReturnDefaultValues=true（与 bluetooth/feature:test 对齐，
+#           本 round 首次在 core/data 跑到 repository 的 Log.d 路径）。
+# 单测：TelemetryRepositoryDeleteSessionTest 加 3 个 A 测试（删视频保留成绩 / 重录删旧 / 白名单拒删），全绿。
+# FileLogger 锚点：CamRec(Finalize 无 session 孤儿删) / VideoStorage(成绩页删视频)。
+# 真机（攒批待 user）：① 同 session 重录旧文件不留 ② 成绩页删视频后成绩仍在、回放入口消失 ③ 无 session 录制不留文件。
+# follow-up：存量孤儿一次性 reconcile（不扫地，留分片阶段）；分片落地后钩子平移按段删。见 video-segmentation-data-model-deferred.md。
