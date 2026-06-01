@@ -201,10 +201,8 @@ fun DeviceHomeScreen(
             TrackTechRow(
                 leadingIcon = Icons.Filled.Settings,
                 title = "SETTINGS",
-                subtitle = "Units · Voice · Auto reconnect",
-                onClick = {
-                    Toast.makeText(context, "Settings · coming in next round", Toast.LENGTH_SHORT).show()
-                },
+                subtitle = "车手显示名 · 更多设置",
+                onClick = { navController.navigate("settings") },
             )
         }
 

@@ -1,0 +1,27 @@
+estimated_days: 0.3
+actual_days: 0.2
+complexity: "small"      # 单 module、无 schema、无网络；DataStore + 一个设置屏
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: >
+  livetiming lap-upload `driver` 必填，App 无用户概念 → 填空 DeviceHomeScreen 的 SETTINGS 占位，
+  加车手显示名（DataStore 存 + 独立 SettingsScreen）。范围最小（只一个 driver 字段，user 拍板"只车手显示名"）。
+phase: "livetiming 接入第一步（本地身份）"
+model_apply: "opus"
+design_decisions_diverged_during_apply: []
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# --- road-test-first 落地 ---
+# 改动：新增 datastore/UserProfileRepository + ui/settings/SettingsScreen；改 AppModule(DI) /
+#       TrackTechAppShell(route settings) / DeviceHomeScreen(SETTINGS Toast→navigate)。
+# 形态决策：通用设置用独立 route 屏（区别于录制设置 overlay——后者要贴预览看实时效果，通用设置无此诉求）。
+# 单测：UserProfileRepositoryTest 3 个（空默认/写读/覆盖）全绿。
+# FileLogger 锚点：UserProfile(driverName set)。
+# 真机（攒批待 user）：Device tab→SETTINGS→填名→重进保留；SETTINGS 不再弹 Toast。
+# follow-up：默认名预填(carModel/蓝牙名)；设置页扩展(单位/语音接 VoiceAnnouncer.setEnabled/自动重连)；
+#            livetiming 网络批 E(INTERNET+HTTP)/F(track-delivery)/G(lap-upload)。

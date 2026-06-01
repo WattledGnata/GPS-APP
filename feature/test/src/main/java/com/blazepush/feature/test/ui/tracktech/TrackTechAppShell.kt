@@ -30,6 +30,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import com.blazepush.feature.test.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -157,6 +158,9 @@ fun TrackTechAppShell() {
                 }
                 composable("gps_details") {
                     GpsDetailsScreen(navController = navController)
+                }
+                composable("settings") {
+                    SettingsScreen(navController = navController)
                 }
                 composable("lap_live") {
                     LapLiveScreen(

@@ -7,6 +7,7 @@ import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.feature.test.recording.CameraRecordingEngine
 import com.blazepush.feature.test.recording.RecordingCapabilityDetector
 import com.blazepush.feature.test.datastore.RecordingPreferencesRepository
+import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
@@ -89,6 +90,8 @@ val repositoryModule = module {
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
     single { TelemetryRepository(androidContext(), get(), get()) }
+    // driver-display-name round：车手显示名（livetiming lap-upload driver 本地前置）
+    single { UserProfileRepository(androidContext()) }
     // round `replace-nearby-tracks-with-recent-strip` §2.2：接口为 key、生产 RecentTracksStore 实例为 value
     single<RecentTracksStoreApi> { RecentTracksStore(androidContext()) }
 }
