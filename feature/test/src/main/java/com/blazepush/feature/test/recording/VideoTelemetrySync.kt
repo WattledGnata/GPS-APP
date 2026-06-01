@@ -82,21 +82,24 @@ object VideoTelemetrySync {
      * 按圈回放的圈时间轴范围（playhead wallClock 域），统一加"圈起点前导秒"。
      *
      * 起点 = lapStartWallClock - leadInMs（默认 3000ms，进圈前提前展示进弯准备）；
-     * 终点 = lapEndWallClock（圈播完即停，不自动续下一圈）。
+     * 终点 = lapEndWallClock + leadOut（圈尾后留收尾余量；播完即停，不自动续下一圈）。
      *
      * @param lapStartWallClock 该圈开圈 crossing 真壁钟
      * @param lapEndWallClock   该圈收圈 crossing 真壁钟
-     * @param leadInMs          圈起点前导毫秒（默认 3000）
-     * @return [startWallClock, endWallClock]（startWallClock 已减 leadIn；保证 start <= end）
+     * @param leadInMs          圈起点前导毫秒（默认 [LAP_LEAD_IN_MS]=3000）
+     * @param leadOutMs         圈终点收尾毫秒（默认 [LAP_LEAD_OUT_MS]=3000；圈尾后多留这么久）
+     * @return [startWallClock, endWallClock]（start 已减 leadIn、end 已加 leadOut；保证 start <= end）
      */
     fun lapPlayheadRange(
         lapStartWallClock: Long,
         lapEndWallClock: Long,
         leadInMs: Long = LAP_LEAD_IN_MS,
+        leadOutMs: Long = LAP_LEAD_OUT_MS,
     ): LongRange {
         val start = lapStartWallClock - leadInMs
-        // 防御：异常圈（end < start）退化成单点区间，避免空 range 让 ticker 立刻停。
-        val end = if (lapEndWallClock < start) start else lapEndWallClock
+        val rawEnd = lapEndWallClock + leadOutMs
+        // 防御：异常圈（rawEnd < start）退化成单点区间，避免空 range 让 ticker 立刻停。
+        val end = if (rawEnd < start) start else rawEnd
         return start..end
     }
 
@@ -146,4 +149,6 @@ object VideoTelemetrySync {
     }
 
     const val LAP_LEAD_IN_MS: Long = 3000L
+
+    const val LAP_LEAD_OUT_MS: Long = 3000L
 }

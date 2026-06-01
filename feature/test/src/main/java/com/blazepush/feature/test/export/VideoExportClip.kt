@@ -18,13 +18,14 @@ import com.blazepush.feature.test.recording.VideoTelemetrySync
  *
  * ## 裁剪范围
  *
- * 导出段 = 圈时间轴 [lapStart - leadIn, lapEnd]（[VideoTelemetrySync.lapPlayheadRange]）与视频覆盖段的
- * 交集，转成视频内 position（[VideoTelemetrySync.playheadToVideoPosition]）：
+ * 导出段 = 圈时间轴 [lapStart - leadIn, lapEnd + leadOut]（[VideoTelemetrySync.lapPlayheadRange]）与视频
+ * 覆盖段的交集，转成视频内 position（[VideoTelemetrySync.playheadToVideoPosition]）：
  * - 起点 position = max(playheadStart, videoStart) - videoStart（前导 leadIn 段超覆盖时钳到视频起点 0）
- * - 终点 position = min(playheadEnd, videoEnd) - videoStart
+ * - 终点 position = min(playheadEnd, videoEnd) - videoStart（收尾 leadOut 段超覆盖时钳到视频终点）
  *
  * 注意：完整覆盖 gate 只约束圈本体；leadIn 前导段允许超出视频起点被钳（spec "圈头早于视频起点" scenario）。
- * 因此完整覆盖的圈，起点 position 可能因 leadIn 被钳到 0，终点 position = lapEnd 对应位置。
+ * 因此完整覆盖的圈，起点 position 可能因 leadIn 被钳到 0，终点 position = (lapEnd + leadOut) 对应位置
+ * （leadOut 收尾段超视频终点时钳到视频末）。
  *
  * @author CC
  * @description per-lap export clip + full-coverage pure functions
@@ -125,7 +126,7 @@ object VideoExportClip {
     /**
      * 计算导出裁剪范围（视频内起止 position）。
      *
-     * 导出段 = [lapStart - leadIn, lapEnd] ∩ [videoStart, videoEnd]，转成视频内 position。
+     * 导出段 = [lapStart - leadIn, lapEnd + leadOut] ∩ [videoStart, videoEnd]，转成视频内 position。
      * 调用前应已用 [isLapFullyCovered] gate（圈本体完整覆盖）；本函数仍做交集为空兜底（抛 [EmptyClipException]）。
      *
      * @param lapStartWallClock 圈开圈 wallClock
@@ -133,6 +134,7 @@ object VideoExportClip {
      * @param videoStartedAtWallClock 视频录制开始 wallClock
      * @param videoDurationMs   视频时长毫秒
      * @param leadInMs          圈起点前导毫秒（默认 [VideoTelemetrySync.LAP_LEAD_IN_MS]=3000）
+     * @param leadOutMs         圈终点收尾毫秒（默认 [VideoTelemetrySync.LAP_LEAD_OUT_MS]=3000）
      * @return [ClipRange]（start < end）
      * @throws EmptyClipException 交集为空（圈与视频覆盖段无重叠）
      */
@@ -142,8 +144,11 @@ object VideoExportClip {
         videoStartedAtWallClock: Long,
         videoDurationMs: Long,
         leadInMs: Long = VideoTelemetrySync.LAP_LEAD_IN_MS,
+        leadOutMs: Long = VideoTelemetrySync.LAP_LEAD_OUT_MS,
     ): ClipRange {
-        val range = VideoTelemetrySync.lapPlayheadRange(lapStartWallClock, lapEndWallClock, leadInMs)
+        val range = VideoTelemetrySync.lapPlayheadRange(
+            lapStartWallClock, lapEndWallClock, leadInMs, leadOutMs,
+        )
         val playheadStart = range.first
         val playheadEnd = range.last
         val videoEnd = videoStartedAtWallClock + videoDurationMs

@@ -196,13 +196,13 @@ class VideoTelemetrySyncTest {
     // ────────────────────────────────────────────────────────────────
 
     @Test
-    fun `lapPlayheadRange - 起点减默认前导3秒 终点为lapEnd`() {
+    fun `lapPlayheadRange - 起点减默认前导3秒 终点加默认收尾3秒`() {
         val r = VideoTelemetrySync.lapPlayheadRange(
             lapStartWallClock = 100_000L,
             lapEndWallClock = 190_000L,
         )
         assertEquals(97_000L, r.first) // 100_000 - 3000
-        assertEquals(190_000L, r.last)
+        assertEquals(193_000L, r.last) // 190_000 + 3000
     }
 
     @Test
@@ -213,15 +213,27 @@ class VideoTelemetrySyncTest {
             leadInMs = 5_000L,
         )
         assertEquals(95_000L, r.first)
-        assertEquals(190_000L, r.last)
+        assertEquals(193_000L, r.last) // 默认收尾 3000：190_000 + 3000
     }
 
     @Test
-    fun `lapPlayheadRange - 异常圈end小于start减前导后退化为单点区间`() {
-        // lapEnd 比 (lapStart - leadIn) 还早（异常数据）→ end clamp 到 start，避免空 range
+    fun `lapPlayheadRange - 自定义收尾秒`() {
         val r = VideoTelemetrySync.lapPlayheadRange(
             lapStartWallClock = 100_000L,
-            lapEndWallClock = 96_000L, // < 97_000 起点
+            lapEndWallClock = 190_000L,
+            leadOutMs = 5_000L,
+        )
+        assertEquals(97_000L, r.first) // 默认前导 3000
+        assertEquals(195_000L, r.last) // 190_000 + 5000
+    }
+
+    @Test
+    fun `lapPlayheadRange - 异常圈end加收尾后仍早于start减前导 退化为单点区间`() {
+        // lapEnd + leadOut 仍比 (lapStart - leadIn) 还早（异常数据）→ end clamp 到 start，避免空 range
+        // start = 100_000 - 3000 = 97_000；rawEnd = 90_000 + 3000 = 93_000 < 97_000 → clamp
+        val r = VideoTelemetrySync.lapPlayheadRange(
+            lapStartWallClock = 100_000L,
+            lapEndWallClock = 90_000L,
         )
         assertEquals(97_000L, r.first)
         assertEquals(97_000L, r.last)
@@ -230,6 +242,11 @@ class VideoTelemetrySyncTest {
     @Test
     fun `lapPlayheadRange - 默认前导秒常量为3000`() {
         assertEquals(3000L, VideoTelemetrySync.LAP_LEAD_IN_MS)
+    }
+
+    @Test
+    fun `lapPlayheadRange - 默认收尾秒常量为3000`() {
+        assertEquals(3000L, VideoTelemetrySync.LAP_LEAD_OUT_MS)
     }
 
     // ────────────────────────────────────────────────────────────────

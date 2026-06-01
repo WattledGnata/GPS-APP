@@ -183,13 +183,13 @@ class VideoExportClipTest {
     // ────────────────────────────────────────────────────────────────
 
     @Test
-    fun `圈完整覆盖且 leadIn 不超界 - 裁剪范围对应 lapStart 减 leadIn 到 lapEnd 的 position`() {
-        // 圈 [10000, 40000]，leadIn=3000 → playhead [7000, 40000]
-        // 均在 [1000, 61000] 内 → 起点 position = 7000-1000=6000，终点 = 40000-1000=39000
+    fun `圈完整覆盖且 leadIn leadOut 不超界 - 裁剪范围含前导与收尾余量`() {
+        // 圈 [10000, 40000]，leadIn=3000、leadOut=3000 → playhead [7000, 43000]
+        // 均在 [1000, 61000] 内 → 起点 position = 7000-1000=6000，终点 = 43000-1000=42000
         val clip = VideoExportClip.computeClipRange(10_000L, 40_000L, videoStart, videoDuration)
         assertEquals(6_000L, clip.startPositionMs)
-        assertEquals(39_000L, clip.endPositionMs)
-        assertEquals(33_000L, clip.durationMs)
+        assertEquals(42_000L, clip.endPositionMs)
+        assertEquals(36_000L, clip.durationMs)
     }
 
     @Test
@@ -202,7 +202,7 @@ class VideoExportClipTest {
         )
         val clip = VideoExportClip.computeClipRange(2_000L, 40_000L, videoStart, videoDuration)
         assertEquals(0L, clip.startPositionMs)
-        assertEquals(39_000L, clip.endPositionMs)
+        assertEquals(42_000L, clip.endPositionMs) // 圈尾 40000 + leadOut 3000 = 43000 → position 42000
     }
 
     @Test
@@ -227,10 +227,20 @@ class VideoExportClipTest {
     fun `裁剪起点终点与 VideoTelemetrySync playheadToVideoPosition 同源`() {
         // 验证裁剪范围确实由 playheadToVideoPosition 派生（同一函数口径，不另起一套）
         val clip = VideoExportClip.computeClipRange(20_000L, 50_000L, videoStart, videoDuration)
-        // playheadStart = 20000-3000 = 17000 → pos = 17000-1000 = 16000
+        // playheadStart = 20000-3000 = 17000；playheadEnd = 50000+3000 = 53000
         val expectedStart = VideoTelemetrySync.playheadToVideoPosition(17_000L, videoStart, videoDuration)
-        val expectedEnd = VideoTelemetrySync.playheadToVideoPosition(50_000L, videoStart, videoDuration)
+        val expectedEnd = VideoTelemetrySync.playheadToVideoPosition(53_000L, videoStart, videoDuration)
         assertEquals(expectedStart, clip.startPositionMs)
         assertEquals(expectedEnd, clip.endPositionMs)
+    }
+
+    @Test
+    fun `圈尾贴近视频终点 - leadOut 收尾段超视频终点时钳到视频末`() {
+        // 圈 [10000, 60000]，lapEnd=60000 <= videoEnd=61000（完整覆盖、可导）
+        // leadOut 尾 = 60000+3000 = 63000 > videoEnd 61000 → 终点钳到 videoEnd
+        // 终点 position = min(63000,61000)-1000 = 60000
+        val clip = VideoExportClip.computeClipRange(10_000L, 60_000L, videoStart, videoDuration)
+        assertEquals(6_000L, clip.startPositionMs) // 10000-3000-1000
+        assertEquals(60_000L, clip.endPositionMs)
     }
 }
