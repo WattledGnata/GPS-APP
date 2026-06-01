@@ -680,7 +680,7 @@ private fun SpeedCorner(
 
 /**
  * 右上 G 值角标：round redo-video-overlay-visual-gauges 起改为摩擦圆 / G 球（[GForceBall]），
- * 替换原 G 数字。横轴=横向 G（过弯）、纵轴=纵向 G（加速向上 / 制动向下），±1.5G 映射半径边界。
+ * 替换原 G 数字。横轴=横向 G（过弯）、纵轴=纵向 G（减速向上 / 加速向下，仿飞机摇杆惯例），±1.5G 映射半径边界。
  */
 @Composable
 private fun GForceCorner(

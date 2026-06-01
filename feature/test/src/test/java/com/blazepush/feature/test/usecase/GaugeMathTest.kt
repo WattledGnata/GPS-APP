@@ -68,17 +68,17 @@ class GaugeMathTest {
     }
 
     @Test
-    fun `Scenario 5 - 满量程加速（纵向 +maxG）点在正上方（y=-1）`() {
+    fun `Scenario 5 - 满量程加速（纵向 +maxG）点在正下方（y=+1）`() {
         val (x, y) = GaugeMath.gForceToBallOffset(latG = 0.0, lonG = GaugeMath.GBALL_MAX_G)
         assertEquals(0.0, x, eps)
-        assertEquals(-1.0, y, eps) // 加速向上：Canvas y 负
+        assertEquals(1.0, y, eps) // 加速向下：Canvas y 正（仿飞机摇杆惯例）
     }
 
     @Test
-    fun `Scenario 6 - 满量程制动（纵向 -maxG）点在正下方（y=+1）`() {
+    fun `Scenario 6 - 满量程制动（纵向 -maxG）点在正上方（y=-1）`() {
         val (x, y) = GaugeMath.gForceToBallOffset(latG = 0.0, lonG = -GaugeMath.GBALL_MAX_G)
         assertEquals(0.0, x, eps)
-        assertEquals(1.0, y, eps) // 制动向下：Canvas y 正
+        assertEquals(-1.0, y, eps) // 减速向上：Canvas y 负（仿飞机摇杆惯例）
     }
 
     @Test
@@ -99,21 +99,21 @@ class GaugeMathTest {
         // 横向 + 纵向各满量程 → 合成 sqrt(2) > 1 → clamp 到边界，|v|==1，方向 45°
         val (x, y) = GaugeMath.gForceToBallOffset(
             latG = GaugeMath.GBALL_MAX_G,
-            lonG = -GaugeMath.GBALL_MAX_G, // 制动 → y 正
+            lonG = -GaugeMath.GBALL_MAX_G, // 制动 → y 负（向上）
         )
         val len = sqrt(x * x + y * y)
         assertEquals(1.0, len, 1e-6)
-        // 方向保持：x>0（右）、y>0（制动向下），且等比 → x≈y
-        assertTrue(x > 0.0 && y > 0.0)
-        assertEquals(x, y, 1e-6)
+        // 方向保持：x>0（右）、y<0（制动向上），且等比 → x≈-y
+        assertTrue(x > 0.0 && y < 0.0)
+        assertEquals(x, -y, 1e-6)
     }
 
     @Test
     fun `反例 - 量程内合成 G 不被 clamp（保留原比例）`() {
-        // 横向 0.75G、纵向 0.6G、量程 1.5 → nx=0.5, ny=-0.4，|v|<1 不 clamp
+        // 横向 0.75G、纵向 0.6G（加速）、量程 1.5 → nx=0.5, ny=+0.4，|v|<1 不 clamp
         val (x, y) = GaugeMath.gForceToBallOffset(latG = 0.75, lonG = 0.6)
         assertEquals(0.5, x, eps)
-        assertEquals(-0.4, y, eps)
+        assertEquals(0.4, y, eps)
     }
 
     @Test

@@ -88,7 +88,8 @@ object GaugeMath {
      *
      * 坐标系（Compose Canvas，y 向下）：
      * - x = latG / maxG（横向 G / 过弯：右弯产生向右的向心 → 正 latG 在右；负在左）。
-     * - y = -lonG / maxG（纵向 G：加速 lonG>0 → 点**向上**（y 负）；制动 lonG<0 → 点**向下**（y 正））。
+     * - y = lonG / maxG（纵向 G：加速 lonG>0 → 点**向下**（y 正）；制动 lonG<0 → 点**向上**（y 负）。
+     *   仿飞机摇杆/赛车惯例：减速时 G 球上扬、加速时下沉）。
      * - 向量长度超 1（即合成 G > maxG）→ 等比 clamp 到单位圆边界（保方向，落在圆周上不越界）。
      *
      * 返回的 (x, y) ∈ 单位圆（|v| <= 1）；调用方 center + Offset(x*r, y*r) 即像素位置。
@@ -108,7 +109,7 @@ object GaugeMath {
     ): Pair<Double, Double> {
         if (maxG <= 0.0) return 0.0 to 0.0
         val nx = latG / maxG
-        val ny = -lonG / maxG // 加速向上（Canvas y 负），制动向下
+        val ny = lonG / maxG // 减速向上（Canvas y 负），加速向下（y 正）—— 仿飞机摇杆惯例
         val len = sqrt(nx * nx + ny * ny)
         return if (len <= 1.0) {
             nx to ny
