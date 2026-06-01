@@ -5,6 +5,8 @@ import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.feature.test.datastore.RecentTracksStore
 import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.feature.test.recording.CameraRecordingEngine
+import com.blazepush.feature.test.recording.RecordingCapabilityDetector
+import com.blazepush.feature.test.datastore.RecordingPreferencesRepository
 import com.blazepush.core.bluetooth.BluetoothDataSource
 import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
@@ -140,6 +142,9 @@ private inline fun <reified T : Throwable> Throwable.findInCauseChain(): T? {
 val recordingModule = module {
     // CameraRecordingEngine 为 single（同一 LapLiveScreen 实例共享引擎状态）
     single { CameraRecordingEngine(get()) }
+    // recording-params-config-screen round：录制参数持久化 + 设备能力探测
+    single { RecordingPreferencesRepository(androidContext()) }
+    single { RecordingCapabilityDetector() }
 }
 
 /**

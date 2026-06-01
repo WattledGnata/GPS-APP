@@ -2,10 +2,18 @@
 package com.blazepush.feature.test.recording
 
 import android.content.Context
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
 import androidx.annotation.MainThread
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.DynamicRange
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -89,6 +97,12 @@ class CameraRecordingEngine(
     private var isBound = false
     private var boundLifecycleOwner: LifecycleOwner? = null
 
+    // recording-params-config-screen round：
+    // - boundConfig 记当前生效 config，供 startRecording 读 audioEnabled + 幂等守卫比对（config 变才 rebind）
+    // - camera 句柄供曝光控制（cameraControl.setExposureCompensationIndex）
+    private var boundConfig: RecordingConfig? = null
+    private var camera: Camera? = null
+
     // Start 事件时持久化，供 Finalize 分支读取（即使 state 已从 Recording 变 Stopping）
     // 仅在 MainExecutor 回调内读写，无竞态
     private var _capturedWallClock: Long = 0L
@@ -125,9 +139,10 @@ class CameraRecordingEngine(
         context: Context,
         config: RecordingConfig = RecordingConfig.DEFAULT,
     ) {
-        // Bug B 修复：幂等守卫——同一 lifecycleOwner 已绑定时直接 no-op，防 isRecording key 抖动重复 bind 打断录制。
-        if (isBound && boundLifecycleOwner === lifecycleOwner) {
-            FileLogger.d(TAG, "bind: no-op（已绑定同一 lifecycleOwner=${lifecycleOwner::class.simpleName}），幂等跳过")
+        // Bug B 修复：幂等守卫——同一 lifecycleOwner + 同 config 已绑定时直接 no-op，防 isRecording key 抖动重复 bind 打断录制。
+        // config 变化（用户改录制参数返回）时不 no-op，落到下方重新 bind 应用新参数（design Decision 7）。
+        if (isBound && boundLifecycleOwner === lifecycleOwner && boundConfig == config) {
+            FileLogger.d(TAG, "bind: no-op（已绑定同一 lifecycleOwner + 同 config），幂等跳过")
             return
         }
         FileLogger.d(TAG, "bind: lifecycleOwner=${lifecycleOwner::class.simpleName} config=$config isBound=$isBound")
@@ -137,32 +152,57 @@ class CameraRecordingEngine(
             val bindResult = runCatching {
                 val cameraProvider = cameraProviderFuture.get()
 
-                val newPreview = Preview.Builder().build()
+                // 摄像头朝向（recording-params-config-screen round · spec 前后置 Requirement）
+                val selector = when (config.cameraFacing) {
+                    CameraFacing.BACK -> CameraSelector.DEFAULT_BACK_CAMERA
+                    CameraFacing.FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
+                }
+
+                // 设备能力 → 实际生效分辨率（4K 不支持降级；spec Decision 5 / memo M2）
+                val supportedRes = selector.filter(cameraProvider.availableCameraInfos).firstOrNull()
+                    ?.let { runCatching { Recorder.getVideoCapabilities(it).getSupportedQualities(DynamicRange.SDR) }.getOrDefault(emptyList()) }
+                    ?.mapNotNull { q -> q.toRecordingResolutionOrNull() }
+                    ?.toSet()
+                    ?.ifEmpty { setOf(RecordingResolution.FHD_1080P) }
+                    ?: setOf(RecordingResolution.FHD_1080P)
+                val effectiveRes = resolveEffectiveResolution(config.resolution, supportedRes)
+
+                // 对焦：LOCKED_INFINITY → Camera2Interop 锁无限远；CONTINUOUS_AUTO 不附加（走 HAL 默认）
+                val previewBuilder = Preview.Builder()
+                applyFocusInterop(previewBuilder, config.focusMode)
+                val newPreview = previewBuilder.build()
                 // 不设 surface：surface 由 attachPreviewSurface 独立驱动
                 // 若已有 pendingPreviewView（attach 先于 bind 到达），bind 后补连（Bug A 修复路径）
 
+                // 清晰度：fromOrderedList + FallbackStrategy（绝不 from(UHD)，spec 反例 / memo M2）
                 val recorder = Recorder.Builder()
-                    .setQualitySelector(
-                        when (config.resolution) {
-                            RecordingResolution.FHD_1080P -> QualitySelector.from(Quality.FHD)
-                        }
-                    )
+                    .setQualitySelector(buildQualitySelector(effectiveRes))
                     .build()
                 val vc = VideoCapture.withOutput(recorder)
 
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                val cam = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    selector,
                     newPreview,
                     vc,
                 )
-                Pair(newPreview, vc)
+                // 曝光：clamp 到设备范围再下发（spec 曝光反例 / memo M5）
+                applyExposure(cam, config.exposureCompensationEv)
+
+                FileLogger.d(
+                    TAG,
+                    "bind apply: req=${config.resolution} effective=$effectiveRes facing=${config.cameraFacing} " +
+                        "audio=${config.audioEnabled} focus=${config.focusMode} ev=${config.exposureCompensationEv}",
+                )
+                Triple(newPreview, vc, cam)
             }
 
-            bindResult.onSuccess { (newPreview, vc) ->
+            bindResult.onSuccess { (newPreview, vc, cam) ->
                 preview = newPreview
                 videoCapture = vc
+                camera = cam
+                boundConfig = config
                 isBound = true
                 boundLifecycleOwner = lifecycleOwner
                 // Bug A 修复：bind 成功后检查 pendingPreviewView，若 attach 已先行到达则补连 surface。
@@ -176,6 +216,8 @@ class CameraRecordingEngine(
             }.onFailure { t ->
                 preview = null
                 videoCapture = null
+                camera = null
+                boundConfig = null
                 isBound = false
                 boundLifecycleOwner = null
                 val msg = "bind 失败: ${t.message}"
@@ -211,6 +253,8 @@ class CameraRecordingEngine(
         }
         preview = null
         videoCapture = null
+        camera = null
+        boundConfig = null
         isBound = false
         boundLifecycleOwner = null
         FileLogger.d(TAG, "unbind: camera 已释放 reason=$reason")
@@ -346,9 +390,12 @@ class CameraRecordingEngine(
         // 将 sessionId 持久化到实例字段，供 Finalize 分支读取（不依赖 state 值）
         _capturedSessionId = activeSessionId
 
+        // 麦克风：按 bind 时生效 config 的 audioEnabled 条件调用（spec 麦克风 Requirement）
+        val audioEnabled = boundConfig?.audioEnabled ?: true
         val pendingRecording = vc.output
             .prepareRecording(context, outputOptions)
-            .withAudioEnabled()
+            .let { if (audioEnabled) it.withAudioEnabled() else it }
+        FileLogger.d(TAG, "startRecording: audioEnabled=$audioEnabled")
 
         val recording = pendingRecording.start(
             ContextCompat.getMainExecutor(context),
@@ -522,6 +569,49 @@ class CameraRecordingEngine(
                 FileLogger.v(TAG, "VideoRecordEvent: 未处理事件类型 ${event::class.simpleName}")
             }
         }
+    }
+
+    // =========================================================================
+    // recording-params-config-screen round：config 参数 → CameraX 应用
+    // =========================================================================
+
+    /**
+     * 按生效分辨率构造 QualitySelector。fromOrderedList + FallbackStrategy，
+     * 设备不支持首选档时自动降级，绝不用 from(UHD)（在不支持设备上直接崩，spec 反例 / memo M2）。
+     */
+    private fun buildQualitySelector(res: RecordingResolution): QualitySelector {
+        val primary = res.toQuality()
+        val ordered = listOf(primary, Quality.FHD, Quality.HD, Quality.SD).distinct()
+        return QualitySelector.fromOrderedList(ordered, FallbackStrategy.lowerQualityOrHigherThan(primary))
+    }
+
+    /**
+     * 对焦：LOCKED_INFINITY 时对 Preview.Builder 附加 Camera2Interop（AF_MODE_OFF + LENS_FOCUS_DISTANCE=0f）。
+     * CONTINUOUS_AUTO 不附加，走 HAL 默认连续自动对焦。设备不支持 manual AF 时 HAL 忽略 option，安全退化不崩。
+     */
+    @OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun applyFocusInterop(builder: Preview.Builder, mode: FocusMode) {
+        if (mode != FocusMode.LOCKED_INFINITY) return
+        Camera2Interop.Extender(builder)
+            .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+            .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        FileLogger.d(TAG, "applyFocusInterop: LOCKED_INFINITY → AF_MODE_OFF + LENS_FOCUS_DISTANCE=0f（无限远）")
+    }
+
+    /**
+     * 曝光：clamp 到设备范围再下发（越界 index 部分设备会抛，spec 曝光反例 / memo M5）。
+     * 设备不支持曝光补偿时跳过。
+     */
+    private fun applyExposure(cam: Camera, requestedEv: Int) {
+        val state = cam.cameraInfo.exposureState
+        if (!state.isExposureCompensationSupported) {
+            FileLogger.d(TAG, "applyExposure: 设备不支持曝光补偿，跳过 requested=$requestedEv")
+            return
+        }
+        val r = state.exposureCompensationRange
+        val clamped = clampEv(requestedEv, r.lower..r.upper)
+        cam.cameraControl.setExposureCompensationIndex(clamped)
+        FileLogger.d(TAG, "applyExposure: requested=$requestedEv clamped=$clamped range=${r.lower}..${r.upper}")
     }
 
     /**

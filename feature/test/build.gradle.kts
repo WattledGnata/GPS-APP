@@ -54,9 +54,11 @@ dependencies {
     // camera-preview-in-laplivescreen round（Decision 2）：拿 PreviewView / ProcessCameraProvider
     // （core:camera 把 camera-view/camera-lifecycle 提为 api）+ CameraAvailability（hasCamera 降级）。
     // camera-recording-and-gps-sync round：core:camera 已将 camera-video 改为 api（VideoCapture/Recorder 透出）。
-    // fps hint 实现（Camera2Interop）在 CameraX 1.3.4 不适用 Recorder.Builder（不实现 ExtendableBuilder），
-    // 暂不引入 camera-camera2 直接依赖，fps 由设备决定（design.md Decision 3 risks 已声明）。
+    // recording-params-config-screen round：对焦锁无限远需 Camera2Interop（AF_MODE_OFF + LENS_FOCUS_DISTANCE）。
+    // Camera2Interop 在 Preview.Builder（实现 ExtendableBuilder）上可用；artifact 已在 core:camera 以
+    // implementation 引入（不透出），这里直接依赖以在 feature:test 编译期可见（非新下载依赖）。
     implementation(project(":core:camera"))
+    implementation(libs.androidx.camera.camera2)
 
     // media3 / ExoPlayer (video-overlay-realtime-playback round)：
     // 播放屏 ExoPlayer 播放原始视频 + PlayerView（AndroidView）垫底，overlay 用 Compose 浮上层。

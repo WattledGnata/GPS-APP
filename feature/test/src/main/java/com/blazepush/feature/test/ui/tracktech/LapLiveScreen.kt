@@ -74,6 +74,8 @@ import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.recording.CameraRecordingEngine
 import com.blazepush.feature.test.recording.RecordingConfig
+import com.blazepush.feature.test.datastore.RecordingPreferencesRepository
+import com.blazepush.feature.test.ui.settings.RecordingSettingsOverlay
 import com.blazepush.feature.test.recording.RecordingState
 import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
@@ -101,6 +103,7 @@ fun LapLiveScreen(
     navController: NavController,
     sessionViewModel: TestSessionViewModel = koinViewModel(),
     recordingEngine: CameraRecordingEngine = koinInject(),
+    recordingPrefsRepository: RecordingPreferencesRepository = koinInject(),
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -128,6 +131,8 @@ fun LapLiveScreen(
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
     // screen 顶层收集录制状态：供绑定条件 LaunchedEffect + RecIndicator + 资源安全 onDispose 共用
     val recordingState by recordingEngine.recordingState.collectAsState()
+    // recording-params-config-screen round：录制参数（齿轮设置屏写入，此处读出驱动 bind）
+    val recordingConfig by recordingPrefsRepository.configFlow.collectAsState(initial = RecordingConfig.DEFAULT)
 
     var showEndConfirmation by remember { mutableStateOf(false) }
     // 停圈速退出时若正在录制：先 await 视频落盘（screen 存活期间 camera 源不断），期间显示"保存视频中…"遮罩。
@@ -227,13 +232,15 @@ fun LapLiveScreen(
     // （此时 await 已 resume、即将 popBackStack，unbind 安全）。
     val isRecordingActive = recordingState is RecordingState.Recording || recordingState is RecordingState.Stopping
     val shouldBind = (pagerState.settledPage == 1 || isRecordingActive) && hasCamera && cameraPermissionGranted
-    LaunchedEffect(shouldBind) {
+    // recording-params-config-screen round：key 加 recordingConfig → 用户改参数返回时 config 变 → 重跑 effect →
+    // 引擎 boundConfig != config → rebind 应用新参数（design Decision 7）。同 config 抖动仍幂等不 rebind。
+    LaunchedEffect(shouldBind, recordingConfig) {
         if (shouldBind) {
             FileLogger.d(
                 "CamRec",
-                "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive → 绑定 camera（screen lifecycle）",
+                "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive config=$recordingConfig → 绑定 camera（screen lifecycle）",
             )
-            recordingEngine.bind(screenLifecycleOwner, context, RecordingConfig.DEFAULT)
+            recordingEngine.bind(screenLifecycleOwner, context, recordingConfig)
         } else {
             FileLogger.d(
                 "CamRec",
@@ -559,6 +566,8 @@ private fun CameraPreviewPage(
 ) {
     val context = LocalContext.current
     val recordingState by recordingEngine.recordingState.collectAsState()
+    // recording-params-config-screen round（实施期修订）：设置面板改 overlay 浮层，由本页 state 控制显隐（不跳路由）
+    var showRecordingSettings by remember { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -615,6 +624,25 @@ private fun CameraPreviewPage(
                     .align(Alignment.TopStart)
                     .padding(16.dp),
             )
+
+            // 录制参数设置入口（齿轮，左下角）—— recording-params-config-screen round。
+            // 仅 Idle 态可进（录制中禁用，spec 入口 Requirement 反例：录制中 MUST NOT 改参数）。
+            val settingsEnabled = recordingState is RecordingState.Idle
+            TextButton(
+                onClick = { if (settingsEnabled) showRecordingSettings = true },
+                enabled = settingsEnabled,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "⚙ 设置",
+                    style = TrackTechTypography.UiTextLabel,
+                    color = if (settingsEnabled) TrackTechColors.Cyan else TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             // 录制状态文字（右上角）—— round 5 再做精致 REC 红点，此处最小可用
             val recStateText = when (recordingState) {
@@ -675,6 +703,15 @@ private fun CameraPreviewPage(
                     color = recBtnColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // 录制参数设置浮层（实施期修订：route 屏 → overlay 浮在预览上 → 横屏保持 + 改参数实时见效果）。
+            // 渲染在 Box 末尾 = 绘制在最上层；左侧 dismiss 区露出实时预览。
+            if (showRecordingSettings) {
+                RecordingSettingsOverlay(
+                    onDismiss = { showRecordingSettings = false },
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         } else {
