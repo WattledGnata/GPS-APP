@@ -74,6 +74,20 @@ fun TestExecutionScreen(
         }
     }
 
+    // 圈速播报：completedLaps 每新增一圈即播报该圈成绩（叮 + "第N圈，X分XX秒.X"）。
+    // lapNumber = lapIndex + 1（与详情屏 / 导出 / 回放惯例一致）。
+    val completedLaps = lapSession?.completedLaps ?: emptyList()
+    // 初值取当前圈数，避免重进页面把已存在的圈重复播报；只有真正新增的圈才会触发。
+    var lastAnnouncedLapCount by remember { mutableStateOf(completedLaps.size) }
+    LaunchedEffect(completedLaps.size) {
+        if (completedLaps.size > lastAnnouncedLapCount) {
+            completedLaps.lastOrNull()?.let { lap ->
+                voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+            }
+            lastAnnouncedLapCount = completedLaps.size
+        }
+    }
+
     if (currentMode == TestMode.LapDebug) {
         val track = selectedTrack
         if (track != null) {

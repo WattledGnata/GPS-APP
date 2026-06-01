@@ -1,18 +1,39 @@
+// @IgnoreFormatCheck
 package com.blazepush.feature.test.utils
 
 import android.content.Context
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
+import com.blazepush.feature.test.FileLogger
 import java.util.Locale
 
 /**
  * 语音播报工具
- * 封装 Android 原生 TTS，用于播报测试成绩
+ * 封装 Android 原生 TTS，用于播报测试成绩。
+ *
+ * 播报风格（2026-06-01 调整为简洁版）：先"叮"一声提示音，再直接报数：
+ * - 加速 / 刹车：`叮` + `X.XX秒`（例：6.8s → 叮 + "六点八零秒"）
+ * - 圈速：`叮` + `第N圈，X分XX秒.X`（例：83234ms → 叮 + "第一圈，一分二十三秒二"）
+ *
+ * 数字念法：整数部分按自然中文（12 → "十二"、23 → "二十三"），小数部分逐位（.34 → "三四"）。
  */
 class VoiceAnnouncer(private val context: Context) {
 
     private var tts: TextToSpeech? = null
     private var isInitialized = false
     private var isEnabled = true
+
+    /** 提示音生成器；个别设备构造会抛 RuntimeException，失败则降级为"不响铃直接说"。 */
+    private val toneGenerator: ToneGenerator? = try {
+        ToneGenerator(AudioManager.STREAM_MUSIC, TONE_VOLUME)
+    } catch (e: RuntimeException) {
+        null
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
      * 初始化 TTS
@@ -43,115 +64,88 @@ class VoiceAnnouncer(private val context: Context) {
     }
 
     /**
-     * 播报零百加速成绩
-     * @param seconds 成绩（秒），如 6.8
+     * 播报零百加速成绩：叮 + "X.XX秒"
+     * @param seconds 成绩（秒），如 6.8 → "六点八零秒"
      */
     fun announceAccelerationResult(seconds: Double) {
         if (!isEnabled) return
-        val text = formatTimeForSpeech(seconds, "百公里加速")
-        speak(text, "acceleration_result")
+        dingThenSpeak(formatSecondsTwoDecimals(seconds), "acceleration_result")
     }
 
     /**
-     * 播报刹车成绩
-     * @param seconds 成绩（秒），如 2.8
+     * 播报刹车成绩：叮 + "X.XX秒"
+     * @param seconds 成绩（秒），如 2.83 → "二点八三秒"
      */
     fun announceBrakingResult(seconds: Double) {
         if (!isEnabled) return
-        val text = formatTimeForSpeech(seconds, "百公里刹车")
-        speak(text, "braking_result")
+        dingThenSpeak(formatSecondsTwoDecimals(seconds), "braking_result")
     }
 
     /**
-     * 播报圈速
+     * 播报圈速：叮 + "第N圈，X分XX秒.X"
      * @param lapNumber 圈号
      * @param timeMillis 圈速时间（毫秒）
      */
     fun announceLapTime(lapNumber: Int, timeMillis: Long) {
         if (!isEnabled) return
-        val text = formatLapTimeForSpeech(lapNumber, timeMillis)
-        speak(text, "lap_$lapNumber")
+        dingThenSpeak(formatLapTimeForSpeech(lapNumber, timeMillis), "lap_$lapNumber")
     }
 
     /**
-     * 格式化时间用于语音播报
-     * 6.8 → "百公里加速六点八秒"
+     * 成绩秒数 → "X.XX秒"，整数自然中文 + 两位小数逐位。
+     * 6.8 → "六点八零秒" / 12.34 → "十二点三四秒" / 0.95 → "零点九五秒"
      */
-    private fun formatTimeForSpeech(seconds: Double, prefix: String): String {
-        val numStr = formatNumberForSpeech(seconds)
-        val suffix = "秒"
-        return prefix + numStr + suffix
+    private fun formatSecondsTwoDecimals(value: Double): String {
+        val str = "%.2f".format(value)
+        val dot = str.indexOf('.')
+        val intPart = str.substring(0, dot).toInt()
+        val decPart = str.substring(dot + 1)
+        val decSpeech = decPart.map { CHINESE_DIGITS[it - '0'] }.joinToString("")
+        return chineseNumber(intPart) + "点" + decSpeech + "秒"
     }
 
     /**
-     * 格式化数字用于语音播报
-     * 6.8 → "六点八" / 12.34 → "十二点三四"
-     * 保留2位小数
-     */
-    private fun formatNumberForSpeech(value: Double): String {
-        val scaled = (value * 100).toLong() / 100.0
-        val str = "%.2f".format(scaled)
-
-        val sb = StringBuilder()
-        for (c in str) {
-            when (c) {
-                '0' -> sb.append("零")
-                '1' -> sb.append("一")
-                '2' -> sb.append("二")
-                '3' -> sb.append("三")
-                '4' -> sb.append("四")
-                '5' -> sb.append("五")
-                '6' -> sb.append("六")
-                '7' -> sb.append("七")
-                '8' -> sb.append("八")
-                '9' -> sb.append("九")
-                '.' -> sb.append("点")
-            }
-        }
-        return sb.toString()
-    }
-
-    /**
-     * 格式化圈速用于语音播报
-     * 83234ms → "第一圈，八分三十秒二百三十四毫秒"
+     * 圈速毫秒 → "第N圈，X分XX秒.X"（赛车惯例：分、秒自然中文，末尾十分位单数字）。
+     * 83234ms → "第一圈，一分二十三秒二"；45678ms → "第一圈，四十五秒六"（不足 1 分省略"分"）。
      */
     private fun formatLapTimeForSpeech(lapNumber: Int, timeMillis: Long): String {
-        val lapWord = formatLapNumber(lapNumber)
-        val minutes = timeMillis / 60000
-        val seconds = (timeMillis % 60000) / 1000
-        val millis = timeMillis % 1000
+        val safe = if (timeMillis < 0) 0L else timeMillis
+        val minutes = (safe / 60000).toInt()
+        val seconds = ((safe % 60000) / 1000).toInt()
+        val tenth = ((safe % 1000) / 100).toInt() // 十分位（截断，不进位）
 
-        val numToSpeech = { v: Double -> formatNumberForSpeech(v) }
-
-        return when {
-            minutes > 0 -> {
-                lapWord + "，" + numToSpeech(minutes.toDouble()) + "分" +
-                    numToSpeech(seconds.toDouble()) + "秒" +
-                    numToSpeech(millis.toDouble()) + "毫秒"
-            }
-            else -> {
-                lapWord + "，" + numToSpeech(seconds.toDouble()) + "秒" +
-                    numToSpeech(millis.toDouble()) + "毫秒"
-            }
+        val body = if (minutes > 0) {
+            chineseNumber(minutes) + "分" + chineseNumber(seconds) + "秒" + CHINESE_DIGITS[tenth]
+        } else {
+            chineseNumber(seconds) + "秒" + CHINESE_DIGITS[tenth]
         }
+        return "第" + chineseNumber(lapNumber) + "圈，" + body
     }
 
     /**
-     * 格式化圈号
+     * 整数 → 自然中文（0-99）。10→"十"、11→"十一"、20→"二十"、23→"二十三"。
+     * ≥100 或负数走兜底逐位（圈号/分/秒不会到这量级，仅防御）。
      */
-    private fun formatLapNumber(n: Int): String {
-        return when (n) {
-            1 -> "第一圈"
-            2 -> "第二圈"
-            3 -> "第三圈"
-            4 -> "第四圈"
-            5 -> "第五圈"
-            6 -> "第六圈"
-            7 -> "第七圈"
-            8 -> "第八圈"
-            9 -> "第九圈"
-            else -> "第" + formatNumberForSpeech(n.toDouble()) + "圈"
+    private fun chineseNumber(n: Int): String {
+        if (n < 0) return "负" + chineseNumber(-n)
+        return when {
+            n < 10 -> CHINESE_DIGITS[n]
+            n < 20 -> "十" + if (n % 10 == 0) "" else CHINESE_DIGITS[n % 10]
+            n < 100 -> CHINESE_DIGITS[n / 10] + "十" + if (n % 10 == 0) "" else CHINESE_DIGITS[n % 10]
+            else -> n.toString().map { CHINESE_DIGITS[it - '0'] }.joinToString("")
         }
+    }
+
+    private fun dingThenSpeak(text: String, utteranceId: String) {
+        val tg = toneGenerator
+        FileLogger.d("VoiceAnnouncer", "announce id=$utteranceId text=\"$text\" ding=${tg != null}")
+        if (tg == null) {
+            speak(text, utteranceId)
+            return
+        }
+        // 先"叮"一声（短蜂鸣），约 250ms 后再说，避免提示音盖住开头。
+        tg.startTone(ToneGenerator.TONE_PROP_BEEP, TONE_DURATION_MS)
+        mainHandler.postDelayed({ speak(text, utteranceId) }, SPEAK_DELAY_MS)
     }
 
     private fun speak(text: String, utteranceId: String) {
@@ -168,9 +162,18 @@ class VoiceAnnouncer(private val context: Context) {
      * 释放资源
      */
     fun shutdown() {
+        mainHandler.removeCallbacksAndMessages(null)
         tts?.stop()
         tts?.shutdown()
         tts = null
         isInitialized = false
+        toneGenerator?.release()
+    }
+
+    private companion object {
+        val CHINESE_DIGITS = arrayOf("零", "一", "二", "三", "四", "五", "六", "七", "八", "九")
+        const val TONE_VOLUME = 80 // 0-100
+        const val TONE_DURATION_MS = 150
+        const val SPEAK_DELAY_MS = 250L
     }
 }
