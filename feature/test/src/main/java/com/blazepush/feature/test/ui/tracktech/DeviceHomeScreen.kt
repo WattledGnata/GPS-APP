@@ -1,7 +1,6 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,7 +22,6 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -40,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
@@ -100,7 +97,6 @@ fun DeviceHomeScreen(
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
-    val context = LocalContext.current
 
     var showSheet by remember { mutableStateOf(false) }
 
@@ -189,14 +185,6 @@ fun DeviceHomeScreen(
                 title = "GPS DETAILS",
                 subtitle = "$qualityLabel · ${gpsData.satelliteCount} sats · ${frequencyHz}Hz",
                 onClick = { navController.navigate("gps_details") },
-            )
-            TrackTechRow(
-                leadingIcon = Icons.Filled.HealthAndSafety,
-                title = "DIAGNOSTICS",
-                subtitle = "Protocol OK",
-                onClick = {
-                    Toast.makeText(context, "Diagnostics · coming in next round", Toast.LENGTH_SHORT).show()
-                },
             )
             TrackTechRow(
                 leadingIcon = Icons.Filled.Settings,
