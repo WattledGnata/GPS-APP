@@ -176,6 +176,7 @@ class TestSessionViewModelTrackSelectionTest {
             lapTimingEngine = LapTimingEngine(),
             telemetryRepository = mockTelemetryRepositoryWithEmptyFlows(),
             recentTracksStore = recentTracksStore,
+            lapUploadOrchestrator = FakeLapUploadTrigger(),
         )
     }
 }

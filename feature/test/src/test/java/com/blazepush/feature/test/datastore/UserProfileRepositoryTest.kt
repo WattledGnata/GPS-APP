@@ -60,4 +60,32 @@ class UserProfileRepositoryTest {
         repo.setDriverName("99号")
         assertEquals("99号", repo.driverName.first())
     }
+
+    // livetiming-lap-upload round 新增 key
+
+    @Test
+    fun livetimingEnabled_defaultsTrue() = runTest {
+        val repo = UserProfileRepository(dataStore)
+        assertEquals(true, repo.livetimingEnabled.first())
+    }
+
+    @Test
+    fun setLivetimingEnabled_roundtrip() = runTest {
+        val repo = UserProfileRepository(dataStore)
+        repo.setLivetimingEnabled(false)
+        assertEquals(false, repo.livetimingEnabled.first())
+    }
+
+    @Test
+    fun hasShownDriverNamePrompt_defaultsFalse() = runTest {
+        val repo = UserProfileRepository(dataStore)
+        assertEquals(false, repo.hasShownDriverNamePrompt.first())
+    }
+
+    @Test
+    fun setDriverNamePromptShown_roundtrip() = runTest {
+        val repo = UserProfileRepository(dataStore)
+        repo.setDriverNamePromptShown()
+        assertEquals(true, repo.hasShownDriverNamePrompt.first())
+    }
 }

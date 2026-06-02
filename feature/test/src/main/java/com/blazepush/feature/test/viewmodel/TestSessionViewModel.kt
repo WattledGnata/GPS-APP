@@ -13,6 +13,7 @@ package com.blazepush.feature.test.viewmodel
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.blazepush.feature.test.livetiming.LapUploadTrigger
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.core.bluetooth.BleDeviceManager
@@ -119,6 +120,7 @@ class TestSessionViewModel(
     private val lapTimingEngine: LapTimingEngine,
     private val telemetryRepository: TelemetryRepository,
     private val recentTracksStore: RecentTracksStoreApi,
+    private val lapUploadOrchestrator: LapUploadTrigger,
 ) : ViewModel() {
 
     companion object {
@@ -912,6 +914,13 @@ class TestSessionViewModel(
             viewModelScope.launch {
                 delay(5_000L)
                 telemetryRepository.flush()
+            }
+            // livetiming-lap-upload：新完成的圈实时上报（旁路副作用；前置/失败由 orchestrator
+            // 内部处理，异常不影响本地圈速记录）。每出圈顺带 flush 待传队列。
+            val newLaps = updatedSession.completedLaps.drop(currentSession.completedLaps.size)
+            viewModelScope.launch {
+                newLaps.forEach { runCatching { lapUploadOrchestrator.onLapCompleted(it) } }
+                runCatching { lapUploadOrchestrator.flush() }
             }
         }
 

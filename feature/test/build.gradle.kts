@@ -49,6 +49,7 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:network"))
     implementation(project(":core:data"))
     implementation(project(":core:bluetooth"))
     // camera-preview-in-laplivescreen round（Decision 2）：拿 PreviewView / ProcessCameraProvider

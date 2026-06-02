@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -111,6 +112,40 @@ fun SettingsScreen(
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        // livetiming 上报开关（livetiming-lap-upload round；默认开）
+        val livetimingEnabled by userProfileRepository.livetimingEnabled.collectAsState(initial = true)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text(
+                    text = "上报到 livetiming",
+                    style = TrackTechTypography.UiTextLabel,
+                    color = TrackTechColors.Cyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "出圈把成绩实时上报到榜单（需先填车手名）",
+                    style = TrackTechTypography.UiTextLabel,
+                    color = TrackTechColors.TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = livetimingEnabled,
+                onCheckedChange = { enabled ->
+                    scope.launch {
+                        userProfileRepository.setLivetimingEnabled(enabled)
+                        FileLogger.d("UserProfile", "livetimingEnabled set $enabled")
+                    }
+                },
             )
         }
     }

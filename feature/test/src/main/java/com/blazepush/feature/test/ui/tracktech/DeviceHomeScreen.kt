@@ -24,8 +24,10 @@ import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
+import kotlinx.coroutines.flow.first
 import org.koin.compose.koinInject
 
 private data class HeroState(
@@ -99,6 +103,33 @@ fun DeviceHomeScreen(
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
 
     var showSheet by remember { mutableStateOf(false) }
+
+    // 首开车手名引导（first-launch-driver-prompt capability）：仅首次启动弹一次。
+    // 弹出即置 flag（不论用户选哪个 / 是否真设名），保证只弹一次。
+    val userProfileRepository = koinInject<UserProfileRepository>()
+    var showDriverPrompt by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!userProfileRepository.hasShownDriverNamePrompt.first()) {
+            showDriverPrompt = true
+            userProfileRepository.setDriverNamePromptShown()
+        }
+    }
+    if (showDriverPrompt) {
+        AlertDialog(
+            onDismissRequest = { showDriverPrompt = false },
+            title = { Text("设个车手名？") },
+            text = { Text("livetiming 榜单会用你的车手名展示成绩。要不要现在设一个？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDriverPrompt = false
+                    navController.navigate("settings")
+                }) { Text("去设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDriverPrompt = false }) { Text("以后再说") }
+            },
+        )
+    }
 
     // Pager 架构下 Device page 未组合时 SharedFlow(replay=0) 事件会丢失，
     // 改由 Shell 持有 pending state，本页组合后消费并 reset。

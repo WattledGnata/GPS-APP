@@ -20,6 +20,8 @@ import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
+import com.blazepush.core.network.LivetimingUploader
+import com.blazepush.feature.test.livetiming.LapUploadOrchestrator
 import com.blazepush.feature.test.repository.AssetReplayTrackSource
 import com.blazepush.feature.test.repository.PresetTrackCatalog
 import com.blazepush.feature.test.repository.ReplayAlignedTrackCatalog
@@ -70,6 +72,7 @@ val databaseModule = module {
     single { get<AppDatabase>().speedSegmentDao() }
     single { get<AppDatabase>().telemetrySessionDao() }
     single { get<AppDatabase>().crossingEventDao() }
+    single { get<AppDatabase>().pendingLapUploadDao() }
 }
 
 /**
@@ -94,6 +97,9 @@ val repositoryModule = module {
     single { UserProfileRepository(androidContext()) }
     // round `replace-nearby-tracks-with-recent-strip` §2.2：接口为 key、生产 RecentTracksStore 实例为 value
     single<RecentTracksStoreApi> { RecentTracksStore(androidContext()) }
+    // livetiming-lap-upload round：上报门面（token 走 BuildConfig）+ 出圈上报编排
+    single<com.blazepush.core.network.LapUploadApi> { LivetimingUploader.create() }
+    single<com.blazepush.feature.test.livetiming.LapUploadTrigger> { LapUploadOrchestrator(get(), get(), get()) }
 }
 
 /**
@@ -156,7 +162,7 @@ val recordingModule = module {
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
     single { GpsDataViewModel(get(), get(), get()) }
-    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }
 

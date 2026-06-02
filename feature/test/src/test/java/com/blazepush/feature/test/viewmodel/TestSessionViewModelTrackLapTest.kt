@@ -403,6 +403,7 @@ class TestSessionViewModelTrackLapTest {
             lapTimingEngine = LapTimingEngine(),
             telemetryRepository = mockTelemetryRepositoryWithEmptyFlows(),
             recentTracksStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore(),
+            lapUploadOrchestrator = FakeLapUploadTrigger(),
         )
     }
 

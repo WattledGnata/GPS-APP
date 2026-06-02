@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- livetiming 圈速上报 (livetiming-lap-upload · 首个网络栈) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- 视频录制 (Phase 2 · camera-module-and-permission · L0-2 录音频) -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -50,6 +53,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.BlazePush"
+        android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="31">
         <activity
             android:name=".MainActivity"

@@ -8,12 +8,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.blazepush.core.data.local.dao.BluetoothDeviceDao
 import com.blazepush.core.data.local.dao.CarModelDao
 import com.blazepush.core.data.local.dao.CrossingEventDao
+import com.blazepush.core.data.local.dao.PendingLapUploadDao
 import com.blazepush.core.data.local.dao.SpeedSegmentDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
 import com.blazepush.core.data.local.dao.TestRecordDao
 import com.blazepush.core.data.local.entity.BluetoothDeviceEntity
 import com.blazepush.core.data.local.entity.CarModelEntity
 import com.blazepush.core.data.local.entity.CrossingEventEntity
+import com.blazepush.core.data.local.entity.PendingLapUploadEntity
 import com.blazepush.core.data.local.entity.SpeedSegmentEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
 import com.blazepush.core.data.local.entity.TestRecordEntity
@@ -26,8 +28,9 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
         BluetoothDeviceEntity::class,
         TelemetrySessionEntity::class,
         CrossingEventEntity::class,
+        PendingLapUploadEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 /**
@@ -71,6 +74,11 @@ abstract class AppDatabase : RoomDatabase() {
      * 圈速过线事件 DAO（A56 引入）。
      */
     abstract fun crossingEventDao(): CrossingEventDao
+
+    /**
+     * livetiming 待传圈队列 DAO（schema v7，livetiming-lap-upload round）。
+     */
+    abstract fun pendingLapUploadDao(): PendingLapUploadDao
 
     companion object {
         /**
@@ -242,6 +250,46 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * MIGRATION_6_7 SQL（v6 → v7）。
+         *
+         * livetiming-lap-upload round：新建 pending_lap_uploads 待传圈队列表（CREATE TABLE，非破坏）。
+         * clientLapId 作 PRIMARY KEY = 幂等唯一约束（同圈失败重复入队被挡）。retryCount NOT NULL DEFAULT 0
+         * 是合理初值（非哨兵语义，盲点 #6）。历史 v6 库 migration 后多一张空表，无数据依赖。
+         *
+         * @author CC
+         * @description schema v6→v7 CREATE TABLE SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-06-03
+         */
+        internal val migration6To7Sql: List<String> = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS pending_lap_uploads (
+                clientLapId TEXT NOT NULL PRIMARY KEY,
+                trackId TEXT NOT NULL,
+                driver TEXT NOT NULL,
+                lapNo INTEGER NOT NULL,
+                lapTimeMs INTEGER NOT NULL,
+                sectorsMsCsv TEXT,
+                lappedAtRfc3339 TEXT,
+                createdAtMs INTEGER NOT NULL,
+                retryCount INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
+        )
+
+        /**
+         * Room migration v6 → v7：CREATE TABLE pending_lap_uploads（待传圈队列）。
+         *
+         * @author CC
+         * @description Room migration from schema v6 to v7
+         * @date 2026-06-03
+         */
+        val migration6To7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration6To7Sql.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
          * 完整迁移链（v2→v6），供 AppModule Room builder 和 JVM 单测使用。
          * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
          * v2→v6 全程严格覆盖，fallbackFrom 列表不含 2-6。
@@ -255,6 +303,7 @@ abstract class AppDatabase : RoomDatabase() {
             migration3To4,
             migration4To5,
             migration5To6,
+            migration6To7,
         )
     }
 }

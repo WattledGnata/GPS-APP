@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  livetiming-lap-upload：服务端当前为裸 IP + HTTP（http://111.229.149.252:8080）。
+  Android 9+ 默认禁明文流量；仅对该 host 放行 cleartext。
+  将来服务端上 HTTPS（wss/https）后，移除本配置 + manifest 引用。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">111.229.149.252</domain>
+    </domain-config>
+</network-security-config>
