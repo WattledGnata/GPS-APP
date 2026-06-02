@@ -3,6 +3,7 @@ package com.blazepush.feature.test.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.bluetooth.ScannedDevice
 import com.blazepush.core.bluetooth.GpsDataRepository
@@ -63,6 +64,9 @@ class GpsDataViewModel(
     // 数据统计
     private var lastDataTime = 0L
 
+    // road-test-first 持久日志去重：仅在 isStale 翻转时落盘，避免 25Hz gpsData 刷屏
+    private var lastLoggedIsStale: Boolean? = null
+
     init {
         // 监控GPS数据并计算质量
         viewModelScope.launch {
@@ -71,7 +75,24 @@ class GpsDataViewModel(
                     "GpsDataViewModel",
                     "gpsData: ts=${data.timestamp}, lat=${data.latitude}, lon=${data.longitude}, speed=${data.speed}, bearing=${data.bearing}, sats=${data.satelliteCount}, hdop=${data.hdop}, fix=${data.fixQuality}, ready=${data.isTestReady}"
                 )
+                // road-test-first 兜底：isStale 翻转持久落盘（debug_log.txt），路测可 adb pull 诊断
+                // 丢星不拆链是否生效（ble-connection-liveness）。去重防 25Hz 刷屏。
+                if (lastLoggedIsStale != data.isStale) {
+                    FileLogger.d(
+                        "BleLiveness",
+                        "isStale $lastLoggedIsStale -> ${data.isStale} (conn=${connectionState.value}, sats=${data.satelliteCount}, fix=${data.fixQuality})"
+                    )
+                    lastLoggedIsStale = data.isStale
+                }
                 updateDataStats(data)
+            }
+        }
+
+        // road-test-first 兜底：connectionState 全部转移持久落盘，确认"丢星不再发 DISCONNECTED"
+        // + "真断开仍发 DISCONNECTED"（ble-connection-liveness spec R1/R2）。低频，不去重。
+        viewModelScope.launch {
+            connectionState.collect { state ->
+                FileLogger.d("BleLiveness", "connectionState -> $state")
             }
         }
 

@@ -68,6 +68,14 @@ class BluetoothDataSource(
                 // 在单独的协程中监听 BleConnection 的状态变化
                 bleConnection?.connectionState?.let { stateFlow ->
                     connectionCollectJob = scope.launch {
+                        // 同 job 内子协程收集 dataStale → 写 GpsData.isStale（ble-connection-liveness
+                        // spec R3）。父 job（connectionCollectJob）取消时子协程一并取消，无需独立
+                        // cancel，不破 A27 cleanup 严格顺序契约（connectionCollectJob 单点取消即清干净）。
+                        launch {
+                            bleConnection?.dataStale?.collect { stale ->
+                                _dataFlow.value = _dataFlow.value.copy(isStale = stale)
+                            }
+                        }
                         stateFlow.collect { state ->
                             Log.d(TAG, "BleConnection 状态变化: $state")
                             _connectionState.value = state
@@ -96,7 +104,8 @@ class BluetoothDataSource(
             bleConnection?.disconnect()
             bleConnection = null
             _connectionState.value = ConnectionState.DISCONNECTED
-            _dataFlow.value = _dataFlow.value.copy(isConnected = false)
+            // isStale 一并清：断开后由 connectionState 主导 UI，陈旧软状态无意义残留会污染重连首帧前的判定
+            _dataFlow.value = _dataFlow.value.copy(isConnected = false, isStale = false)
         }
     }
 
@@ -128,12 +137,15 @@ class BluetoothDataSource(
             else -> null
         }
         if (parseResult != null) {
+            // isStale = false 两分支都显式置：收到帧 = 非陈旧（无论 parse 成败，数据在流）。
+            // parser 的 currentData.copy(...) 会保留前帧 isStale，不显式翻转会让"静默置 true"
+            // 在下一帧错误残留（同 isConnected 契约陷阱，ble-connection-liveness spec R3）。
             _dataFlow.value = if (parseResult.errorMessage != null) {
                 // 失败分支 MUST 显式设 isConnected=false：parser copy 保留前帧 isConnected，
                 // 若前帧是 true，不显式翻转会违反"最近一次 parse 成功"契约
-                parseResult.copy(isConnected = false)
+                parseResult.copy(isConnected = false, isStale = false)
             } else {
-                parseResult.copy(isConnected = true, errorMessage = null)
+                parseResult.copy(isConnected = true, errorMessage = null, isStale = false)
             }
         }
     }

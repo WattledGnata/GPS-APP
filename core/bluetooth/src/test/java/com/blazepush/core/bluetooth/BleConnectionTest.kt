@@ -2,6 +2,7 @@ package com.blazepush.core.bluetooth
 
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.util.Log
@@ -13,6 +14,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -67,11 +69,13 @@ class BleConnectionTest {
     }
 
     /**
-     * R2 Scenario 1：数据超时成立时 gatt.disconnect 被调 + state DISCONNECTED；
-     * close 未被直接调（留给 onConnectionStateChange 回调统一释放 GATT 资源）。
+     * ble-connection-liveness spec R1 场景一：数据静默超时 MUST NOT 拆链。
+     * 数据超时成立时 gatt.disconnect / close 均**不**被调，connectionState 维持 CONNECTED，
+     * 只置 dataStale=true。（本测试由 ble-no-fix-keep-link round 从原"超时即 disconnect"
+     * 行为反转而来——真机固件无卫星不推帧，丢星 = 静默，曾被误判死链拆链。）
      */
     @Test
-    fun startDataTimeoutCheck_onTimeout_releasesGattAndTransitionsDisconnected() = runTest {
+    fun startDataTimeoutCheck_onTimeout_marksStaleAndKeepsConnected() = runTest {
         setField("scope", this)
         stateFlow().value = ConnectionState.CONNECTED
         setField("lastDataTime", 0L)
@@ -81,10 +85,14 @@ class BleConnectionTest {
         advanceTimeBy(10_500)
         runCurrent()
 
-        Mockito.verify(mockGatt, Mockito.times(1)).disconnect()
+        Mockito.verify(mockGatt, Mockito.never()).disconnect()
         Mockito.verify(mockGatt, Mockito.never()).close()
-        assertEquals(ConnectionState.DISCONNECTED, connection.connectionState.value)
-        assertNotNull("bluetoothGatt 字段由回调释放，此刻非 null", getField("bluetoothGatt"))
+        assertEquals(
+            "数据静默 MUST 维持 CONNECTED（不拆链）",
+            ConnectionState.CONNECTED,
+            connection.connectionState.value,
+        )
+        assertTrue("数据静默超时 MUST 置 dataStale=true", connection.dataStale.value)
     }
 
     /**
@@ -142,26 +150,57 @@ class BleConnectionTest {
     }
 
     /**
-     * R3 Scenario 3：R2 超时触发的 disconnect 与主动 disconnect 走同一条回调释放路径 ——
-     * 组合验证 "超时 disconnect → 回调到达 → close + null" 只执行一次的统一流程。
+     * ble-connection-liveness spec R1 场景二（恢复）：静默置 dataStale=true 后收到任意帧，
+     * dataStale MUST 清回 false 且链路全程保持 CONNECTED、disconnect 从未被调。
+     * （本测试由 ble-no-fix-keep-link round 从原"超时 disconnect 走回调释放"反转为恢复语义。）
      */
     @Test
-    fun startDataTimeoutCheck_triggeredDisconnectUsesCallbackReleasePath() = runTest {
-        setField("scope", this)
+    fun onCharacteristicChanged_afterStale_clearsDataStaleAndKeepsConnected() {
+        // 模拟先经历静默：dataStale=true、链路 CONNECTED
+        staleFlow().value = true
         stateFlow().value = ConnectionState.CONNECTED
-        setField("lastDataTime", 0L)
 
-        invokePrivate("startDataTimeoutCheck")
-        advanceTimeBy(10_500)
-        runCurrent()
+        val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
+        Mockito.`when`(mockChar.uuid)
+            .thenReturn(UUID.fromString("00000003-0000-1000-8000-00805f9b34fb"))
 
-        Mockito.verify(mockGatt, Mockito.times(1)).disconnect()
-        Mockito.verify(mockGatt, Mockito.never()).close()
+        // 卫星恢复推帧（走 onCharacteristicChanged → handleCharacteristicChange）
+        gattCallback().onCharacteristicChanged(mockGatt, mockChar, byteArrayOf(1, 2, 3))
 
-        gattCallback().onConnectionStateChange(mockGatt, 0, BluetoothProfile.STATE_DISCONNECTED)
+        assertFalse("收到帧后 dataStale MUST 清 false（数据续上）", connection.dataStale.value)
+        assertEquals(
+            "收到帧链路保持 CONNECTED",
+            ConnectionState.CONNECTED,
+            connection.connectionState.value,
+        )
+        Mockito.verify(mockGatt, Mockito.never()).disconnect()
+    }
 
-        Mockito.verify(mockGatt, Mockito.times(1)).close()
-        assertNull(getField("bluetoothGatt"))
+    /**
+     * ble-connection-liveness spec R1 反例锁（源码结构断言）：startDataTimeoutCheck 超时分支
+     * MUST NOT 含拆链动作，且 MUST 改为置软陈旧状态（防"空实现什么都不做"trivially pass）。
+     */
+    @Test
+    fun startDataTimeoutCheck_timeoutBranch_marksStaleNotDisconnect() {
+        val source = File("src/main/java/com/blazepush/core/bluetooth/BleConnection.kt").readText()
+        val fnStart = source.indexOf("private fun startDataTimeoutCheck()")
+        assertTrue("必须定义 startDataTimeoutCheck", fnStart > 0)
+        val fnEnd = source.indexOf("\n    }\n", fnStart)
+        assertTrue("必须闭合 startDataTimeoutCheck 方法体", fnEnd > fnStart)
+        val body = source.substring(fnStart, fnEnd)
+
+        assertFalse(
+            "超时分支 MUST NOT 调 bluetoothGatt?.disconnect()（丢星不拆链）",
+            body.contains("bluetoothGatt?.disconnect()"),
+        )
+        assertFalse(
+            "超时分支 MUST NOT 置 _connectionState.value = ConnectionState.DISCONNECTED",
+            body.contains("_connectionState.value = ConnectionState.DISCONNECTED"),
+        )
+        assertTrue(
+            "超时分支 MUST 置 _dataStale.value = true（证明改成软状态而非单纯删动作）",
+            body.contains("_dataStale.value = true"),
+        )
     }
 
     private fun setField(name: String, value: Any?) {
@@ -179,6 +218,10 @@ class BleConnectionTest {
     @Suppress("UNCHECKED_CAST")
     private fun stateFlow(): MutableStateFlow<ConnectionState> =
         getField("_connectionState") as MutableStateFlow<ConnectionState>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun staleFlow(): MutableStateFlow<Boolean> =
+        getField("_dataStale") as MutableStateFlow<Boolean>
 
     private fun gattCallback(): BluetoothGattCallback =
         getField("gattCallback") as BluetoothGattCallback

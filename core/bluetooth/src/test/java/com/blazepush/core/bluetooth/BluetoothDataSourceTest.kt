@@ -218,6 +218,65 @@ class BluetoothDataSourceTest {
     }
 
     /**
+     * ble-connection-liveness spec R3 反例锁：dataStale=true（模拟刚经历静默）后收到一帧
+     * parse 成功，isStale MUST 被**显式**翻转回 false。mockParser 返回值故意保留前帧
+     * isStale=true（模拟真实 parser 的 currentData.copy(...) 行为）——若 handleIncomingData
+     * 成功分支不显式 `copy(isStale = false)`，残留 true 会让本断言 fail。
+     */
+    @Test
+    fun onDataReceived_successAfterStale_flipsIsStaleBackToFalse() {
+        setDataFlow(GpsData.Empty.copy(isStale = true, isConnected = false, errorMessage = null))
+        assertTrue("前置：isStale 初始为 true", source.dataFlow.value.isStale)
+
+        val successResult = source.dataFlow.value.copy(
+            latitude = 30.0,
+            longitude = 104.0,
+            satelliteCount = 8,
+            errorMessage = null,
+        )
+        assertTrue(
+            "前置：parser 的 copy 保留了前帧 isStale=true（模拟 parser 实际行为）",
+            successResult.isStale,
+        )
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(successResult)
+
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+
+        assertFalse(
+            "成功帧 MUST 显式翻转 isStale=false —— 依赖 parser copy 不翻转会残留 true（fail）",
+            source.dataFlow.value.isStale,
+        )
+        assertTrue("成功帧 isConnected=true（既有 R4 契约不破）", source.dataFlow.value.isConnected)
+    }
+
+    /**
+     * ble-connection-liveness spec R3：短包（parse 失败）帧也 MUST 清 isStale=false ——
+     * 收到帧即非陈旧，与 parse 成败无关；同时 isConnected 仍按 R4 契约保持 false。
+     */
+    @Test
+    fun onDataReceived_shortPacketAfterStale_flipsIsStaleBackToFalse() {
+        setDataFlow(GpsData.Empty.copy(isStale = true))
+        val shortPacketResult = source.dataFlow.value.copy(errorMessage = "short-packet")
+        assertTrue(
+            "前置：parser copy 保留前帧 isStale=true",
+            shortPacketResult.isStale,
+        )
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(shortPacketResult)
+
+        source.handleIncomingData(gpsMainUuid, ByteArray(10))
+
+        assertFalse(
+            "短包帧也 MUST 清 isStale=false（收到帧 = 非陈旧，无论 parse 成败）",
+            source.dataFlow.value.isStale,
+        )
+        assertFalse(
+            "短包 isConnected 仍 false（既有 R4 契约不破）",
+            source.dataFlow.value.isConnected,
+        )
+        assertEquals("short-packet", source.dataFlow.value.errorMessage)
+    }
+
+    /**
      * R4 Scenario 4：未知 UUID MUST NOT 翻转 isConnected。硬断言 GIVEN false →
      * THEN 仍 false。v1 未知 UUID 走 `copy(isConnected = true)` 强置；v2 通过
      * parseResult == null 早退整块跳过。

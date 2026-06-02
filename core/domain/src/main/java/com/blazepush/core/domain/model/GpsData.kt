@@ -21,7 +21,9 @@ data class GpsData(
     val isTestReady: Boolean,    // 测试就绪状态
     val errorMessage: String?,   // 错误信息
     val fixQuality: Int = 0,     // 0=无效定位, 1=GPS, 2=DGPS
-    val isTimeSynced: Boolean = false  // 协议时间是否对齐；未对齐时 timestamp 为 sentinel，时间 delta 计算必须跳过
+    val isTimeSynced: Boolean = false,  // 协议时间是否对齐；未对齐时 timestamp 为 sentinel，时间 delta 计算必须跳过
+    val isStale: Boolean = false  // 数据陈旧：链路仍 CONNECTED 但已 DATA_TIMEOUT_MS 无新帧（很可能在等卫星）。
+                                  // 与 isConnected（语义"最近一次 parse 成功"）正交，见 ble-connection-liveness spec。
 ) {
     /**
      * 将 GPS 坐标 (WGS84) 转换为高德地图坐标 (GCJ-02)

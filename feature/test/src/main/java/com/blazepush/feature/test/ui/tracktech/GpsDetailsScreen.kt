@@ -106,7 +106,7 @@ fun GpsDetailsScreen(
         PositionPanel(gpsData = gpsData)
 
         DetailsSection(title = "DEVICE")
-        DeviceInfoPanel(connectionState = connectionState)
+        DeviceInfoPanel(connectionState = connectionState, isStale = gpsData.isStale)
 
         Spacer(Modifier.height(24.dp))
     }
@@ -516,7 +516,7 @@ private fun PositionField(label: String, value: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun DeviceInfoPanel(connectionState: ConnectionState) {
+private fun DeviceInfoPanel(connectionState: ConnectionState, isStale: Boolean) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     CutCornerPanel(
         modifier = Modifier
@@ -557,6 +557,29 @@ private fun DeviceInfoPanel(connectionState: ConnectionState) {
                 },
                 label = "Protocol",
                 value = if (isConnected) "RaceChrono BLE" else "—",
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(TrackTechColors.Border),
+            )
+            // ble-connection-liveness：丢星时链路保持 CONNECTED，这里呈"等待卫星"而非"已断开"。
+            DeviceInfoRow(
+                iconContent = {
+                    Icon(
+                        imageVector = Icons.Filled.SignalCellularAlt,
+                        contentDescription = null,
+                        tint = if (isConnected && isStale) TrackTechColors.Red else TrackTechColors.Cyan,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                label = "Signal",
+                value = when {
+                    !isConnected -> "—"
+                    isStale -> "等待卫星"
+                    else -> "实时"
+                },
             )
             Box(
                 modifier = Modifier
