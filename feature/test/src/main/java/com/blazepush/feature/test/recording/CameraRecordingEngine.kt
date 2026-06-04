@@ -205,6 +205,19 @@ class CameraRecordingEngine(
                 boundConfig = config
                 isBound = true
                 boundLifecycleOwner = lifecycleOwner
+                // fix-video-finalize-error-salvage Decision 2:camera 生命周期诊断埋点——
+                // SOURCE_INACTIVE(Finalize code=4)的系统层死因(热管理/他进程抢占/驱动崩)
+                // 只能从 cameraState 的 CLOSING/CLOSED + error code 读出(2026-06-03 路测 1.15GB
+                // 视频死因无日志可查的教训)。observe 前 removeObservers 防 rebind 重复注册。
+                cam.cameraInfo.cameraState.removeObservers(lifecycleOwner)
+                cam.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
+                    val err = state.error
+                    if (err != null) {
+                        FileLogger.e(TAG, "cameraState: ${state.type} ERROR code=${err.code}")
+                    } else {
+                        FileLogger.d(TAG, "cameraState: ${state.type}")
+                    }
+                }
                 // Bug A 修复：bind 成功后检查 pendingPreviewView，若 attach 已先行到达则补连 surface。
                 val pv = pendingPreviewView
                 if (pv != null) {
@@ -521,6 +534,43 @@ class CameraRecordingEngine(
                 if (event.hasError()) {
                     val errMsg = "VideoRecordEvent.Finalize ERROR: code=${event.error} cause=${event.cause?.message}"
                     FileLogger.e(TAG, errMsg)
+                    // fix-video-finalize-error-salvage Decision 1:ERROR ≠ 文件不可用——
+                    // CameraX 对 SOURCE_INACTIVE 等错误仍 finalize 已写数据(2026-06-03 路测
+                    // 1.15GB 文件字节完整却因不 attach 成黑洞)。文件有数据即救援入库;
+                    // 损坏风险由播放路径自然暴露(可感知优于黑洞)。
+                    val filePath = outputFile.absolutePath
+                    val fileSize = outputFile.length()
+                    val wallClock = _capturedWallClock
+                    val sessionId = _capturedSessionId
+                    if (sessionId != null && outputFile.exists() && fileSize > 0) {
+                        FileLogger.e(
+                            TAG,
+                            "ERROR 降级救援: attachVideoToSession sessionId=$sessionId path=$filePath " +
+                                "size=${fileSize}B wallClock=$wallClock code=${event.error}",
+                        )
+                        engineScope.launch {
+                            runCatching {
+                                telemetryRepository.attachVideoToSession(
+                                    sessionId = sessionId,
+                                    videoFilePath = filePath,
+                                    videoStartedAtWallClock = wallClock,
+                                )
+                            }.onSuccess {
+                                FileLogger.d(TAG, "ERROR 降级救援: 写库 OK")
+                            }.onFailure { t ->
+                                FileLogger.e(TAG, "ERROR 降级救援: 写库失败", t)
+                            }
+                        }
+                    } else if (sessionId == null && outputFile.exists() && fileSize > 0) {
+                        // 无 session 孤儿沿用 OK 分支白名单删除语义(UI 不可达,损坏文件更无保留价值)
+                        val deleted = outputFile.absolutePath.contains("/video/") && outputFile.delete()
+                        FileLogger.d(TAG, "ERROR 无 session 孤儿 → ${if (deleted) "已删" else "未删"} path=$filePath")
+                    } else {
+                        FileLogger.d(TAG, "ERROR 文件无数据(size=$fileSize),不救援 path=$filePath")
+                    }
+                    // 清脏字段(对齐 OK 分支;原 ERROR 分支不清,下段录制前残留)
+                    _capturedWallClock = 0L
+                    _capturedSessionId = null
                     _recordingState.value = RecordingState.Error(errMsg)
                     // ERROR 分支也必须 invoke onFinalized，防 onDispose 路径 camera 永不解绑泄漏
                     val cb = pendingOnFinalized

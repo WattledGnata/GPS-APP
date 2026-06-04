@@ -335,7 +335,9 @@ class LapDebugExecutionScreenStateTest {
         assertTrue("handleSectorCrossing 函数应存在", handleSectorStart > 0)
         val handleSectorBody = source.substring(
             handleSectorStart,
-            source.length.coerceAtMost(handleSectorStart + 4000),
+            // 2026-06-04:4000→6000——sector gate 逐帧日志降 VERBOSE(路测修复)加长函数体,
+            // copy 锚点偏移已至 ~4120,留余量防再次溢出
+            source.length.coerceAtMost(handleSectorStart + 6000),
         )
 
         // 正向断言
