@@ -148,10 +148,29 @@ class GpsDataGenerator(
     }
 
     /**
-     * 增加同步计数器
+     * 同步计数器维护(2026-06-05 协议语义修正)。
+     *
+     * syncBits 是**时间基准版本号**:时间包声明"syncBits=N 对应小时起点 H",主包凭相同
+     * syncBits 与 reference 配对——它 MUST 仅在小时翻转(dateAndHour 变化)时递增,
+     * **不是帧计数器**。旧实现每帧 ++:接收端 reference 一旦滞后,主包 syncBits 在
+     * 3bit 空间环回,每 8 帧才撞上一次 → 接收端 ~12% 帧 isTimeSynced(5Hz 下每 1.7s
+     * 一帧),触发链/滤波窗/preTriggerBuffer 全被未同步守卫拒收(2026-06-05 凌晨
+     * speedPipeline 逐帧日志实锤)。真机 blazepush 固件 syncBits 小时级恒定,从不暴露。
      */
-    private fun incrementSyncCounter() {
-        syncCounter = (syncCounter + 1) and 0x07
+    private var lastDateAndHour = -1
+
+    private fun updateSyncCounterOnHourChange() {
+        val calendar = java.util.Calendar.getInstance().apply {
+            timeInMillis = currentTimestampMillis()
+        }
+        val month = calendar.get(java.util.Calendar.MONTH) + 1
+        val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val dateAndHour = (month - 1) * 744 + (day - 1) * 24 + hour
+        if (lastDateAndHour != -1 && dateAndHour != lastDateAndHour) {
+            syncCounter = (syncCounter + 1) and 0x07
+        }
+        lastDateAndHour = dateAndHour
     }
 
     /**
@@ -245,7 +264,7 @@ class GpsDataGenerator(
      * 更新模拟状态
      */
     private fun updateSimulation() {
-        incrementSyncCounter()
+        updateSyncCounterOnHourChange()
 
         // 简化：使用外部设置的速度，不在这里计算
         // 速度由SpeedController控制，通过setCurrentSpeed设置
