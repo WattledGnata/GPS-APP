@@ -62,7 +62,7 @@ internal fun LapVideoPanel(
     cursorAbsoluteTs: Long?,
     cursorSource: TriviewCursorSource,
     onCursorChangeFromVideo: (Long) -> Unit,
-    onFullscreen: () -> Unit,
+    onFullscreen: (currentWallClock: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -223,7 +223,7 @@ internal fun LapVideoPanel(
                     inactiveTrackColor = TrackTechColors.Border,
                 ),
             )
-            IconButton(onClick = onFullscreen) {
+            IconButton(onClick = { onFullscreen(videoStart + positionMs) }) {
                 Icon(
                     imageVector = Icons.Filled.Fullscreen,
                     contentDescription = "Fullscreen",

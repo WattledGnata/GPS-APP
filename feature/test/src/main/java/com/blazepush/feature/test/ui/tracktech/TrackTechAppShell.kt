@@ -219,18 +219,25 @@ fun TrackTechAppShell() {
                 // redo-video-playback-per-lap-with-blackout round：按圈回放的视频实时叠加遥测 HUD 播放屏。
                 // route 带 lapIndex，从详情页圈列表点进，定位该圈起点前 3 秒，圈播完停在圈末。
                 composable(
-                    route = "lap_video/{sessionId}/{lapIndex}",
+                    // lap-detail-triview-panel:startWc 可选参数——面板进全屏接力播放进度(wallClock)
+                    route = "lap_video/{sessionId}/{lapIndex}?startWc={startWc}",
                     arguments = listOf(
                         navArgument("sessionId") { type = NavType.StringType },
                         navArgument("lapIndex") { type = NavType.IntType },
+                        navArgument("startWc") {
+                            type = NavType.LongType
+                            defaultValue = -1L
+                        },
                     ),
                 ) { backStackEntry ->
                     val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
                     val lapIndex = backStackEntry.arguments?.getInt("lapIndex") ?: 0
+                    val startWc = backStackEntry.arguments?.getLong("startWc") ?: -1L
                     LapVideoPlaybackScreen(
                         navController = navController,
                         sessionId = sessionId,
                         lapIndex = lapIndex,
+                        initialPlayheadWallClock = startWc,
                     )
                 }
             }

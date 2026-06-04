@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -108,6 +109,8 @@ fun LapVideoPlaybackScreen(
     navController: NavController,
     sessionId: String,
     lapIndex: Int,
+    // lap-detail-triview-panel:面板进全屏的进度接力(wallClock;-1 = 无,从圈起点开始)
+    initialPlayheadWallClock: Long = -1L,
     telemetryRepository: TelemetryRepository = koinInject(),
     trackCatalog: TrackCatalog = koinInject(),
 ) {
@@ -183,6 +186,11 @@ fun LapVideoPlaybackScreen(
     var overlayDeltaMs by remember { mutableStateOf<Long?>(null) }
     // 当前是否落在视频覆盖段外（true → 黑屏遮罩盖 PlayerView）
     var blackout by remember { mutableStateOf(true) }
+    // lap-detail-triview-panel:playhead 暴露给进度条(state 镜像循环内局部值,TICK 节流)
+    var playheadUiWallClock by remember { mutableStateOf<Long?>(null) }
+    var playheadRangeUi by remember { mutableStateOf<LongRange?>(null) }
+    // 进度条拖动 seek 请求(循环每 tick 消费;atEnd 停驻态也会被它唤醒)
+    var seekRequestWallClock by remember { mutableStateOf<Long?>(null) }
     // round move-export-to-playback-and-relax-replay-gate：视频时长（ExoPlayer READY 后回填），
     // 用于在播放页算当前圈相对视频覆盖段的覆盖程度（决定导出按钮 enable/disable）。<=0 表示未知。
     var videoDurationMs by remember { mutableStateOf(0L) }
@@ -250,8 +258,12 @@ fun LapVideoPlaybackScreen(
         if (ctx.sampleWallClocks.isEmpty()) return@LaunchedEffect
 
         val range = VideoTelemetrySync.lapPlayheadRange(ctx.lapStartWallClock, ctx.lapEndWallClock)
-        val playheadStart = range.first
+        val playheadStart = if (initialPlayheadWallClock in range) initialPlayheadWallClock else range.first
         val playheadEnd = range.last
+        playheadRangeUi = range
+        if (initialPlayheadWallClock in range) {
+            FileLogger.d(TAG, "进度接力:面板带入 playhead=$initialPlayheadWallClock")
+        }
 
         // 等 ExoPlayer READY 拿到 duration（黑屏段也要 duration 判定覆盖段右边界）
         var localDurationMs = exoPlayer.duration
@@ -293,9 +305,42 @@ fun LapVideoPlaybackScreen(
         var lastIdx = -1
         var tickCounter = 0
         var lastTickRealtimeMs = System.currentTimeMillis()
+        // 圈播完停驻(原 break 退出——进度条拖动需要循环常驻,atEnd 可被 seek 唤醒)
+        var atEnd = false
 
         while (isActive) {
             val nowRealtime = System.currentTimeMillis()
+
+            // 进度条 seek 请求(任意时刻,含 atEnd 停驻态)
+            seekRequestWallClock?.let { req ->
+                seekRequestWallClock = null
+                playheadWallClock = req.coerceIn(playheadStart, playheadEnd)
+                atEnd = false
+                lastTickRealtimeMs = nowRealtime
+                val within = VideoTelemetrySync.isWithinVideoCoverage(
+                    playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
+                )
+                if (within) {
+                    val seekPos = VideoTelemetrySync.playheadToVideoPosition(
+                        playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
+                    )
+                    exoPlayer.seekTo(seekPos)
+                    exoPlayer.play()
+                    blackout = false
+                } else {
+                    exoPlayer.pause()
+                    blackout = true
+                }
+                wasWithinCoverage = within
+                FileLogger.d(TAG, "进度条 seek → playhead=$playheadWallClock within=$within")
+            }
+
+            if (atEnd) {
+                playheadUiWallClock = playheadWallClock
+                delay(PLAYHEAD_TICK_MS)
+                continue
+            }
+
             val withinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
                 playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
             )
@@ -333,20 +378,22 @@ fun LapVideoPlaybackScreen(
             wasWithinCoverage = withinCoverage
             lastTickRealtimeMs = nowRealtime
 
-            // 圈播完停在圈末（不自动续下一圈）
+            // 圈播完停驻圈末(不自动续下一圈;循环常驻等进度条唤醒)
             if (playheadWallClock >= playheadEnd) {
                 playheadWallClock = playheadEnd
                 exoPlayer.pause()
-                FileLogger.d(TAG, "lap end reached: playhead=$playheadWallClock lapNumber=${ctx.lapNumber}; stop")
-                // 更新最后一帧 overlay 后退出循环
+                atEnd = true
+                FileLogger.d(TAG, "lap end reached: playhead=$playheadWallClock lapNumber=${ctx.lapNumber}; 停驻待 seek")
                 updateOverlay(
                     ctx, playheadWallClock,
                     onFrame = { overlayFrame = it },
                     onLap = { overlayLap = it },
                     onDelta = { overlayDeltaMs = it },
                 )
-                break
+                playheadUiWallClock = playheadWallClock
+                continue
             }
+            playheadUiWallClock = playheadWallClock
 
             // 按 playheadWallClock 查最近邻样本更新 overlay（idx 去抖）
             val idx = VideoTelemetrySync.findNearestSampleIndex(playheadWallClock, ctx.sampleWallClocks)
@@ -421,6 +468,27 @@ fun LapVideoPlaybackScreen(
                     .align(Alignment.TopCenter)
                     .padding(top = 12.dp),
             )
+            // lap-detail-triview-panel:全屏页进度条(圈窗口坐标系,底部居中;拖动经
+            // seekRequestWallClock 由状态机消费——含播完停驻态唤醒)。限宽 0.5 居中,
+            // 避开左下圈时/右下小地图两角。
+            val rangeUi = playheadRangeUi
+            val playheadUi = playheadUiWallClock
+            if (rangeUi != null && playheadUi != null && rangeUi.last > rangeUi.first) {
+                androidx.compose.material3.Slider(
+                    value = playheadUi.coerceIn(rangeUi.first, rangeUi.last).toFloat(),
+                    onValueChange = { seekRequestWallClock = it.toLong() },
+                    valueRange = rangeUi.first.toFloat()..rangeUi.last.toFloat(),
+                    colors = androidx.compose.material3.SliderDefaults.colors(
+                        thumbColor = TrackTechColors.Cyan,
+                        activeTrackColor = TrackTechColors.Cyan,
+                        inactiveTrackColor = TrackTechColors.Border,
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(0.5f)
+                        .padding(bottom = 8.dp),
+                )
+            }
             // 导出进度遮罩（观察 VideoExportProgressBus；完成弹分享 / 失败 Toast）。
             // 导出从本屏发起，进度/分享在本屏显示。M2：三态 if/else 禁 early-return。
             VideoExportProgressOverlay(sessionId = sessionId)

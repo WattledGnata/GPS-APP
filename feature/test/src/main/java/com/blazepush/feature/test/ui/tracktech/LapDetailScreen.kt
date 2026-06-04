@@ -259,8 +259,9 @@ fun LapDetailScreen(
                                             cursorAbsoluteTs = sampleWallClocks[idx]
                                         }
                                     },
-                                    onFullscreen = {
-                                        navController.navigate("lap_video/$sessionId/$lapIndex")
+                                    onFullscreen = { wc ->
+                                        // 进度接力:全屏从面板当前时刻继续(lap-detail-triview-panel)
+                                        navController.navigate("lap_video/$sessionId/$lapIndex?startWc=$wc")
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                 )
