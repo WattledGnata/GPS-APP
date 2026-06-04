@@ -2,11 +2,14 @@
 package com.blazepush.feature.test.utils
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import com.blazepush.feature.test.FileLogger
 import java.util.Locale
 
@@ -25,6 +28,7 @@ class VoiceAnnouncer(private val context: Context) {
     private var tts: TextToSpeech? = null
     private var isInitialized = false
     private var isEnabled = true
+    private var audioFocusRequest: AudioFocusRequest? = null
 
     /** 提示音生成器；个别设备构造会抛 RuntimeException，失败则降级为"不响铃直接说"。 */
     private val toneGenerator: ToneGenerator? = try {
@@ -36,7 +40,11 @@ class VoiceAnnouncer(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * 初始化 TTS
+     * 初始化 TTS。
+     *
+     * 路测修复（2026-06-04）：原版 init ERROR 分支无任何处理无日志 → vivo 真机播报无效时
+     * 无法事后诊断（2026-06-03 路测日志零 TTS 痕迹）。现 init 全结果落 FileLogger：
+     * status / 绑定引擎 / 可用引擎列表 / setLanguage 两次返回值。
      */
     fun init(onReady: (() -> Unit)? = null) {
         if (isInitialized) {
@@ -46,12 +54,44 @@ class VoiceAnnouncer(private val context: Context) {
 
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val result = tts?.setLanguage(Locale.CHINESE)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                val engine = tts?.defaultEngine
+                val langChinese = tts?.setLanguage(Locale.CHINESE)
+                val langResult = if (langChinese == TextToSpeech.LANG_MISSING_DATA || langChinese == TextToSpeech.LANG_NOT_SUPPORTED) {
                     tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
+                } else {
+                    langChinese
                 }
+                // 语言不可用也继续（部分引擎 isLanguageAvailable 报不支持但 speak 中文照常）,关键是可观测
+                FileLogger.d(
+                    TAG,
+                    "init OK engine=$engine langCN=$langChinese langFinal=$langResult engines=${tts?.engines?.map { it.name }}",
+                )
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        FileLogger.d(TAG, "utterance start id=$utteranceId")
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        FileLogger.d(TAG, "utterance done id=$utteranceId")
+                        abandonAudioFocus()
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        FileLogger.e(TAG, "utterance ERROR id=$utteranceId")
+                        abandonAudioFocus()
+                    }
+
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        FileLogger.e(TAG, "utterance ERROR id=$utteranceId code=$errorCode")
+                        abandonAudioFocus()
+                    }
+                })
                 isInitialized = true
                 onReady?.invoke()
+            } else {
+                // ERROR：设备无可用 TTS 引擎 / 绑定失败 —— vivo 等设备的头号嫌疑,必须落盘
+                FileLogger.e(TAG, "init FAILED status=$status（设备可能无可用 TTS 引擎,语音播报不可用）")
             }
         }
     }
@@ -150,12 +190,44 @@ class VoiceAnnouncer(private val context: Context) {
 
     private fun speak(text: String, utteranceId: String) {
         if (!isInitialized) {
-            init {
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-            }
+            FileLogger.d(TAG, "speak 时未初始化,补 init 后播 id=$utteranceId")
+            init { doSpeak(text, utteranceId) }
         } else {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            doSpeak(text, utteranceId)
         }
+    }
+
+    /** 申请 AudioFocus（压低导航/音乐）后 speak；返回值落日志（原版 speak 失败完全静默）。 */
+    private fun doSpeak(text: String, utteranceId: String) {
+        requestAudioFocus()
+        val r = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        if (r != TextToSpeech.SUCCESS) {
+            FileLogger.e(TAG, "speak 返回 $r id=$utteranceId（引擎拒绝/未就绪）")
+            abandonAudioFocus()
+        }
+    }
+
+    /** 行车播报压低（duck）导航与音乐,播完即还（utterance onDone/onError abandon）。拿不到 focus 也照播。 */
+    private fun requestAudioFocus() {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val req = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .build()
+            .also { audioFocusRequest = it }
+        val result = am.requestAudioFocus(req)
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            FileLogger.d(TAG, "audioFocus 未授予 result=$result（照常播报）")
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
     }
 
     /**
@@ -163,6 +235,7 @@ class VoiceAnnouncer(private val context: Context) {
      */
     fun shutdown() {
         mainHandler.removeCallbacksAndMessages(null)
+        abandonAudioFocus()
         tts?.stop()
         tts?.shutdown()
         tts = null
@@ -171,6 +244,7 @@ class VoiceAnnouncer(private val context: Context) {
     }
 
     private companion object {
+        const val TAG = "VoiceAnnouncer"
         val CHINESE_DIGITS = arrayOf("零", "一", "二", "三", "四", "五", "六", "七", "八", "九")
         const val TONE_VOLUME = 80 // 0-100
         const val TONE_DURATION_MS = 150
