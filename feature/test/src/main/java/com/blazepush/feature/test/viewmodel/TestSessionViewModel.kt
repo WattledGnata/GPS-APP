@@ -35,6 +35,8 @@ import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
 import com.blazepush.feature.test.model.LapRunConfig
+import com.blazepush.feature.test.model.laptiming.CrossingEvent
+import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapRecord
 import com.blazepush.feature.test.model.laptiming.LapSession
@@ -929,8 +931,11 @@ class TestSessionViewModel(
                     updatedLapIndex = updatedSession.currentLapIndex,
                 )
                 val toWrite = newCrossings.subList(prevCount, newCrossings.size)
+                // 游标按未过滤 size 推进(in-memory 列表索引语义,与入库量无关)
                 lastWrittenCrossingCount = newCrossings.size
-                toWrite.forEach { crossing ->
+                // fix-crossing-events-write-amplification:25Hz 逐帧 NoIntersection 拒绝不入库
+                // (2026-06-03 路测一晚 1.8 万行写放大);accepted 真相源 + 有价值拒绝全保留
+                toWrite.filter(::shouldPersistCrossing).forEach { crossing ->
                     // fix-lap-crossing-clock-hygiene round：过线事件触发的同一 ViewModel 协程上下文内
                     // 立即取 currentTimeMillis 作为 wallClock，与 binary samples absoluteTs 同时钟域，
                     // 供未来 per-lap segment readLapSamples 窗口截取使用。
@@ -1047,3 +1052,13 @@ class TestSessionViewModel(
         isFinishing = false
     }
 }
+
+/**
+ * crossing_events 持久化过滤谓词(fix-crossing-events-write-amplification spec R1):
+ * - accepted == true:全写(lapCount/bestLapMs 派生的计时真相源,MUST NOT 过滤)
+ * - accepted == false 且 reason != NoIntersection:保留(WrongDirection/UnexpectedGateOrder/
+ *   TooSlow/Cooldown——真实过线被拒,罕见且有诊断价值)
+ * - NoIntersection 拒绝:25Hz 常规帧,MUST NOT 入库(2026-06-03 路测 1.8 万行写放大根因)
+ */
+internal fun shouldPersistCrossing(crossing: CrossingEvent): Boolean =
+    crossing.accepted || crossing.reason != CrossingReason.NoIntersection
