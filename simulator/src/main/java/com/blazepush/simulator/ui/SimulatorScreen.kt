@@ -96,6 +96,7 @@ fun SimulatorScreen(
                 isReplayPlaying = uiState.isReplayPlaying,
                 onEnableReplay = { viewModel.enableReplayMode() },
                 onTriggerReplayOnce = { viewModel.triggerReplayOnce() },
+                onTriggerRealRoadReplay = { viewModel.triggerRealRoadReplayOnce() },
             )
 
             // 速度控制
@@ -311,6 +312,7 @@ fun ReplayEntryCard(
     isReplayPlaying: Boolean,
     onEnableReplay: () -> Unit,
     onTriggerReplayOnce: () -> Unit,
+    onTriggerRealRoadReplay: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -345,6 +347,16 @@ fun ReplayEntryCard(
                     enabled = isAdvertising && !isReplayPlaying,
                 ) {
                     Text(if (isReplayPlaying) "PLAYING…" else "PLAY ONCE")
+                }
+                // 真实路测 0-100 回放(2026-06-05):2026-06-03 23:11 真车数据(25Hz/53s,
+                // 蠕动 3 次起步+全力到 99)——0-100 桌面验证用真实形态,不再手拖滑块
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onTriggerRealRoadReplay,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isAdvertising && !isReplayPlaying,
+                ) {
+                    Text(if (isReplayPlaying) "PLAYING…" else "真实0-100路测回放(25Hz)")
                 }
             }
         }

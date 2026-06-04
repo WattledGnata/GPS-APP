@@ -271,7 +271,17 @@ class SimulatorViewModel : ViewModel() {
      * 跑期间 isReplayPlaying = true，UI 按钮置灰；跑完 reset 为 false。
      * 本方法幂等：已在播放时调用立即返回，不会叠加 job。
      */
-    fun triggerReplayOnce() {
+    fun triggerReplayOnce() = triggerReplayOnce("replay/tianfu_track_replay_5hz.json")
+
+    /**
+     * 真实路测 0-100 回放(2026-06-05):2026-06-03 23:11 真车 telemetry 转制
+     * (25Hz,53s,含蠕动 3 次起步 + 全力加速到 99 km/h)——0-100 链路桌面验证
+     * 用真实数据形态,不再依赖手拖滑块。注:速度为接收端滤波后值,回放会被
+     * 再滤一遍(双重 median 轻微钝化,形态影响可忽略)。
+     */
+    fun triggerRealRoadReplayOnce() = triggerReplayOnce("replay/real_0to100_20260603.json")
+
+    private fun triggerReplayOnce(assetName: String) {
         if (_uiState.value.isReplayPlaying) return
         if (!_uiState.value.isReplayMode && _uiState.value.currentScenario != TestScenario.REAL_TRACK_REPLAY) return
         if (!_uiState.value.isAdvertising) return
@@ -281,7 +291,7 @@ class SimulatorViewModel : ViewModel() {
             val context = appContext ?: return@launch
             val generator = dataGenerator ?: return@launch
             val manager = peripheralManager ?: return@launch
-            val replayJson = context.assets.open("replay/tianfu_track_replay_5hz.json").bufferedReader().use { it.readText() }
+            val replayJson = context.assets.open(assetName).bufferedReader().use { it.readText() }
             val replay = replayAssetLoader.loadReplayJson(replayJson)
             val frames = replayPlaybackPlanner.plan(replay.samples)
 
