@@ -70,8 +70,12 @@ class GpsDataFilter(
         // 失联首帧用旧 previousRaw 计算 dt 巨大的 maxDelta = 90 × dt，真实跳变被误判为
         // "非异常"。修后先重置：previousRaw = null 时，下面三个判定函数都走早退分支
         // （0.0 / false / (1.0, false)），把本帧作为"新基准"。
+        // frequency-agnostic(2026-06-05):重置阈值 0.2s → 2.0s——0.2s 与 5Hz 数据(帧间隔
+        // 200ms)边界冲突,约一半帧触发重置导致滤波状态振荡(模拟器实测"跳 0 跳 1");
+        // 2.0s 下 1Hz 数据(1s 间隔)也不误触发,真实失联(BLE 静默)2s 重置语义仍成立。
+        // maxDelta 本就按真实 dt 物理 scaling(25m/s²×dt),0.2-2s 间隔的速度跳变约束依然有效。
         val dtFromPrevious = previousRaw?.let { (raw.timestamp - it.timestamp) / 1000.0 } ?: 0.0
-        if (dtFromPrevious > 0.2) {
+        if (dtFromPrevious > 2.0) {
             previousRaw = null
             previousPosition = null
             previousOutputSpeed = null  // 与 previousRaw 同生命周期（A12 invariant 对称扩展）

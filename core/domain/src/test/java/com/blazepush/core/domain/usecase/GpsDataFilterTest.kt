@@ -1198,8 +1198,9 @@ class GpsDataFilterTest {
         val localFilter = GpsDataFilter()
         // 建立 baseline
         localFilter.process(createGpsData(timestamp = 0L, speed = 60.0))
-        // 500ms 后的下一帧（dt = 500ms > 200ms 阈值）
-        val recovered = localFilter.process(createGpsData(timestamp = 500L, speed = 60.0))
+        // 2500ms 后的下一帧（dt = 2.5s > 2.0s 阈值;frequency-agnostic 2026-06-05:
+        // 阈值 0.2s→2.0s,5Hz/1Hz 数据帧间隔不再误触发重置）
+        val recovered = localFilter.process(createGpsData(timestamp = 2500L, speed = 60.0))
 
         assertEquals(
             "A12：信号丢失首帧 acceleration 必须归零（previousRaw 已被重置，早退返回 0）",
@@ -1214,6 +1215,30 @@ class GpsDataFilterTest {
     }
 
     /**
+     * frequency-agnostic(2026-06-05)回归锁:5Hz(200ms)/1Hz(1s)帧间隔 MUST NOT 触发
+     * A12 重置——旧阈值 0.2s 与 5Hz 数据边界冲突,约一半帧重置导致滤波振荡(模拟器
+     * 实测"跳 0 跳 1");低频正常帧应保持基准连续(加速度/约束按真实 dt 计算)。
+     */
+    @Test
+    fun A12_process_lowFrequencyFrames_doNotTriggerReset() {
+        val localFilter = GpsDataFilter()
+        localFilter.process(createGpsData(timestamp = 0L, speed = 50.0))
+        // 5Hz:200ms 间隔,dv=1 → 基准保持,加速度非零(≈1.39 m/s²)
+        val hz5 = localFilter.process(createGpsData(timestamp = 200L, speed = 51.0))
+        assertTrue(
+            "5Hz 帧间隔不得重置基准(acceleration 应按真实 dt 正常计算,非首样本 0):${hz5.acceleration}",
+            hz5.acceleration > 0.5
+        )
+        // 1Hz:1000ms 间隔 + 大跳变(dv=200 > maxDelta=25×3.6×1.0=90)——硬区分:
+        // 基准未重置 → 物理约束生效 isAnomaly=true;若被重置则早退 false(旧 0.2s 阈值行为)
+        val hz1 = localFilter.process(createGpsData(timestamp = 1200L, speed = 251.0))
+        assertTrue(
+            "1Hz 帧间隔不得重置基准(大跳变应被物理约束捕获,重置则会漏判)",
+            hz1.isAnomaly
+        )
+    }
+
+    /**
      * A12-2：信号丢失后首帧速度大跳变不被旧 previousRaw 误压制。
      * 旧顺序下 `maxDelta = 90 × 0.5 = 45` 会把 300 km/h 跳变判非异常（错！实际
      * 应视为"没有基准，无法比较"）。新顺序下 previousRaw=null 早退返回 false。
@@ -1222,8 +1247,8 @@ class GpsDataFilterTest {
     fun A12_process_signalLossThenLargeSpeedJump_isNotSuppressedByStalePreviousRaw() {
         val localFilter = GpsDataFilter()
         localFilter.process(createGpsData(timestamp = 0L, speed = 10.0))
-        // 500ms 后跳到 310 km/h（dv = 300）
-        val jumpResult = localFilter.process(createGpsData(timestamp = 500L, speed = 310.0))
+        // 2500ms 后跳到 310 km/h（dv = 300;阈值 2.0s 已触发重置,无对比基准）
+        val jumpResult = localFilter.process(createGpsData(timestamp = 2500L, speed = 310.0))
         assertFalse(
             "A12：信号丢失后首帧没有对比基准，不能凭空判异常（v1 会用 500ms 前旧基准算 maxDelta 压制跳变）",
             jumpResult.isAnomaly
@@ -1236,7 +1261,7 @@ class GpsDataFilterTest {
         )
 
         // 接着用新基准正常推进
-        val continued = localFilter.process(createGpsData(timestamp = 540L, speed = 310.0))
+        val continued = localFilter.process(createGpsData(timestamp = 2540L, speed = 310.0))
         assertEquals(
             "A12：新基准建立后下一帧 dv=0, acceleration=0",
             0.0,
@@ -1282,10 +1307,10 @@ class GpsDataFilterTest {
             val r = localFilter.process(createGpsData(timestamp = ts, speed = 200.0))
             assertTrue("连续 spike 应持续 isAnomaly=true", r.isAnomaly)
         }
-        // 第 4 帧 ts=500ms，相对 previousRaw=ts0 差 500ms > 200ms 阈值 → A12 重置
-        val resetFrame = localFilter.process(createGpsData(timestamp = 500L, speed = 31.0))
+        // 第 4 帧 ts=2500ms，相对 previousRaw=ts0 差 2.5s > 2.0s 阈值 → A12 重置
+        val resetFrame = localFilter.process(createGpsData(timestamp = 2500L, speed = 31.0))
         assertEquals(
-            "A12 兜底：previousRaw 应被 dt > 200ms 重置，本帧走首样本路径 acceleration=0",
+            "A12 兜底：previousRaw 应被 dt > 2.0s 重置，本帧走首样本路径 acceleration=0",
             0.0,
             resetFrame.acceleration,
             1e-9

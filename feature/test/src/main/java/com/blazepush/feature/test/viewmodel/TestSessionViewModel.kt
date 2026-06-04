@@ -369,6 +369,13 @@ class TestSessionViewModel(
                 lastReceivedAtElapsed = SystemClock.elapsedRealtime()
 
                 val filteredData = gpsDataFilter.process(gpsData)
+                // frequency-agnostic 诊断(2026-06-05):raw/filtered 并排逐帧(VERBOSE 全量,
+                // 5Hz 模拟器每秒 5 条/25Hz 真机 25 条;debug 包默认开)——定位"跳 0"是源头还是滤波产物
+                FileLogger.v(
+                    TAG,
+                    "speedPipeline: raw=${"%.1f".format(gpsData.speed)} filtered=${"%.1f".format(filteredData.speed)} " +
+                        "anomaly=${filteredData.isAnomaly} posAnom=${filteredData.isPositionAnomaly} ts=${gpsData.timestamp}",
+                )
                 _filteredSpeedKmh.value = filteredData.speed // 仪表同源(Decision 2)
                 updatePreTriggerBuffer(filteredData)
                 updateLaunchStatus(gpsData)

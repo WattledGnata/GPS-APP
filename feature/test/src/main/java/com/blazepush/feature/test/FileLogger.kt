@@ -96,6 +96,14 @@ object FileLogger {
     }
 
     fun init(context: Context) {
+        // frequency-agnostic 诊断(2026-06-05):debug 包默认 VERBOSE——vSampled 已对高频
+        // call site 采样节流(1Hz/key),verbose 全开日志量可控;release 包仍 DEBUG。
+        // 解决"模拟器跳 0 无法定位"类问题:无运行时 setLevel 入口,路测期诊断只能靠默认级别。
+        // applicationInfo 可空防御:单测 mock Context 返回 null → 回落 DEBUG(测试级别假设不变)
+        val appFlags = context.applicationInfo?.flags ?: 0
+        if ((appFlags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            currentLevel = LogLevel.VERBOSE
+        }
         // graceful handoff 强契约（Shutdown FIFO 方案）：
         // 1. 向 channel FIFO 末尾发 Shutdown 命令，同步等旧 flush job 消费完所有
         //    pre-init Line 后写 batch 并退出。避免 cancelAndJoin 的交付竞态
