@@ -12,7 +12,13 @@ class LivetimingUploader(private val api: LivetimingApi) : LapUploadApi {
             if (resp.isSuccessful) {
                 UploadResult.Success
             } else {
-                UploadResult.HttpError(resp.code())
+                // errorBody 只能读一次,截断防大响应;读失败不影响 code 分流
+                val body = try {
+                    resp.errorBody()?.string()?.take(200)
+                } catch (e: Exception) {
+                    null
+                }
+                UploadResult.HttpError(resp.code(), body)
             }
         } catch (e: Exception) {
             UploadResult.NetworkError(e)

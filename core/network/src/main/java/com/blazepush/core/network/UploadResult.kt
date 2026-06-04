@@ -10,6 +10,11 @@ package com.blazepush.core.network
  */
 sealed interface UploadResult {
     object Success : UploadResult
-    data class HttpError(val code: Int) : UploadResult
+
+    /**
+     * @param body 服务端 errorBody 摘要（截断），仅用于日志诊断。
+     *   路测教训（2026-06-04）：400 不落 body 时"分段和与整圈相差过大"这类根因只能靠 curl 复现才看到。
+     */
+    data class HttpError(val code: Int, val body: String? = null) : UploadResult
     data class NetworkError(val cause: Throwable?) : UploadResult
 }

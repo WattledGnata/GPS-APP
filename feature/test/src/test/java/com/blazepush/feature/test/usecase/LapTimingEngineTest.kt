@@ -127,7 +127,10 @@ class LapTimingEngineTest {
         )
 
         val lap = finishedSession.completedLaps.first()
-        assertEquals(listOf(250_600L, 8_200L), lap.sectorTimes)
+        // 路测修复（2026-06-04）：N 个 sector gate → N+1 段（含末段 s2→闭圈 SF）,sum == durationMillis。
+        // 开圈 SF@...6590, s1@...7190(+250600), s2@...5390(+8200), 闭圈 SF@...3590(+8200)
+        assertEquals(listOf(250_600L, 8_200L, 8_200L), lap.sectorTimes)
+        assertEquals("分段和必须精确等于整圈(服务端校验契约)", lap.durationMillis, lap.sectorTimes.sum())
         // 注：本用例的 trajectory 时间戳跨度为分钟级（用于测试 sector 穿线顺序），
         // 相邻差天然超过 200ms 阈值，会触发 ProtocolDesyncGap；
         // 此处不关心该标志，只验证 sectors 完整时不带 IncompleteSectors。
@@ -163,7 +166,9 @@ class LapTimingEngineTest {
         )
 
         val lap = finishedSession.completedLaps.first()
-        assertEquals(listOf(250_600L), lap.sectorTimes)
+        // 漏检 s2 时段并入末段（s1→闭圈 16400）,段数 2 而非 3,但 sum 仍 == durationMillis
+        assertEquals(listOf(250_600L, 16_400L), lap.sectorTimes)
+        assertEquals("漏检 sector 时分段和仍须等于整圈", lap.durationMillis, lap.sectorTimes.sum())
         // 本用例 trajectory ts 跨度为分钟级，同时带 IncompleteSectors 与 ProtocolDesyncGap
         assertTrue(
             "expected IncompleteSectors, got=${lap.qualityFlags}",

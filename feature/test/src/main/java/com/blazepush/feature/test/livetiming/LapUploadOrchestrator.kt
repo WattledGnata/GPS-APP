@@ -39,24 +39,30 @@ class LapUploadOrchestrator(
      * 满足 → 上报；Success 完成,失败入队。
      */
     override suspend fun onLapCompleted(record: LapRecord) {
+        // 路测修复（2026-06-04）：三个前置 gate 原先静默跳过 → 路测"上报失败"无法从日志区分
+        // 是 gate 拦截还是网络/服务端失败；全部补可观测日志。
         if (!userProfile.livetimingEnabled.first()) {
+            FileLogger.d("Livetiming", "开关关闭,跳过上报 lap=${record.lapIndex}")
             return // 开关关:完全不上报,也不入队（spec R1）
         }
         val driver = userProfile.driverName.first()
         if (driver.isBlank()) {
+            FileLogger.d("Livetiming", "车手名未设置,跳过上报 lap=${record.lapIndex}（已发 UI 提示）")
             _needDriverNameHint.tryEmit(Unit) // 无车手名:跳过 + 一次性提示
             return
         }
         if (record.trackId.isBlank()) {
+            FileLogger.d("Livetiming", "无 trackId（自由跑/未匹配赛道）,跳过上报 lap=${record.lapIndex}")
             return // 自由跑无赛道:跳过
         }
         val dto = LapUploadMapper.buildDto(record, driver)
         when (val r = uploader.upload(dto)) {
             is UploadResult.Success -> FileLogger.d("Livetiming", "上报成功 201 ${dto.clientLapId}")
             is UploadResult.HttpError -> if (r.code == 400) {
-                FileLogger.e("Livetiming", "上报 400 不可上报,丢弃 ${dto.clientLapId}") // 永久失败:不入队
+                // 400 必须落服务端拒绝原因——2026-06-03 路测 3 圈全 400,无 body 日志只能 curl 复现定位
+                FileLogger.e("Livetiming", "上报 400 不可上报,丢弃 ${dto.clientLapId} server=「${r.body}」") // 永久失败:不入队
             } else {
-                FileLogger.d("Livetiming", "上报 HTTP ${r.code} ${dto.clientLapId},入队补传") // 401/429/5xx
+                FileLogger.d("Livetiming", "上报 HTTP ${r.code} ${dto.clientLapId},入队补传 server=「${r.body}」") // 401/429/5xx
                 enqueue(dto)
             }
             is UploadResult.NetworkError -> {
@@ -75,14 +81,18 @@ class LapUploadOrchestrator(
                 is UploadResult.Success -> dao.deleteByClientLapId(p.clientLapId) // 201（含幂等重复）出队
                 is UploadResult.HttpError -> when (r.code) {
                     400 -> {
-                        FileLogger.e("Livetiming", "flush 400 不可上报,丢弃 ${dto.clientLapId}")
+                        FileLogger.e("Livetiming", "flush 400 不可上报,丢弃 ${dto.clientLapId} server=「${r.body}」")
                         dao.deleteByClientLapId(p.clientLapId) // 永久失败丢弃,不死循环（spec R4）
                     }
                     429 -> {
                         FileLogger.d("Livetiming", "flush 429 限流,本轮停止")
                         return // 限流:停止本轮,保留队列,按 Retry-After 下次再来
                     }
-                    else -> dao.incrementRetry(p.clientLapId) // 401/5xx:保留重试
+                    else -> {
+                        // 路测修复（2026-06-04）：原先无日志,401/5xx 重试在日志里不可见易误判为圈丢失
+                        FileLogger.d("Livetiming", "flush HTTP ${r.code} ${dto.clientLapId},保留重试")
+                        dao.incrementRetry(p.clientLapId) // 401/5xx:保留重试
+                    }
                 }
                 is UploadResult.NetworkError -> {
                     FileLogger.e("Livetiming", "flush 网络失败 ${dto.clientLapId},保留重试", r.cause)

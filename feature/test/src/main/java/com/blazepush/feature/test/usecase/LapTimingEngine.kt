@@ -203,7 +203,7 @@ class LapTimingEngine(
             startedAtMillis = activeLap.startedAtMillis,
             finishedAtMillis = finishedMillis,
             durationMillis = finishedMillis - activeLap.startedAtMillis,
-            sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis),
+            sectorTimes = activeLap.sectorEntries.toSectorTimes(activeLap.startedAtMillis, finishedMillis),
             trajectory = trajectory,
             // A21 裁剪层（R5 修订）：严格 `>` 大于，边界事件归前一圈。
             //   v1 (engine-entry-hardening) 用 `>=` 含边界：`CrossingEvent.timestampMillis` 升级为插值毫秒后，
@@ -269,10 +269,14 @@ class LapTimingEngine(
         val expectedGateDetection = expectedPair.second
         val unexpectedAccepted = allDetections.filter { (gate, d) -> gate.id != targetGate.id && d.accepted }
 
-        FileLogger.d(
-            TAG,
-            "targetGate=${targetGate.id}, prev=(${previousSample.latitude},${previousSample.longitude},ts=${previousSample.timestampMillis}), current=(${currentSample.latitude},${currentSample.longitude},ts=${currentSample.timestampMillis}), accepted=${expectedGateDetection.accepted}, reason=${expectedGateDetection.reason}, directionScore=${expectedGateDetection.directionScore}, directionalSpeed=${expectedGateDetection.directionalSpeedMps}, unexpectedAcceptedCount=${unexpectedAccepted.size}"
-        )
+        // 路测修复（2026-06-04）：sector gate 逐帧日志同 line 105 start-finish 降 VERBOSE ——
+        // 25Hz × D 级写盘把 5MB rotation 现场刷掉（昨晚 4.5MB 日志大半是本条）；A39 pattern 照抄。
+        if (FileLogger.isVerboseEnabled) {
+            FileLogger.v(
+                TAG,
+                "targetGate=${targetGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${expectedGateDetection.accepted}, reason=${expectedGateDetection.reason}, directionScore=${expectedGateDetection.directionScore}, directionalSpeed=${expectedGateDetection.directionalSpeedMps}, unexpectedAcceptedCount=${unexpectedAccepted.size}"
+            )
+        }
 
         // 期待门 CrossingEvent：accepted 用插值时刻，rejected 降级到 currentSample.ts（R2 B2 契约）
         val expectedCrossingMillis = if (expectedGateDetection.accepted) {
@@ -342,12 +346,23 @@ class LapTimingEngine(
         // A36：读 Track 的 orderedSectorGates 单点真理派生字段，不再局部 sortedBy
         track.orderedSectorGates.getOrNull(nextExpectedGateIndex - 1)
 
-    private fun List<SectorEntry>.toSectorTimes(startedAtMillis: Long): List<Long> {
+    /**
+     * SectorEntry 序列 → 分段时长。N 个 sector gate 把整圈切成 **N+1 段**：
+     * [开圈→s1, s1→s2, ..., sN→闭圈]。末段（最后 sector gate → 终点线）由 [finishedAtMillis] 闭合，
+     * 保证 `sum(sectorTimes) == durationMillis` 精确成立。
+     *
+     * 路测修复（2026-06-04）：旧实现漏末段（只产 N 段），分段和恒比整圈少一段 →
+     * livetiming 服务端"分段和与整圈相差过大"校验 100% 拒绝（HTTP 400 永久丢弃）。
+     * 空 entries（无 sector gate 赛道 / 全漏检）返回空列表，上报侧 takeIf { isNotEmpty() } 不传。
+     */
+    private fun List<SectorEntry>.toSectorTimes(startedAtMillis: Long, finishedAtMillis: Long): List<Long> {
+        if (isEmpty()) return emptyList()
         var previousTimestamp = startedAtMillis
-        return map { entry ->
+        val gateSegments = map { entry ->
             val duration = entry.crossedAtMillis - previousTimestamp
             previousTimestamp = entry.crossedAtMillis
             duration
         }
+        return gateSegments + (finishedAtMillis - previousTimestamp)
     }
 }
