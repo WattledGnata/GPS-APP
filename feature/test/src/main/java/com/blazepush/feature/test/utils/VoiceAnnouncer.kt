@@ -132,6 +132,15 @@ class VoiceAnnouncer(private val context: Context) {
     }
 
     /**
+     * 播报测试未完成（DNF，unify-speed-judgement-source Decision 3）：叮 + "测试未完成"。
+     * 未达目标速度的测试结束时替代"零点零零秒"。
+     */
+    fun announceTestNotCompleted() {
+        if (!isEnabled) return
+        dingThenSpeak("测试未完成", "test_dnf")
+    }
+
+    /**
      * 成绩秒数 → "X.XX秒"，整数自然中文 + 两位小数逐位。
      * 6.8 → "六点八零秒" / 12.34 → "十二点三四秒" / 0.95 → "零点九五秒"
      */

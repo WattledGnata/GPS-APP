@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -46,6 +47,8 @@ import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.model.TestResult
 import com.blazepush.core.domain.model.TestState
+import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestMode
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
@@ -111,7 +114,30 @@ fun TrackTechTestExecutionScreen(
     val currentMode by sessionViewModel.currentMode.collectAsState()
     val countdownSeconds by sessionViewModel.countdownSeconds.collectAsState()
 
-    val speed = gpsData.speed
+    // 路测修复(2026-06-04 #2 播报无效真因)：V1→V2 改版时语音链路未迁移——init/announce
+    // 只在旧 ui/screen/TestExecutionScreen 调用,V2 全程无人调 speak(两晚路测日志零 TTS
+    // 痕迹的根因,与 TTS 引擎/AudioFocus/车机路由皆无关)。照搬 V1 接法(koin 单例)。
+    val voiceAnnouncer: VoiceAnnouncer = koinInject()
+    LaunchedEffect(Unit) { voiceAnnouncer.init() }
+    LaunchedEffect(testState) {
+        val s = testState
+        if (s is TestState.Completed) {
+            // unify-speed-judgement-source Decision 3:DNF(totalTime<=0)播"测试未完成",
+            // 不播"零点零零秒"
+            if (s.result.totalTime <= 0.0) {
+                voiceAnnouncer.announceTestNotCompleted()
+            } else {
+                when (s.result.template) {
+                    is TestTemplate.Acceleration0To100 -> voiceAnnouncer.announceAccelerationResult(s.result.totalTime)
+                    is TestTemplate.Braking100To0 -> voiceAnnouncer.announceBrakingResult(s.result.totalTime)
+                }
+            }
+        }
+    }
+
+    // unify-speed-judgement-source Decision 2:仪表用滤波后速度(与判停/成绩同源);
+    // raw 仅保留给状态条/卫星等非速度字段
+    val speed by sessionViewModel.filteredSpeedKmh.collectAsState()
     val elapsedSeconds: Double = when (val s = testState) {
         is TestState.Running -> s.session.dataPoints.lastOrNull()?.elapsedTime ?: 0.0
         is TestState.Completed -> s.result.totalTime
@@ -384,11 +410,17 @@ private fun PhaseBanner(
             if (currentMode == TestMode.Acceleration) "ACCELERATING" else "BRAKING",
             "Started automatically",
         )
-        is TestState.Completed -> Triple(
-            "COMPLETE",
-            if (currentMode == TestMode.Acceleration) "ACCELERATION DONE" else "BRAKING DONE",
-            "Result recorded",
-        )
+        // unify-speed-judgement-source Decision 3:DNF(totalTime<=0)显式表达,
+        // 不再显示 "DONE" 成功文案(2026-06-04 路测"done 却成绩 0"认知撕裂)
+        is TestState.Completed -> if (testState.result.totalTime <= 0.0) {
+            Triple("DNF", "NOT COMPLETED", "Target speed not reached")
+        } else {
+            Triple(
+                "COMPLETE",
+                if (currentMode == TestMode.Acceleration) "ACCELERATION DONE" else "BRAKING DONE",
+                "Result recorded",
+            )
+        }
     }
 
     Box(

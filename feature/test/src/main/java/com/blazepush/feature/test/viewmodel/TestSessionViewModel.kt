@@ -279,6 +279,11 @@ class TestSessionViewModel(
     private val _latestLapRecords = MutableStateFlow<List<LapRecord>>(emptyList())
     val latestLapRecords: StateFlow<List<LapRecord>> = _latestLapRecords.asStateFlow()
 
+    // unify-speed-judgement-source Decision 2:滤波后速度暴露给执行屏仪表——
+    // 显示/判停/成绩三处同源 filtered,用户所见即成绩所算(raw/filtered 分歧帧不再认知撕裂)
+    private val _filteredSpeedKmh = MutableStateFlow(0.0)
+    val filteredSpeedKmh: StateFlow<Double> = _filteredSpeedKmh.asStateFlow()
+
     private var lastLapGpsSample: GpsSample? = null
     private var isLapRecording = false
 
@@ -351,6 +356,7 @@ class TestSessionViewModel(
                 lastReceivedAtElapsed = SystemClock.elapsedRealtime()
 
                 val filteredData = gpsDataFilter.process(gpsData)
+                _filteredSpeedKmh.value = filteredData.speed // 仪表同源(Decision 2)
                 updatePreTriggerBuffer(filteredData)
                 updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
@@ -686,7 +692,9 @@ class TestSessionViewModel(
                         "processFilteredData: missing activeSessionStartTs, skip telemetry write but test pipeline continues"
                     )
                 }
-                if (state.session.template.shouldEnd(filteredData.raw)) {
+                // unify-speed-judgement-source Decision 1:判停用滤波后速度(speed 字段替换),
+                // 与成绩窗口算法同源——raw 瞬时尖峰不再触发"done 却 DNF"(2026-06-04 22:37 路测回归)
+                if (state.session.template.shouldEnd(filteredData.raw.copy(speed = filteredData.speed))) {
                     finishTest(state.session)
                 }
             }
