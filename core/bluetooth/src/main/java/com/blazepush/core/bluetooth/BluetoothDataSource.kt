@@ -10,29 +10,46 @@ import android.content.Context
 import android.util.Log
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
 import com.blazepush.core.domain.model.GpsData
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
  * 蓝牙数据源 - 唯一的GPS数据发射点
  * 替代原有的BluetoothManager，使用普通Kotlin类而非Android Service
+ *
+ * fix-ble-auto-reconnect（2026-06-04）：增加会话内意外断开自动重连——
+ * DISCONNECTED 且最近用户意图为连接时,指数退避(1s·2^n 封顶 30s)无限重试,
+ * 直到 CONNECTED / disconnect() / 切设备。dispatcher 构造参数仅供单测注入
+ * TestDispatcher(生产默认 Dispatchers.IO,AppModule 构造点零改动)。
  */
 class BluetoothDataSource(
     private val context: Context,
-    private val parser: RaceChronoParser
+    private val parser: RaceChronoParser,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     companion object {
         private const val TAG = "BluetoothDataSource"
+        private const val RECONNECT_BASE_DELAY_MS = 1_000L
+        private const val RECONNECT_MAX_DELAY_MS = 30_000L
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(dispatcher + SupervisorJob())
     private var connectionCollectJob: Job? = null
+
+    // 自动重连状态（ble-auto-reconnect spec R1/R2）
+    private var lastRequestedAddress: String? = null
+    private var userInitiatedDisconnect = false
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
 
     // 唯一的数据输出口
     private val _dataFlow = MutableStateFlow(GpsData.Empty)
@@ -44,8 +61,25 @@ class BluetoothDataSource(
 
     private var bleConnection: BleConnection? = null
 
+    /**
+     * 公开连接入口（用户意图=想连）：记录目标地址、复位重连状态后委托 [doConnect]。
+     * 切设备时取消针对旧地址的挂起重连（spec R2）。
+     */
     fun connect(deviceAddress: String) {
         Log.d(TAG, "connect() called with address: $deviceAddress")
+        lastRequestedAddress = deviceAddress
+        userInitiatedDisconnect = false
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        reconnectJob = null
+        doConnect(deviceAddress)
+    }
+
+    /**
+     * 实际连接路径（A27 清理顺序不变）。重连路径直接走此函数,**不**复位
+     * reconnectAttempt——否则退避退化为恒 1s 高频 connectGatt（design Decision 4）。
+     */
+    private fun doConnect(deviceAddress: String) {
         scope.launch {
             try {
                 // A27 切设备前清旧连接（严格顺序，原子化）：
@@ -76,9 +110,23 @@ class BluetoothDataSource(
                                 _dataFlow.value = _dataFlow.value.copy(isStale = stale)
                             }
                         }
-                        stateFlow.collect { state ->
+                        // drop(1):跳过 BleConnection StateFlow 的 replay 初值(新实例恒 DISCONNECTED,
+                        // 无信息量)——不跳过会在每次 doConnect 时误调度假重连,1s 后拆掉刚建好的连接
+                        stateFlow.drop(1).collect { state ->
                             Log.d(TAG, "BleConnection 状态变化: $state")
                             _connectionState.value = state
+                            when (state) {
+                                ConnectionState.CONNECTED -> {
+                                    // 连上即复位退避(下次意外断开从 1s 重来,spec R1 Scenario 2)
+                                    // 并取消任何挂起重连(防御残留假重连拆好链)
+                                    reconnectAttempt = 0
+                                    reconnectJob?.cancel()
+                                    reconnectJob = null
+                                }
+                                // 意外断开(远端断/连接超时)→ 调度重连(spec R1)
+                                ConnectionState.DISCONNECTED -> maybeScheduleReconnect()
+                                else -> { /* CONNECTING/DISCONNECTING 无重连动作 */ }
+                            }
                         }
                     }
                 }
@@ -93,11 +141,35 @@ class BluetoothDataSource(
                     isConnected = false,
                     errorMessage = e.message
                 )
+                // 异常分支不经 collect 传导(直接赋值),需显式调度重连(design Risks 竞态条款)
+                maybeScheduleReconnect()
             }
         }
     }
 
+    /**
+     * 意外断开的退避重连调度（ble-auto-reconnect spec R1/R2）。
+     * guard:用户主动断开 / 无连接历史 / 已有挂起重连 → 不调度。
+     */
+    private fun maybeScheduleReconnect() {
+        val address = lastRequestedAddress ?: return
+        if (userInitiatedDisconnect) return
+        if (reconnectJob?.isActive == true) return
+        val delayMs = minOf(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS shl reconnectAttempt)
+        Log.d(TAG, "意外断开,${delayMs}ms 后第 ${reconnectAttempt + 1} 次自动重连 $address")
+        reconnectJob = scope.launch {
+            delay(delayMs)
+            if (userInitiatedDisconnect) return@launch // delay 期间用户断开,作废
+            reconnectAttempt = minOf(reconnectAttempt + 1, 30) // 防 shl 溢出,30 次后恒封顶
+            doConnect(address)
+        }
+    }
+
     fun disconnect() {
+        // 用户意图=想断:取消挂起重连,后续 DISCONNECTED 不再调度(spec R2)
+        userInitiatedDisconnect = true
+        reconnectJob?.cancel()
+        reconnectJob = null
         scope.launch {
             connectionCollectJob?.cancel()
             connectionCollectJob = null
