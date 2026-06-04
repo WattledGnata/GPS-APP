@@ -643,9 +643,10 @@ class TestSessionViewModelTrackLapTest {
             viewModel.skipCountdown()
             dispatcher.scheduler.advanceUntilIdle()
 
-            // 先把状态推进到 Running：3 帧静止 + 5 帧加速（全部 isTimeSynced=true，speed 保持 < 100
-            // 避免误触发 shouldEnd）。
-            repeat(3) { i ->
+            // 先把状态推进到 Running：25 帧静止 + 12 帧加速（全部 isTimeSynced=true，speed 保持 < 100
+            // 避免误触发 shouldEnd）。launch-arming-feedback(2026-06-04):静止确认 3→25 帧(1 秒真停稳,
+            // 与成绩窗口 MOTION_THRESHOLD_KMH 同口径),加速帧 8→12 适配 median 窗口全 0.5 后的爬升节奏。
+            repeat(25) { i ->
                 gpsFlow.value = emptyGpsSample().copy(
                     timestamp = (i * 40).toLong() + 1_000_000L,
                     latitude = 30.49,
@@ -673,12 +674,14 @@ class TestSessionViewModelTrackLapTest {
             //         i=7: count=6 ≥ 5 → fire trigger
             //       spec.md `Requirement 3` Scenario "实时 trigger 行为有限退化" 锁定偏差 ≤ 80ms
             //       (2 帧)，warmup + standstill 耦合的物理来源。8 帧已经实测验证。
-            repeat(8) { i ->
+            // speed 从 2.0 渐升(dv 1.5/2.0 < maxDelta 3.6,全程无 anomaly 拦截):
+            // 9 点 median 窗口在 i=4 起越过 isMoving 阈值(1.0),i=8 连续计数满 5 → fire,12 帧含余量
+            repeat(12) { i ->
                 gpsFlow.value = emptyGpsSample().copy(
                     timestamp = (i * 40).toLong() + 1_001_000L,
                     latitude = 30.49,
                     longitude = 104.43,
-                    speed = 10.0 + i * 2.0,
+                    speed = 2.0 + i * 2.0,
                     satelliteCount = 10,
                     hdop = 1.0,
                     isTimeSynced = true
@@ -688,7 +691,7 @@ class TestSessionViewModelTrackLapTest {
 
             val runningState = viewModel.testState.value
             assertTrue(
-                "前置：前 8 帧应让状态转入 Running",
+                "前置：静止确认(25 帧)+加速帧应让状态转入 Running",
                 runningState is com.blazepush.core.domain.model.TestState.Running
             )
             val session = (runningState as com.blazepush.core.domain.model.TestState.Running).session

@@ -141,6 +141,15 @@ class VoiceAnnouncer(private val context: Context) {
     }
 
     /**
+     * 播报起步武装就绪（launch-arming-feedback）：叮 + "条件就绪,随时可以起步"。
+     * 静止确认(滤波速度 <1.0 km/h 持续 1 秒)通过时播一次,引导用户无需看屏即可起步。
+     */
+    fun announceLaunchReady() {
+        if (!isEnabled) return
+        dingThenSpeak("条件就绪，随时可以起步", "launch_ready")
+    }
+
+    /**
      * 成绩秒数 → "X.XX秒"，整数自然中文 + 两位小数逐位。
      * 6.8 → "六点八零秒" / 12.34 → "十二点三四秒" / 0.95 → "零点九五秒"
      */

@@ -33,6 +33,7 @@ import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.core.domain.usecase.GpsDataFilter
+import com.blazepush.core.domain.usecase.MOTION_THRESHOLD_KMH
 import com.blazepush.core.domain.usecase.SmartTestLauncher
 import com.blazepush.feature.test.model.LapRunConfig
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
@@ -131,8 +132,11 @@ class TestSessionViewModel(
         private const val PRE_TRIGGER_DURATION_MS = 2000L
         private const val TRIGGER_ACCELERATION_THRESHOLD = 1.0
         private const val TRIGGER_CONFIRMATION_COUNT = 5
-        private const val STANDSTILL_SPEED_THRESHOLD = 3.0
-        private const val STANDSTILL_CONFIRMATION_COUNT = 3
+        // launch-arming-feedback Decision 1(2026-06-04 路测:2.7 km/h 缓动被当静止武装 → 起步
+        // 锚点缺失结构性 DNF):静止阈值与成绩窗口起步锚点 MOTION_THRESHOLD_KMH(1.0)单一口径;
+        // 确认帧数 3(120ms 形同虚设)→ 25(1 秒真停稳)。
+        private val STANDSTILL_SPEED_THRESHOLD = MOTION_THRESHOLD_KMH
+        private const val STANDSTILL_CONFIRMATION_COUNT = 25
         private const val LAP_LIVE_TICK_PERIOD_MS = 50L
         private const val LAP_LIVE_SUBSCRIPTION_TIMEOUT_MS = 5_000L
 
@@ -283,6 +287,11 @@ class TestSessionViewModel(
     // 显示/判停/成绩三处同源 filtered,用户所见即成绩所算(raw/filtered 分歧帧不再认知撕裂)
     private val _filteredSpeedKmh = MutableStateFlow(0.0)
     val filteredSpeedKmh: StateFlow<Double> = _filteredSpeedKmh.asStateFlow()
+
+    // launch-arming-feedback Decision 2:静止武装状态暴露——UI 上升沿播"条件就绪,随时可以起步"
+    // + Banner 三态文案;enterSmartLaunch/cancelTest 复位(重进页面不误播)
+    private val _launchArmed = MutableStateFlow(false)
+    val launchArmed: StateFlow<Boolean> = _launchArmed.asStateFlow()
 
     private var lastLapGpsSample: GpsSample? = null
     private var isLapRecording = false
@@ -487,6 +496,7 @@ class TestSessionViewModel(
         isStartReady = false
         standstillCount = 0
         consecutiveTriggerCount = 0
+        _launchArmed.value = false // launch-arming-feedback:重进武装流程,复位防误播
         isFinishing = false  // 重置完成标记，允许新测试
         _testState.value = TestState.Preparing(template, carModel)
         startCountdown()
@@ -632,6 +642,7 @@ class TestSessionViewModel(
         consecutiveTriggerCount = 0
         isStartReady = false
         standstillCount = 0
+        _launchArmed.value = false // launch-arming-feedback:取消即解除武装
         _testState.value = TestState.Idle
     }
 
@@ -716,6 +727,9 @@ class TestSessionViewModel(
                 if (standstillCount >= STANDSTILL_CONFIRMATION_COUNT) {
                     isStartReady = true
                     standstillCount = 0
+                    // launch-arming-feedback:武装就绪上升沿(UI 据此播报 + Banner 切就绪态)
+                    _launchArmed.value = true
+                    FileLogger.d(TAG, "launchArmed: 静止确认通过(<${STANDSTILL_SPEED_THRESHOLD}km/h ×${STANDSTILL_CONFIRMATION_COUNT}帧),随时可起步")
                 }
             } else {
                 standstillCount = 0

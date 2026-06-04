@@ -119,6 +119,12 @@ fun TrackTechTestExecutionScreen(
     // 痕迹的根因,与 TTS 引擎/AudioFocus/车机路由皆无关)。照搬 V1 接法(koin 单例)。
     val voiceAnnouncer: VoiceAnnouncer = koinInject()
     LaunchedEffect(Unit) { voiceAnnouncer.init() }
+    // launch-arming-feedback Decision 2:静止武装就绪上升沿播报(VM 在 enterSmartLaunch/
+    // cancelTest 复位 false → 重进页面不误播;LaunchedEffect 仅在值变化时重跑)
+    val launchArmed by sessionViewModel.launchArmed.collectAsState()
+    LaunchedEffect(launchArmed) {
+        if (launchArmed) voiceAnnouncer.announceLaunchReady()
+    }
     LaunchedEffect(testState) {
         val s = testState
         if (s is TestState.Completed) {
@@ -176,7 +182,12 @@ fun TrackTechTestExecutionScreen(
 
         Spacer(Modifier.height(0.dp))
 
-        PhaseBanner(testState = testState, currentMode = currentMode, countdownSeconds = countdownSeconds)
+        PhaseBanner(
+            testState = testState,
+            currentMode = currentMode,
+            countdownSeconds = countdownSeconds,
+            launchArmed = launchArmed,
+        )
 
         Spacer(Modifier.height(8.dp))
 
@@ -392,14 +403,34 @@ private fun PhaseBanner(
     testState: TestState,
     currentMode: TestMode,
     countdownSeconds: Int,
+    launchArmed: Boolean = false,
 ) {
     val (phaseTag, phaseTitle, phaseSub) = when (testState) {
         is TestState.Idle -> Triple("STANDBY", "IDLE", "—")
-        is TestState.Preparing -> Triple(
-            "PREPARING",
-            "COUNTDOWN  $countdownSeconds",
-            "Waiting for start conditions",
-        )
+        // launch-arming-feedback Decision 3:Preparing 三态——倒计时 / 引导停稳 / 武装就绪
+        // (旧版只有 COUNTDOWN,用户行驶中进页面不知道"要先停稳",2.7km/h 缓动直接误触发)
+        is TestState.Preparing -> when {
+            countdownSeconds > 0 -> Triple(
+                "PREPARING",
+                "COUNTDOWN  $countdownSeconds",
+                "Waiting for start conditions",
+            )
+            !launchArmed && currentMode == TestMode.Acceleration -> Triple(
+                "STOP",
+                "BRING CAR TO A STOP",
+                "Hold still for 1 second to arm",
+            )
+            launchArmed && currentMode == TestMode.Acceleration -> Triple(
+                "ARMED",
+                "READY TO LAUNCH",
+                "Floor it when ready",
+            )
+            else -> Triple(
+                "PREPARING",
+                "REACH SPEED",
+                "Reach 95-105 km/h",
+            )
+        }
         is TestState.Ready -> Triple(
             "READY",
             if (currentMode == TestMode.Acceleration) "HOLD STILL" else "REACH SPEED",
