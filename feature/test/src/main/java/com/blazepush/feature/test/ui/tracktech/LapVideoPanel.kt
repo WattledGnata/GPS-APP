@@ -181,6 +181,7 @@ internal fun LapVideoPanel(
                 lap = overlayLap,
                 deltaMs = overlayDeltaMs,
                 trackPoints = playbackContext.trackPoints,
+                scale = 0.5f, // 小面板紧凑缩放(全屏页保持 1f 原尺寸)
             )
         }
         Row(

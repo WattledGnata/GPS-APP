@@ -608,27 +608,33 @@ internal fun OverlayHud(
     deltaMs: Long?,
     trackPoints: List<GeoPoint>,
     gaugeMaxKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
+    // lap-detail-triview-panel 二轮(2026-06-05 真机反馈):全屏件原尺寸塞小面板挤爆视频——
+    // 面板传 ~0.5f 整体缩放四角(仪表直径/地图/圈时字号/padding);全屏默认 1f 零变化
+    scale: Float = 1f,
 ) {
     // round video-export-burned-overlay Round A：回放端四角已经共享绘制层 OverlayCanvasPainter
     // （speedo/gball/minimap 经 nativeCanvas，laptime 暂保留 Compose Text）。首次组装打一条锚点。
     LaunchedEffect(Unit) {
         FileLogger.d(TAG, "shared painter wired: speedo/gball/minimap via OverlayCanvasPainter; laptime Compose")
     }
-    Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+    Box(modifier = Modifier.fillMaxSize().padding(12.dp * scale)) {
         SpeedCorner(
             speedKmh = frame?.speedKmh,
             maxSpeedKmh = gaugeMaxKmh,
+            diameter = 120.dp * scale,
             modifier = Modifier.align(Alignment.TopStart),
         )
         GForceCorner(
             latG = frame?.latG,
             lonG = frame?.lonG,
+            diameter = 120.dp * scale,
             modifier = Modifier.align(Alignment.TopEnd),
         )
         LapTimeCorner(
             lapNumber = lap?.lapNumber,
             elapsedMs = lap?.currentLapElapsedMs,
             deltaMs = deltaMs,
+            compact = scale < 1f,
             modifier = Modifier.align(Alignment.BottomStart),
         )
         if (trackPoints.size >= 2) {
@@ -636,6 +642,7 @@ internal fun OverlayHud(
                 trackPoints = trackPoints,
                 currentLat = frame?.lat,
                 currentLon = frame?.lon,
+                mapSize = 96.dp * scale,
                 modifier = Modifier.align(Alignment.BottomEnd),
             )
         }
@@ -668,13 +675,14 @@ private fun OverlayPanel(
 private fun SpeedCorner(
     speedKmh: Double?,
     maxSpeedKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
+    diameter: androidx.compose.ui.unit.Dp = 120.dp,
     modifier: Modifier = Modifier,
 ) {
     SpeedometerGauge(
         speedKmh = speedKmh,
         maxSpeedKmh = maxSpeedKmh,
         modifier = modifier,
-        diameter = 120.dp,
+        diameter = diameter,
     )
 }
 
@@ -686,13 +694,14 @@ private fun SpeedCorner(
 private fun GForceCorner(
     latG: Double?,
     lonG: Double?,
+    diameter: androidx.compose.ui.unit.Dp = 120.dp,
     modifier: Modifier = Modifier,
 ) {
     GForceBall(
         latG = latG,
         lonG = lonG,
         modifier = modifier,
-        diameter = 120.dp,
+        diameter = diameter,
     )
 }
 
@@ -701,6 +710,7 @@ private fun LapTimeCorner(
     lapNumber: Int?,
     elapsedMs: Long?,
     deltaMs: Long?,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     OverlayPanel(modifier = modifier, content = {
@@ -716,7 +726,7 @@ private fun LapTimeCorner(
             // 圈速时间字符串走 Score 斜体（MUST NOT DSEG7）
             Text(
                 text = formatElapsed(elapsedMs),
-                style = TrackTechTypography.ScoreMedium,
+                style = if (compact) TrackTechTypography.ScoreSmall else TrackTechTypography.ScoreMedium,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -745,6 +755,7 @@ private fun MiniMapCorner(
     trackPoints: List<GeoPoint>,
     currentLat: Double?,
     currentLon: Double?,
+    mapSize: androidx.compose.ui.unit.Dp = 96.dp,
     modifier: Modifier = Modifier,
 ) {
     OverlayPanel(modifier = modifier, content = {
@@ -752,7 +763,7 @@ private fun MiniMapCorner(
             points = trackPoints,
             currentLat = currentLat,
             currentLon = currentLon,
-            modifier = Modifier.size(96.dp),
+            modifier = Modifier.size(mapSize),
         )
     })
 }
