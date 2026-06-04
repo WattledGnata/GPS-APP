@@ -237,28 +237,11 @@ fun LapSessionDetailScreen(
         // - session 有视频 + VALID/BEST + 该圈 coverage != NONE（完整 or 半圈都可进）→ 显示图标可点。
         // - 完全无视频覆盖（coverage == NONE，纯黑无可叠真实画面）→ 不显示图标（禁入）。
         // - 加载期（lapCoverageMap 还没该圈条目）→ null != NONE → 默认允许进（避免图标闪烁）；算完后纯黑圈隐藏。
-        // - 行其余部分仍点进 lap_detail（单圈数据图表）。两入口共存不互斥。
-        // 导出入口已移到播放页 LapVideoPlaybackScreen（详情页不再有导出 section）。
-        val hasVideo = session?.videoFilePath != null
-        val onVideoClickFactory: (lapNumber: Int, status: UiLapStatus) -> (() -> Unit)? =
-            { lapNumber, status ->
-                val coveredEnough = lapCoverageMap[lapNumber] != VideoExportClip.Coverage.NONE
-                if (hasVideo && coveredEnough &&
-                    (status == UiLapStatus.VALID || status == UiLapStatus.BEST)
-                ) {
-                    {
-                        val lapIndex = lapNumber - 1
-                        FileLogger.d(
-                            "VideoOverlay",
-                            "open video replay (from lap row) sid=$sessionId lapNumber=$lapNumber " +
-                                "-> lapIndex=$lapIndex coverage=${lapCoverageMap[lapNumber]}",
-                        )
-                        navController.navigate("lap_video/$sessionId/$lapIndex")
-                    }
-                } else {
-                    null
-                }
-            }
+        val hasVideo = session?.videoFilePath != null // 删除视频按钮(video-storage-cleanup)仍消费
+        // lap-detail-triview-panel(2026-06-05)入口收敛:行尾播放图标退役——视频内嵌进单圈详情
+        // (LapDetailScreen 视频面板,全屏从面板按钮进 lap_video),圈行统一只进 lap_detail。
+        // 原 onVideoClickFactory 已删;LapRecordRow/LapSectorTableBlock 的 onVideoClick 参数
+        // 保留默认 null(不渲染图标),参数本体清理列 round §10 backlog。
 
         LazyColumn(
             modifier = Modifier
@@ -327,12 +310,6 @@ fun LapSessionDetailScreen(
                             )
                             navController.navigate("lap_detail/$sessionId/$lapIndex")
                         },
-                        // sector 表圈行均为 VALID/BEST → 有视频时整行右侧加播放图标导航 lap_video。
-                        onVideoClick = if (hasVideo) {
-                            { lapNumber -> onVideoClickFactory(lapNumber, UiLapStatus.VALID)?.invoke() }
-                        } else {
-                            null
-                        },
                     )
                 }
                 // sector 表只渲染 valid/best 圈（table.laps）；INVALID/INCOMPLETE 圈从
@@ -344,7 +321,6 @@ fun LapSessionDetailScreen(
                     LapRecordRow(
                         record = record,
                         onClick = onLapClickFactory(record),
-                        onVideoClick = onVideoClickFactory(record.lapNumber, record.status),
                     )
                 }
             } else {
@@ -357,8 +333,7 @@ fun LapSessionDetailScreen(
                         LapRecordRow(
                             record = record,
                             onClick = onLapClickFactory(record),
-                            onVideoClick = onVideoClickFactory(record.lapNumber, record.status),
-                        )
+                            )
                     }
                 }
             }

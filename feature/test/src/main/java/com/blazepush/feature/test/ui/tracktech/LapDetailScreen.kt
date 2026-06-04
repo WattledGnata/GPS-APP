@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -30,6 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.LapTelemetry
@@ -42,7 +51,12 @@ import com.blazepush.feature.test.ui.components.AccelTimeChart
 import com.blazepush.feature.test.ui.components.SectorBar
 import com.blazepush.feature.test.ui.components.SpeedTimeChart
 import com.blazepush.feature.test.ui.components.TrackPolylineMap
+import com.blazepush.feature.test.datastore.UserProfileRepository
+import com.blazepush.feature.test.export.VideoExportClip
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
@@ -69,9 +83,16 @@ fun LapDetailScreen(
     sessionId: String,
     lapIndex: Int,
     telemetryRepository: TelemetryRepository = koinInject(),
+    userProfileRepository: UserProfileRepository = koinInject(),
     sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     var lapTelemetry by remember { mutableStateOf<LapTelemetry?>(null) }
+
+    // lap-detail-triview-panel:视频面板条件渲染所需(coverage ≠ NONE,design Decision 2)。
+    // duration 用 MediaMetadataRetriever 进屏取(IO),避免依赖 player READY 的鸡蛋问题。
+    var videoFilePath by remember { mutableStateOf<String?>(null) }
+    var videoStartedAtWallClock by remember { mutableStateOf(0L) }
+    var videoCoverage by remember { mutableStateOf(VideoExportClip.Coverage.NONE) }
 
     LaunchedEffect(sessionId, lapIndex) {
         val result = telemetryRepository.getLapTelemetry(sessionId, lapIndex)
@@ -84,11 +105,49 @@ fun LapDetailScreen(
             FileLogger.e("LapDetail", "getLapTelemetry null sid=$sessionId idx=$lapIndex")
         }
         lapTelemetry = result
+
+        // 视频面板数据:session 视频字段 + duration → coverage(spec R1)
+        val session = telemetryRepository.getSession(sessionId)
+        val path = session?.videoFilePath
+        val vStart = session?.videoStartedAtWallClock
+        if (result != null && path != null && vStart != null) {
+            val durationMs = withContext(Dispatchers.IO) {
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(path)
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull() ?: 0L
+                } catch (e: Exception) {
+                    FileLogger.e("LapDetail", "video duration 读取失败 path=$path", e)
+                    0L
+                } finally {
+                    retriever.release()
+                }
+            }
+            val coverage = VideoExportClip.lapCoverage(
+                result.lapStartWallClock, result.lapEndWallClock, vStart, durationMs,
+            )
+            videoFilePath = path
+            videoStartedAtWallClock = vStart
+            videoCoverage = coverage
+            FileLogger.d("LapDetail", "triview video coverage=$coverage duration=${durationMs}ms vStart=$vStart")
+        } else {
+            videoCoverage = VideoExportClip.Coverage.NONE
+        }
     }
 
     // 共享游标 single source of truth（Cursor 决策）：SpeedTimeChart / AccelTimeChart 发起变更，
     // 4 组件入参全传它。25Hz 拖动用 v 级别埋点（可被 level 过滤）。
     var cursorAbsoluteTs by remember { mutableStateOf<Long?>(null) }
+
+    // 三联动回环抑制(triview design Decision 1):标记最近一次 cursor 变更来源;
+    // 仅 CHART 来源触发视频 seek,VIDEO 来源(播放回写/拖进度)不再回环 seek。
+    var cursorSource by remember { mutableStateOf(TriviewCursorSource.CHART) }
+
+    // 面板顺序(design Decision 3):DataStore 偏好,默认顺序兜底;拖拽落定持久化
+    val orderScope = rememberCoroutineScope()
+    val orderSerialized by userProfileRepository.lapDetailPanelOrder.collectAsState(initial = "")
+    val panelOrder = remember(orderSerialized) { LapDetailPanelOrder.parse(orderSerialized) }
 
     // R1 accelerationG 派生：remember(lapTelemetry) 缓存一次（lapTelemetry 只在 LaunchedEffect 加载一次），
     // 不在重组热路径。只喂给 AccelTimeChart。
@@ -130,80 +189,155 @@ fun LapDetailScreen(
                 )
             }
         } else {
+            // 面板可见清单:VIDEO 仅 coverage ≠ NONE 渲染(spec R1;顺序键仍保留偏好,spec R3)
+            val videoEligible = videoFilePath != null && videoCoverage != VideoExportClip.Coverage.NONE
+            val visiblePanels = panelOrder.filter { it != LapDetailPanelId.VIDEO || videoEligible }
+
+            // 长按拖拽 reorder(design Decision 3):draggingId + 累计位移;跨过相邻面板
+            // 实测高度的一半即交换;松手序列化持久化。
+            var draggingId by remember { mutableStateOf<LapDetailPanelId?>(null) }
+            var dragOffsetY by remember { mutableFloatStateOf(0f) }
+            val panelHeights = remember { mutableMapOf<LapDetailPanelId, Int>() }
+
             LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { LapOverviewSection(lapIndex = lapIndex, telemetry = telemetry) }
-            item {
-                ChartCard(title = "SPEED") {
-                    SpeedTimeChart(
-                        samples = telemetry.samples,
-                        cursorAbsoluteTs = cursorAbsoluteTs,
-                        onCursorChange = { cursorAbsoluteTs = it },
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(visiblePanels, key = { it.name }) { panelId ->
+                    val isDragging = draggingId == panelId
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp),
-                    )
-                }
-            }
-            item {
-                ChartCard(title = "ACCEL G") {
-                    AccelTimeChart(
-                        samples = accelSamples,
-                        cursorAbsoluteTs = cursorAbsoluteTs,
-                        onCursorChange = { cursorAbsoluteTs = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp),
-                    )
-                }
-            }
-            item {
-                ChartCard(title = "SECTORS") {
-                    SectorBar(
-                        sectorBoundaries = telemetry.sectorBoundaries,
-                        lapStartWallClock = telemetry.lapStartWallClock,
-                        lapEndWallClock = telemetry.lapEndWallClock,
-                        cursorAbsoluteTs = cursorAbsoluteTs,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    // 本圈各 sector 耗时（lap-detail-sector-split-times round）：sector 是看圈速的关注点。
-                    val sectorSplits = computeSectorSplits(
-                        telemetry.sectorBoundaries,
-                        telemetry.lapEndWallClock,
-                    )
-                    if (sectorSplits.size >= 2) {
-                        sectorSplits.forEachIndexed { index, splitMs ->
-                            OverviewRow(
-                                label = "Sector ${index + 1}",
-                                value = formatLapDetailTime(splitMs),
-                            )
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer { translationY = if (isDragging) dragOffsetY else 0f }
+                            .onGloballyPositioned { panelHeights[panelId] = it.size.height }
+                            .pointerInput(panelId, visiblePanels) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingId = panelId
+                                        dragOffsetY = 0f
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragOffsetY += dragAmount.y
+                                        val idx = visiblePanels.indexOf(panelId)
+                                        val neighborIdx = if (dragOffsetY > 0) idx + 1 else idx - 1
+                                        val neighbor = visiblePanels.getOrNull(neighborIdx)
+                                        if (neighbor != null) {
+                                            val threshold = (panelHeights[neighbor] ?: 0) / 2f
+                                            if (threshold > 0 && kotlin.math.abs(dragOffsetY) > threshold) {
+                                                val newOrder = LapDetailPanelOrder.move(
+                                                    panelOrder, panelId,
+                                                    panelOrder.indexOf(neighbor),
+                                                )
+                                                orderScope.launch {
+                                                    userProfileRepository.setLapDetailPanelOrder(
+                                                        LapDetailPanelOrder.serialize(newOrder),
+                                                    )
+                                                }
+                                                dragOffsetY = 0f
+                                            }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        draggingId = null
+                                        dragOffsetY = 0f
+                                    },
+                                    onDragCancel = {
+                                        draggingId = null
+                                        dragOffsetY = 0f
+                                    },
+                                )
+                            },
+                    ) {
+                        when (panelId) {
+                            LapDetailPanelId.VIDEO -> ChartCard(title = "VIDEO") {
+                                LapVideoPanel(
+                                    videoFilePath = videoFilePath!!,
+                                    videoStartedAtWallClock = videoStartedAtWallClock,
+                                    cursorAbsoluteTs = cursorAbsoluteTs,
+                                    cursorSource = cursorSource,
+                                    onCursorChangeFromVideo = {
+                                        cursorSource = TriviewCursorSource.VIDEO
+                                        cursorAbsoluteTs = it
+                                    },
+                                    onFullscreen = {
+                                        navController.navigate("lap_video/$sessionId/$lapIndex")
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            LapDetailPanelId.OVERVIEW ->
+                                LapOverviewSection(lapIndex = lapIndex, telemetry = telemetry)
+                            LapDetailPanelId.SPEED -> ChartCard(title = "SPEED") {
+                                SpeedTimeChart(
+                                    samples = telemetry.samples,
+                                    cursorAbsoluteTs = cursorAbsoluteTs,
+                                    onCursorChange = {
+                                        cursorSource = TriviewCursorSource.CHART
+                                        cursorAbsoluteTs = it
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp),
+                                )
+                            }
+                            LapDetailPanelId.ACCEL -> ChartCard(title = "ACCEL G") {
+                                AccelTimeChart(
+                                    samples = accelSamples,
+                                    cursorAbsoluteTs = cursorAbsoluteTs,
+                                    onCursorChange = {
+                                        cursorSource = TriviewCursorSource.CHART
+                                        cursorAbsoluteTs = it
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp),
+                                )
+                            }
+                            LapDetailPanelId.SECTORS -> ChartCard(title = "SECTORS") {
+                                SectorBar(
+                                    sectorBoundaries = telemetry.sectorBoundaries,
+                                    lapStartWallClock = telemetry.lapStartWallClock,
+                                    lapEndWallClock = telemetry.lapEndWallClock,
+                                    cursorAbsoluteTs = cursorAbsoluteTs,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                // 本圈各 sector 耗时（lap-detail-sector-split-times round）：sector 是看圈速的关注点。
+                                val sectorSplits = computeSectorSplits(
+                                    telemetry.sectorBoundaries,
+                                    telemetry.lapEndWallClock,
+                                )
+                                if (sectorSplits.size >= 2) {
+                                    sectorSplits.forEachIndexed { index, splitMs ->
+                                        OverviewRow(
+                                            label = "Sector ${index + 1}",
+                                            value = formatLapDetailTime(splitMs),
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "无 sector 分段",
+                                        style = TrackTechTypography.UiTextLabel,
+                                        color = TrackTechColors.TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            LapDetailPanelId.TRACK -> ChartCard(title = "TRACK") {
+                                TrackPolylineMap(
+                                    samples = telemetry.samples,
+                                    cursorAbsoluteTs = cursorAbsoluteTs,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(220.dp),
+                                )
+                            }
                         }
-                    } else {
-                        Text(
-                            text = "无 sector 分段",
-                            style = TrackTechTypography.UiTextLabel,
-                            color = TrackTechColors.TextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
                     }
                 }
             }
-            item {
-                ChartCard(title = "TRACK") {
-                    TrackPolylineMap(
-                        samples = telemetry.samples,
-                        cursorAbsoluteTs = cursorAbsoluteTs,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp),
-                    )
-                }
-            }
-        }
         }
     }
 }

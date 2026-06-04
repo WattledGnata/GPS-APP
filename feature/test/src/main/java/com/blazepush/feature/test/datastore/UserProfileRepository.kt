@@ -61,9 +61,24 @@ class UserProfileRepository internal constructor(
         }
     }
 
+    /**
+     * 单圈详情面板顺序（lap-detail-triview-panel round design Decision 3,per-app）。
+     * 存逗号分隔 PanelId 名;缺值/损坏由 LapDetailPanelOrder.parse 兜底默认顺序。
+     */
+    val lapDetailPanelOrder: Flow<String> = dataStore.data.map { prefs ->
+        prefs[KEY_LAP_DETAIL_PANEL_ORDER] ?: ""
+    }
+
+    suspend fun setLapDetailPanelOrder(serialized: String) {
+        dataStore.edit { prefs ->
+            prefs[KEY_LAP_DETAIL_PANEL_ORDER] = serialized
+        }
+    }
+
     companion object {
         val KEY_DRIVER_NAME = stringPreferencesKey("driver_name")
         val KEY_LIVETIMING_ENABLED = booleanPreferencesKey("livetiming_enabled")
         val KEY_DRIVER_PROMPT_SHOWN = booleanPreferencesKey("driver_name_prompt_shown")
+        val KEY_LAP_DETAIL_PANEL_ORDER = stringPreferencesKey("lap_detail_panel_order")
     }
 }
