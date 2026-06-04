@@ -573,7 +573,7 @@ private fun ExportButton(
  * 按 playheadWallClock 更新 overlay 三态（frame / lap resolution / delta）。
  * 抽出复用：循环中与圈末停止各调一次，避免最后一帧 overlay 不刷新。
  */
-private fun updateOverlay(
+internal fun updateOverlay(
     ctx: LapPlaybackContext,
     playheadWallClock: Long,
     onFrame: (VideoOverlayTelemetry.OverlayFrame) -> Unit,
@@ -602,7 +602,7 @@ private fun updateOverlay(
  * overlay 四角标布局：左上 SPEED / 左下 LAP+delta / 右上 G / 右下 小地图。
  */
 @Composable
-private fun OverlayHud(
+internal fun OverlayHud(
     frame: VideoOverlayTelemetry.OverlayFrame?,
     lap: VideoOverlayTelemetry.LapResolution?,
     deltaMs: Long?,

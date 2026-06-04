@@ -52,7 +52,9 @@ import com.blazepush.feature.test.ui.components.SectorBar
 import com.blazepush.feature.test.ui.components.SpeedTimeChart
 import com.blazepush.feature.test.ui.components.TrackPolylineMap
 import com.blazepush.feature.test.datastore.UserProfileRepository
-import com.blazepush.feature.test.export.VideoExportClip
+import com.blazepush.feature.test.export.LapPlaybackLoader
+import com.blazepush.feature.test.recording.VideoTelemetrySync
+import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -83,16 +85,16 @@ fun LapDetailScreen(
     sessionId: String,
     lapIndex: Int,
     telemetryRepository: TelemetryRepository = koinInject(),
+    trackCatalog: TrackCatalog = koinInject(),
     userProfileRepository: UserProfileRepository = koinInject(),
     sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     var lapTelemetry by remember { mutableStateOf<LapTelemetry?>(null) }
 
-    // lap-detail-triview-panel:视频面板条件渲染所需(coverage ≠ NONE,design Decision 2)。
-    // duration 用 MediaMetadataRetriever 进屏取(IO),避免依赖 player READY 的鸡蛋问题。
+    // lap-detail-triview-panel:视频面板数据(2026-06-05 二轮:改用 LapPlaybackLoader 共享
+    // 加载管线——overlay 帧/圈窗口/赛道点与全屏页同源;load 失败(无视频/无覆盖)即不渲染面板)。
     var videoFilePath by remember { mutableStateOf<String?>(null) }
-    var videoStartedAtWallClock by remember { mutableStateOf(0L) }
-    var videoCoverage by remember { mutableStateOf(VideoExportClip.Coverage.NONE) }
+    var videoPlaybackContext by remember { mutableStateOf<LapPlaybackLoader.LapPlaybackContext?>(null) }
 
     LaunchedEffect(sessionId, lapIndex) {
         val result = telemetryRepository.getLapTelemetry(sessionId, lapIndex)
@@ -106,33 +108,22 @@ fun LapDetailScreen(
         }
         lapTelemetry = result
 
-        // 视频面板数据:session 视频字段 + duration → coverage(spec R1)
-        val session = telemetryRepository.getSession(sessionId)
-        val path = session?.videoFilePath
-        val vStart = session?.videoStartedAtWallClock
-        if (result != null && path != null && vStart != null) {
-            val durationMs = withContext(Dispatchers.IO) {
-                val retriever = android.media.MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(path)
-                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        ?.toLongOrNull() ?: 0L
-                } catch (e: Exception) {
-                    FileLogger.e("LapDetail", "video duration 读取失败 path=$path", e)
-                    0L
-                } finally {
-                    retriever.release()
-                }
-            }
-            val coverage = VideoExportClip.lapCoverage(
-                result.lapStartWallClock, result.lapEndWallClock, vStart, durationMs,
+        // 视频面板数据(spec R1):LapPlaybackLoader 共享管线(全屏页/导出同源)——
+        // 无 session/无视频/无圈/无样本 → null → 不渲染面板
+        val loaded = withContext(Dispatchers.IO) {
+            LapPlaybackLoader.load(sessionId, lapIndex, telemetryRepository, trackCatalog)
+        }
+        if (loaded != null) {
+            videoFilePath = loaded.first.videoFilePath
+            videoPlaybackContext = loaded.second
+            FileLogger.d(
+                "LapDetail",
+                "triview ctx lap=[${loaded.second.lapStartWallClock}..${loaded.second.lapEndWallClock}] " +
+                    "videoStart=${loaded.second.videoStartedAtWallClock} frames=${loaded.second.frames.size}",
             )
-            videoFilePath = path
-            videoStartedAtWallClock = vStart
-            videoCoverage = coverage
-            FileLogger.d("LapDetail", "triview video coverage=$coverage duration=${durationMs}ms vStart=$vStart")
         } else {
-            videoCoverage = VideoExportClip.Coverage.NONE
+            videoFilePath = null
+            videoPlaybackContext = null
         }
     }
 
@@ -189,8 +180,11 @@ fun LapDetailScreen(
                 )
             }
         } else {
-            // 面板可见清单:VIDEO 仅 coverage ≠ NONE 渲染(spec R1;顺序键仍保留偏好,spec R3)
-            val videoEligible = videoFilePath != null && videoCoverage != VideoExportClip.Coverage.NONE
+            // 面板可见清单:VIDEO 仅 loader 成功渲染(spec R1;顺序键仍保留偏好,spec R3)
+            val videoEligible = videoFilePath != null && videoPlaybackContext != null
+            // 反馈 3(2026-06-05):视频回写的任意毫秒值吸附到最近样本 absoluteTsMs——
+            // 图表游标/地图亮点是精确相等匹配,不吸附永远 miss
+            val sampleWallClocks = remember(telemetry) { telemetry.samples.map { it.absoluteTsMs } }
             val visiblePanels = panelOrder.filter { it != LapDetailPanelId.VIDEO || videoEligible }
 
             // 长按拖拽 reorder(design Decision 3):draggingId + 累计位移;跨过相邻面板
@@ -254,12 +248,16 @@ fun LapDetailScreen(
                             LapDetailPanelId.VIDEO -> ChartCard(title = "VIDEO") {
                                 LapVideoPanel(
                                     videoFilePath = videoFilePath!!,
-                                    videoStartedAtWallClock = videoStartedAtWallClock,
+                                    playbackContext = videoPlaybackContext!!,
                                     cursorAbsoluteTs = cursorAbsoluteTs,
                                     cursorSource = cursorSource,
-                                    onCursorChangeFromVideo = {
+                                    onCursorChangeFromVideo = { wc ->
                                         cursorSource = TriviewCursorSource.VIDEO
-                                        cursorAbsoluteTs = it
+                                        // 吸附最近样本(反馈 3:驱动图表游标/地图亮点)
+                                        if (sampleWallClocks.isNotEmpty()) {
+                                            val idx = VideoTelemetrySync.findNearestSampleIndex(wc, sampleWallClocks)
+                                            cursorAbsoluteTs = sampleWallClocks[idx]
+                                        }
                                     },
                                     onFullscreen = {
                                         navController.navigate("lap_video/$sessionId/$lapIndex")
