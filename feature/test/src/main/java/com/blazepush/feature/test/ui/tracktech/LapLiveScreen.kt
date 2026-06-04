@@ -79,6 +79,7 @@ import com.blazepush.feature.test.ui.settings.RecordingSettingsOverlay
 import com.blazepush.feature.test.recording.RecordingState
 import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
+import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.sample
@@ -129,6 +130,23 @@ fun LapLiveScreen(
         )
     }
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
+
+    // 路测修复(2026-06-04 #2 播报无效真因)：V1→V2 改版时语音链路未迁移,V2 圈速屏出圈
+    // 无人调 announceLapTime。照搬旧 ui/screen/TestExecutionScreen 的接法:监听 completedLaps
+    // 增量,只播真正新增的圈(初值取当前圈数,重进屏不重播)。
+    val voiceAnnouncer: VoiceAnnouncer = koinInject()
+    LaunchedEffect(Unit) { voiceAnnouncer.init() }
+    val completedLapsForVoice by sessionViewModel.latestLapRecords.collectAsState()
+    var lastAnnouncedLapCount by remember { mutableStateOf(completedLapsForVoice.size) }
+    LaunchedEffect(completedLapsForVoice.size) {
+        if (completedLapsForVoice.size > lastAnnouncedLapCount) {
+            completedLapsForVoice.lastOrNull()?.let { lap ->
+                voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+            }
+            lastAnnouncedLapCount = completedLapsForVoice.size
+        }
+    }
+
     // screen 顶层收集录制状态：供绑定条件 LaunchedEffect + RecIndicator + 资源安全 onDispose 共用
     val recordingState by recordingEngine.recordingState.collectAsState()
     // recording-params-config-screen round：录制参数（齿轮设置屏写入，此处读出驱动 bind）
