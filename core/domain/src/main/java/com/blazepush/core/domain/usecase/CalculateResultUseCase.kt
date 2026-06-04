@@ -13,6 +13,13 @@ import kotlin.math.sqrt
 import java.util.UUID
 
 /**
+ * 运动阈值（km/h）:计时窗口开/关段的 0 哨兵替换值（fix-accel-last-crossing design Decision 2）。
+ * 1.0 = GPS 静止噪声带(0-2)上沿与 Dragy/RaceBox 类起步口径(≈0.5-1)的平衡,
+ * 与触发判定 speed > 1.0(TestSessionViewModel)同阈。
+ */
+const val MOTION_THRESHOLD_KMH = 1.0
+
+/**
  * 计算测试结果的UseCase
  * 从TestSession的原始数据点计算出最终结果
  */
@@ -36,8 +43,27 @@ class CalculateResultUseCase {
         val maxAcceleration = accelerationsMs2.filter { it > 0 }.maxOrNull()?.div(GRAVITY_MS2) ?: 0.0
         val maxDeceleration = accelerationsMs2.filter { it < 0 }.minOrNull()?.let { -it / GRAVITY_MS2 } ?: 0.0
 
-        // 2. 计时点修正：回溯历史数据找到精确的起始/结束点（用于 totalTime / totalDistance / segments，不喂 SG）
+        // 2. 计时窗口提取（fix-accel-last-crossing：状态机取最后一个完整起步→首次过线段,
+        //    用于 totalTime / totalDistance / segments，不喂 SG）。
+        //    null = DNF（数据内无完整窗口,如未真正破百/未刹停）→ 计时类字段归零,
+        //    SG 三项保留（raw 全程统计,对"没完成但跑了"仍有参考价值,spec R2 Scenario 3）。
+        //    旧版此处 fallback 返回全程数据 → 53.32s 假成绩(2026-06-03 路测),已废除。
         val correctedPoints = correctTimingPoints(dataPoints, session.template)
+            ?: return TestResult(
+                id = UUID.randomUUID().toString(),
+                sessionId = session.id,
+                template = session.template,
+                carModel = session.carModel,
+                timestamp = session.startTime,
+                totalTime = 0.0,
+                totalDistance = 0.0,
+                avgAcceleration = avgAcceleration,
+                maxAcceleration = maxAcceleration,
+                maxDeceleration = maxDeceleration,
+                segments = emptyList(),
+                dataPoints = emptyList(),
+                dataFilePath = dataFilePath
+            )
 
         // 3. 计算总时间
         val totalTime = correctedPoints.last().elapsedTime - correctedPoints.first().elapsedTime
@@ -67,25 +93,43 @@ class CalculateResultUseCase {
 
 
     /**
-     * 计时点修正：在数据明显越过阈值后，回溯历史数据找到精确的计时点
-     * 使用线性插值在两个相邻数据点之间找到精确的速度阈值时刻
+     * 计时窗口提取（fix-accel-last-crossing design Decision 1/1b/2/3）。
+     *
+     * 单次正向状态机收集所有完整（开段过线→首次关段过线）候选,取**最后一个**为成绩窗口:
+     * - 加速 0→100:上行过运动阈值(1.0 km/h,起步)开段,首次上行过 endSpeed 关段。
+     *   多次蠕动起步 → 每次上穿覆盖式重开锚点 → 只算最后一轮冲刺;
+     *   回落再破百 → 首次触线停表(物理口径,回落段不计入);
+     *   过线后挪车 → 挪车不过线不产新候选,成绩不丢。
+     * - 刹车 100→0 镜像:下行过 startSpeed 开段,首次下行过停车阈值(1.0)关段。
+     * - 模板 0 哨兵(startSpeed=0 / endSpeed=0)在算法内替换为运动阈值——0 作为过线条件
+     *   对恒非负的速度恒假,旧版因此整体短路返回全程数据(53.32s 假成绩根因,line 86 旧址)。
+     *
+     * @return 裁剪并重置 elapsedTime 的窗口数据;null = 无完整窗口(DNF)
      */
     private fun correctTimingPoints(
         dataPoints: List<GpsDataPoint>,
         template: TestTemplate
-    ): List<GpsDataPoint> {
-        if (dataPoints.size < 2) return dataPoints
+    ): List<GpsDataPoint>? {
+        if (dataPoints.size < 2) return null
 
-        val startSpeed = template.startSpeed.toDouble()
-        val endSpeed = template.endSpeed.toDouble()
+        val window = when (template) {
+            is TestTemplate.Acceleration0To100 -> findLastCompleteSegment(
+                dataPoints = dataPoints,
+                openThreshold = maxOf(template.startSpeed.toDouble(), MOTION_THRESHOLD_KMH),
+                closeThreshold = template.endSpeed.toDouble(),
+            )
+            // 刹车不走镜像状态机（design Decision 1b 实施期修订 2026-06-04）:
+            // 触发条件"减速低于 95"使数据从 ~95 开始,不存在 >100 帧,"下行过 100 开段"恒 DNF。
+            // 窗口起点=数据首帧（触发时刻）,终点=首次下行过停车阈值;从 100 物理起算
+            // 需 Ready 态预缓冲（backlog braking-prebuffer-from-ready）。
+            is TestTemplate.Braking100To0 -> findBrakingWindow(
+                dataPoints = dataPoints,
+                stopThreshold = maxOf(template.endSpeed.toDouble(), MOTION_THRESHOLD_KMH),
+            )
+        } ?: return null
 
-        // 找到精确的起始点（线性插值）
-        val preciseStart = findPrecisePoint(dataPoints, startSpeed, isAcceleration = template is TestTemplate.Acceleration0To100)
-        val preciseEnd = findPrecisePoint(dataPoints, endSpeed, isAcceleration = template is TestTemplate.Acceleration0To100)
-
-        if (preciseStart == null || preciseEnd == null) return dataPoints
-
-        // 重新计算相对时间
+        val (preciseStart, preciseEnd) = window
+        // 重新计算相对时间（窗口起点归零）
         val startTime = preciseStart.elapsedTime
         return buildList {
             add(preciseStart.copy(elapsedTime = 0.0))
@@ -97,39 +141,73 @@ class CalculateResultUseCase {
     }
 
     /**
-     * 线性插值找到精确的速度阈值时刻
+     * 加速状态机扫描:上行过开段阈值（覆盖式重开锚点 → 多次蠕动只留最后一轮）→ 首次上行过
+     * 关段阈值收候选,返回最后一个完整候选（design Decision 1 三场景矩阵）。
+     *
+     * prev.speed == curr.speed 的相邻对跳过（插值 ratio 除零防御,spec R4）;
+     * 关段时刻必须晚于开段时刻,否则丢弃该候选（畸形序列不产负值窗口,spec R4）。
      */
-    private fun findPrecisePoint(
+    private fun findLastCompleteSegment(
         dataPoints: List<GpsDataPoint>,
-        targetSpeed: Double,
-        isAcceleration: Boolean
-    ): GpsDataPoint? {
+        openThreshold: Double,
+        closeThreshold: Double,
+    ): Pair<GpsDataPoint, GpsDataPoint>? {
+        var lastComplete: Pair<GpsDataPoint, GpsDataPoint>? = null
+        var pendingStart: GpsDataPoint? = null
+
         for (i in 1 until dataPoints.size) {
             val prev = dataPoints[i - 1]
             val curr = dataPoints[i]
+            if (prev.speed == curr.speed) continue
 
-            val crossed = if (isAcceleration) {
-                prev.speed < targetSpeed && curr.speed >= targetSpeed
-            } else {
-                prev.speed > targetSpeed && curr.speed <= targetSpeed
+            if (prev.speed < openThreshold && curr.speed >= openThreshold) {
+                pendingStart = interpolateAt(prev, curr, openThreshold)
             }
 
-            if (crossed) {
-                // 线性插值计算精确时刻
-                val ratio = (targetSpeed - prev.speed) / (curr.speed - prev.speed)
-                val preciseTime = prev.elapsedTime + ratio * (curr.elapsedTime - prev.elapsedTime)
-                val preciseLat = prev.latitude + ratio * (curr.latitude - prev.latitude)
-                val preciseLon = prev.longitude + ratio * (curr.longitude - prev.longitude)
-                return GpsDataPoint(
-                    elapsedTime = preciseTime,
-                    speed = targetSpeed,
-                    latitude = preciseLat,
-                    longitude = preciseLon,
-                    altitude = prev.altitude
-                )
+            val start = pendingStart ?: continue
+            if (prev.speed < closeThreshold && curr.speed >= closeThreshold) {
+                val end = interpolateAt(prev, curr, closeThreshold)
+                if (end.elapsedTime > start.elapsedTime) {
+                    lastComplete = start to end
+                }
+                pendingStart = null // 候选关闭;再产候选需重新过开段线
+            }
+        }
+        return lastComplete
+    }
+
+    /**
+     * 刹车窗口（design Decision 1b 实施期修订）:起点=数据首帧（触发时刻）,
+     * 终点=**首次**下行过 [stopThreshold] 的插值时刻（挪车段第二次下行不取,spec R3）;
+     * 无下行过线 → null（未刹停 DNF）。
+     */
+    private fun findBrakingWindow(
+        dataPoints: List<GpsDataPoint>,
+        stopThreshold: Double,
+    ): Pair<GpsDataPoint, GpsDataPoint>? {
+        val start = dataPoints.first()
+        for (i in 1 until dataPoints.size) {
+            val prev = dataPoints[i - 1]
+            val curr = dataPoints[i]
+            if (prev.speed == curr.speed) continue
+            if (prev.speed > stopThreshold && curr.speed <= stopThreshold) {
+                val end = interpolateAt(prev, curr, stopThreshold)
+                return if (end.elapsedTime > start.elapsedTime) start to end else null
             }
         }
         return null
+    }
+
+    /** 相邻对内线性插值过线点（调用方已保证 prev.speed != curr.speed）。 */
+    private fun interpolateAt(prev: GpsDataPoint, curr: GpsDataPoint, targetSpeed: Double): GpsDataPoint {
+        val ratio = (targetSpeed - prev.speed) / (curr.speed - prev.speed)
+        return GpsDataPoint(
+            elapsedTime = prev.elapsedTime + ratio * (curr.elapsedTime - prev.elapsedTime),
+            speed = targetSpeed,
+            latitude = prev.latitude + ratio * (curr.latitude - prev.latitude),
+            longitude = prev.longitude + ratio * (curr.longitude - prev.longitude),
+            altitude = prev.altitude
+        )
     }
 
     private fun calculateTotalDistance(dataPoints: List<GpsDataPoint>): Double {

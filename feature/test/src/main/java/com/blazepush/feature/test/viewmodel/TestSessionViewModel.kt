@@ -1038,6 +1038,13 @@ class TestSessionViewModel(
                 ""
             }
             val result = calculateResultUseCase(session, binaryFilePath)
+            // fix-accel-last-crossing design Decision 5:窗口摘要日志（core/domain 无 FileLogger 依赖,锚点放 VM）
+            // dnf = 计时窗口缺失（未真正过终点线/未起步）;points=窗口内/全量 反映剔除量
+            FileLogger.d(
+                TAG,
+                "perfResult window: total=${"%.2f".format(result.totalTime)}s dist=${"%.1f".format(result.totalDistance)}m " +
+                    "points=${result.dataPoints.size}/${session.dataPoints.size} dnf=${result.dataPoints.isEmpty()}"
+            )
             testResultRepository.saveResult(result)
             _testState.value = TestState.Completed(result)
         }
