@@ -524,9 +524,10 @@ class CameraRecordingEngine(
             }
 
             is VideoRecordEvent.Status -> {
-                // 高频状态更新，VERBOSE 级别，默认 DEBUG level 下不写入文件（不刷爆日志）
-                val durationMs = event.recordingStats.recordedDurationNanos / 1_000_000L
-                FileLogger.v(TAG, "VideoRecordEvent.Status: elapsed=${durationMs}ms")
+                // 高频状态更新:VERBOSE + 降频采样(每秒最多 1 条,2026-06-04)
+                FileLogger.vSampled(TAG, "video-status") {
+                    "VideoRecordEvent.Status: elapsed=${event.recordingStats.recordedDurationNanos / 1_000_000L}ms"
+                }
             }
 
             is VideoRecordEvent.Finalize -> {

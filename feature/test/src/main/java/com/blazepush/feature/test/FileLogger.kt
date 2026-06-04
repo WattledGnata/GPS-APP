@@ -131,6 +131,29 @@ object FileLogger {
     fun e(tag: String, message: String, throwable: Throwable? = null) =
         enqueue(LogLevel.ERROR, tag, message + (throwable?.let { " - ${it.message}" } ?: ""))
 
+    // 高频采样节流:key → 上次落盘时刻 ms(多线程 call site 用 ConcurrentHashMap;
+    // gate 检查非严格互斥,极端并发同 key 可能多落 1 条——日志采样可接受,不引入锁)
+    private val sampleLastMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val SAMPLE_WINDOW_MS = 1000L
+
+    /**
+     * 高频 call site 采样日志(2026-06-04 路测反馈:25Hz 逐帧日志负担大、相邻帧信息密度低)。
+     *
+     * 同 [key] 每 [SAMPLE_WINDOW_MS] 最多落 1 条(25Hz → 1Hz,~96% 减量),VERBOSE 级别;
+     * [message] lambda 惰性构造——级别关闭或未到采样窗口时**零字符串拼接开销**
+     * (替代 call site 手动 `if (isVerboseEnabled)` 包裹)。
+     * 适用:逐帧 gate 判定 / RTDelta 投影 / 视频 Status 等每帧重复且相邻帧高度相似的锚点;
+     * 状态转移与错误类日志 MUST 仍用 d/e 全量落(采样会丢关键现场)。
+     */
+    fun vSampled(tag: String, key: String, message: () -> String) {
+        if (LogLevel.VERBOSE < currentLevel) return
+        val now = System.currentTimeMillis()
+        val last = sampleLastMs[key]
+        if (last != null && now - last < SAMPLE_WINDOW_MS) return
+        sampleLastMs[key] = now
+        enqueue(LogLevel.VERBOSE, tag, message())
+    }
+
     private fun enqueue(level: LogLevel, tag: String, message: String) {
         if (level < currentLevel) return
         val line = formatLine(level, tag, message)
@@ -265,5 +288,6 @@ object FileLogger {
         currentLogFile = null
         rotatedLogFile = null
         currentLevel = LogLevel.DEBUG
+        sampleLastMs.clear() // 采样窗口状态跨测试清零
     }
 }

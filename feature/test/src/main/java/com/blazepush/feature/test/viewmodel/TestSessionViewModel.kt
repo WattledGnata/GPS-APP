@@ -449,7 +449,8 @@ class TestSessionViewModel(
                     currentY = curY,
                 )
                 if (projection != null) {
-                    FileLogger.v("RTDelta", "proj idx=${projection.matchedIdx} dist=${projection.projDistanceM}m delta=${projection.deltaMs}ms elapsed=$currentLapElapsedMs")
+                    // 2026-06-04 降频采样:25Hz 逐帧投影日志每秒最多 1 条
+                    FileLogger.vSampled("RTDelta", "rtdelta-proj") { "proj idx=${projection.matchedIdx} dist=${projection.projDistanceM}m delta=${projection.deltaMs}ms elapsed=$currentLapElapsedMs" }
                     state.copy(
                         prevDeltaMs = projection.deltaMs,
                         staleFrameCount = 0,
@@ -811,13 +812,9 @@ class TestSessionViewModel(
         val currentSample = gpsData.toLapGpsSample()
         val previousSample = lastLapGpsSample
 
-        // A18 + A39 战役 F R4：25Hz 高频 bridge 推进日志降级为 VERBOSE + 坐标
-        // %.3f 精度；isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值。
-        if (FileLogger.isVerboseEnabled) {
-            FileLogger.v(
-                TAG,
-                "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${"%.3f".format(gpsData.latitude)}, lon=${"%.3f".format(gpsData.longitude)}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude?.let { "%.3f".format(it) }}, prevLon=${previousSample?.longitude?.let { "%.3f".format(it) }}"
-            )
+        // A18 + A39 战役 F R4 + 2026-06-04 降频采样:25Hz 逐帧 bridge 推进日志每秒最多 1 条
+        FileLogger.vSampled(TAG, "bridge-lap") {
+            "bridgeGpsToLapTiming: track=${track.id}, sessionStatus=${currentSession.status}, currentLapIndex=${currentSession.currentLapIndex}, nextGate=${currentSession.nextExpectedGateIndex}, gpsTs=${gpsData.timestamp}, lat=${"%.3f".format(gpsData.latitude)}, lon=${"%.3f".format(gpsData.longitude)}, speed=${gpsData.speed}, bearing=${gpsData.bearing}, prevTs=${previousSample?.timestampMillis}, prevLat=${previousSample?.latitude?.let { "%.3f".format(it) }}, prevLon=${previousSample?.longitude?.let { "%.3f".format(it) }}"
         }
 
         // A38 三段式守卫（openspec fix-lap-timing-engine-entry-hardening Requirement 4）：
@@ -897,13 +894,9 @@ class TestSessionViewModel(
             currentSample = currentSample
         )
 
-        // A18 战役 F R4：25Hz 高频 bridge 结果日志降级为 VERBOSE（无坐标，只改
-        // 方法名）；isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值。
-        if (FileLogger.isVerboseEnabled) {
-            FileLogger.v(
-                TAG,
-                "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
-            )
+        // A18 战役 F R4 + 2026-06-04 降频采样:25Hz 逐帧 bridge 结果日志每秒最多 1 条
+        FileLogger.vSampled(TAG, "lap-result") {
+            "lapTimingResult: status=${updatedSession.status}, currentLapIndex=${updatedSession.currentLapIndex}, nextGate=${updatedSession.nextExpectedGateIndex}, crossings=${updatedSession.crossingEvents.takeLast(3)}, completedLaps=${updatedSession.completedLaps.size}"
         }
 
         _lapSession.value = updatedSession

@@ -96,14 +96,10 @@ class LapTimingEngine(
         }
 
         val startFinishDetection = detector.detect(previous = previousSample, current = currentSample, gate = track.startFinishGate)
-        // A18 + A39 战役 F R4：25Hz 高频 detector 日志降级为 VERBOSE + 坐标 %.3f
-        // 精度 (~100m) —— 默认 DEBUG 级别下不写盘，彻底消除每秒 25 次 I/O；
-        // isVerboseEnabled 早退避免 verbose 关闭时仍执行字符串插值开销。
-        if (FileLogger.isVerboseEnabled) {
-            FileLogger.v(
-                TAG,
-                "targetGate=${track.startFinishGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${startFinishDetection.accepted}, reason=${startFinishDetection.reason}, directionScore=${startFinishDetection.directionScore}, directionalSpeed=${startFinishDetection.directionalSpeedMps}"
-            )
+        // A18 + A39 战役 F R4 + 2026-06-04 降频采样：25Hz 逐帧 detector 日志
+        // vSampled 同 key 每秒最多 1 条(verbose 开启时也不再全量),lambda 惰性零开销。
+        FileLogger.vSampled(TAG, "engine-gate-sf") {
+            "targetGate=${track.startFinishGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${startFinishDetection.accepted}, reason=${startFinishDetection.reason}, directionScore=${startFinishDetection.directionScore}, directionalSpeed=${startFinishDetection.directionalSpeedMps}"
         }
         if (startFinishDetection.accepted) {
             return handleStartFinishCrossing(
@@ -269,13 +265,10 @@ class LapTimingEngine(
         val expectedGateDetection = expectedPair.second
         val unexpectedAccepted = allDetections.filter { (gate, d) -> gate.id != targetGate.id && d.accepted }
 
-        // 路测修复（2026-06-04）：sector gate 逐帧日志同 line 105 start-finish 降 VERBOSE ——
-        // 25Hz × D 级写盘把 5MB rotation 现场刷掉（昨晚 4.5MB 日志大半是本条）；A39 pattern 照抄。
-        if (FileLogger.isVerboseEnabled) {
-            FileLogger.v(
-                TAG,
-                "targetGate=${targetGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${expectedGateDetection.accepted}, reason=${expectedGateDetection.reason}, directionScore=${expectedGateDetection.directionScore}, directionalSpeed=${expectedGateDetection.directionalSpeedMps}, unexpectedAcceptedCount=${unexpectedAccepted.size}"
-            )
+        // 路测修复（2026-06-04）：sector gate 逐帧日志降 VERBOSE + 降频采样(每秒最多 1 条)——
+        // 25Hz × D 级写盘把 5MB rotation 现场刷掉（昨晚 4.5MB 日志大半是本条）。
+        FileLogger.vSampled(TAG, "engine-gate-sector") {
+            "targetGate=${targetGate.id}, prev=(${"%.3f".format(previousSample.latitude)},${"%.3f".format(previousSample.longitude)},ts=${previousSample.timestampMillis}), current=(${"%.3f".format(currentSample.latitude)},${"%.3f".format(currentSample.longitude)},ts=${currentSample.timestampMillis}), accepted=${expectedGateDetection.accepted}, reason=${expectedGateDetection.reason}, directionScore=${expectedGateDetection.directionScore}, directionalSpeed=${expectedGateDetection.directionalSpeedMps}, unexpectedAcceptedCount=${unexpectedAccepted.size}"
         }
 
         // 期待门 CrossingEvent：accepted 用插值时刻，rejected 降级到 currentSample.ts（R2 B2 契约）

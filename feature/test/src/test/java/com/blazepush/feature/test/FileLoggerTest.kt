@@ -317,8 +317,8 @@ class FileLoggerTest {
         assertTrue("detector 日志前应有 FileLogger 调用", callStart > 0)
         val callStmt = source.substring(callStart, detectorLogAnchor + 500)
         assertTrue(
-            "detector 日志应使用 v() 而非 d()（v1 FAIL / v2 PASS）",
-            callStmt.startsWith("FileLogger.v("),
+            "detector 日志应使用 v()/vSampled() 而非 d()（v1 FAIL / v2 PASS;2026-06-04 降频采样升级为 vSampled）",
+            callStmt.startsWith("FileLogger.v(") || callStmt.startsWith("FileLogger.vSampled("),
         )
         assertTrue(
             "detector 日志坐标应 %.3f 格式化（v1 直接 \${latitude} / v2 \"%.3f\".format）",
@@ -340,7 +340,10 @@ class FileLoggerTest {
         val callStart = source.lastIndexOf("FileLogger.", bridgeLogAnchor)
         assertTrue("bridge 日志前应有 FileLogger 调用", callStart > 0)
         val callStmt = source.substring(callStart, bridgeLogAnchor + 500)
-        assertTrue("bridge 日志应使用 v()", callStmt.startsWith("FileLogger.v("))
+        assertTrue(
+            "bridge 日志应使用 v()/vSampled()（2026-06-04 降频采样升级为 vSampled）",
+            callStmt.startsWith("FileLogger.v(") || callStmt.startsWith("FileLogger.vSampled("),
+        )
         assertTrue(
             "bridge 日志 lat 应 %.3f 格式化",
             callStmt.contains("\"%.3f\".format(gpsData.latitude)"),
@@ -371,6 +374,35 @@ class FileLoggerTest {
             "默认 DEBUG 下 bridgeGpsToLapTiming verbose 不应写入",
             content.contains("bridgeGpsToLapTiming: ..."),
         )
+    }
+
+    /**
+     * 2026-06-04 降频采样：同 key 每秒窗口内只落 1 条（50 连发模拟 25Hz 帧），不同 key 独立。
+     */
+    @Test
+    fun vSampled_sameKeyThrottledToOnePerWindow_differentKeysIndependent() = runTest {
+        FileLogger.setLevel(FileLogger.LogLevel.VERBOSE)
+        repeat(50) { i -> FileLogger.vSampled("ENGINE", "key-a") { "sampled-a #$i" } }
+        FileLogger.vSampled("ENGINE", "key-b") { "sampled-b once" }
+        FileLogger.flushForTest()
+
+        val content = File(filesDir, "debug_log.txt").readText()
+        val aCount = Regex("sampled-a").findAll(content).count()
+        assertEquals("同 key 1 秒窗口内 50 连发只落 1 条", 1, aCount)
+        assertTrue("不同 key 独立采样", content.contains("sampled-b once"))
+    }
+
+    /**
+     * 2026-06-04 降频采样：DEBUG 级别下 lambda 零调用（零字符串拼接开销）+ 零写入。
+     */
+    @Test
+    fun vSampled_belowVerboseLevel_zeroWriteAndZeroLambdaInvocation() = runTest {
+        var invoked = 0
+        repeat(25) { FileLogger.vSampled("ENGINE", "key-c") { invoked++; "never-written" } }
+        FileLogger.flushForTest()
+
+        assertEquals("DEBUG 级别下 message lambda 不得执行", 0, invoked)
+        assertFalse(File(filesDir, "debug_log.txt").readText().contains("never-written"))
     }
 
     /**
