@@ -29,10 +29,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -94,6 +96,13 @@ fun TrackTechTestExecutionScreen(
     sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
+
+    // 路测问题 #1：0-100 测试中屏幕自动息屏 → 测试执行屏全程强制亮屏(同 LapLiveScreen 模式)
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
 
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
@@ -448,9 +457,11 @@ private fun BigSpeedDisplay(speed: Double) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.Bottom) {
+                // 路测反馈#7：96sp 行车看不清 → MechanicalGiant 192sp；同时去小数
+                // （GPS 速度小数位本是噪声,且 192sp 下 5 字符超 vivo 小屏宽度）
                 Text(
-                    text = "%.1f".format(speed),
-                    style = TrackTechTypography.MechanicalHero,
+                    text = "%.0f".format(speed),
+                    style = TrackTechTypography.MechanicalGiant,
                     color = TrackTechColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

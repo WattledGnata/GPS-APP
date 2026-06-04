@@ -37,6 +37,10 @@ object TrackTechTypography {
         fontSize = 96.sp,
         letterSpacing = 0.em,
     )
+
+    // 行车场景超大读数（路测反馈#7：96sp 开车看不清）。仅限 ≤3 字符整数（如 SPEED "132"），
+    // 带小数的 5 字符在小屏(vivo V2405A ~392dp)必超宽 —— 调用方 MUST 去小数。
+    val MechanicalGiant = MechanicalHero.copy(fontSize = 192.sp)
     val MechanicalLarge = MechanicalHero.copy(fontSize = 60.sp)
     val MechanicalMedium = MechanicalHero.copy(fontSize = 36.sp)
     val MechanicalSmall = MechanicalHero.copy(fontSize = 20.sp)
