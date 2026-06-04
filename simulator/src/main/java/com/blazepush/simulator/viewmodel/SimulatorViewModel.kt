@@ -281,6 +281,12 @@ class SimulatorViewModel : ViewModel() {
      */
     fun triggerRealRoadReplayOnce() = triggerReplayOnce("replay/real_0to100_20260603.json")
 
+    /**
+     * 真实 0-100 过百版:同一真车数据前段 + 尾段按真实加速度(8.8 km/h/s)外推 99→103
+     * 巡航 2s——验证成功出成绩路径(算法复刻预期 ≈7.95s);原版(止于 99)验证 DNF 路径。
+     */
+    fun triggerRealRoadSuccessReplayOnce() = triggerReplayOnce("replay/real_0to100_success_20260603.json")
+
     private fun triggerReplayOnce(assetName: String) {
         if (_uiState.value.isReplayPlaying) return
         if (!_uiState.value.isReplayMode && _uiState.value.currentScenario != TestScenario.REAL_TRACK_REPLAY) return

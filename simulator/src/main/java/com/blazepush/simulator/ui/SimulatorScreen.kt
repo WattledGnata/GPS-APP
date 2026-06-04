@@ -97,6 +97,7 @@ fun SimulatorScreen(
                 onEnableReplay = { viewModel.enableReplayMode() },
                 onTriggerReplayOnce = { viewModel.triggerReplayOnce() },
                 onTriggerRealRoadReplay = { viewModel.triggerRealRoadReplayOnce() },
+                onTriggerRealRoadSuccessReplay = { viewModel.triggerRealRoadSuccessReplayOnce() },
             )
 
             // 速度控制
@@ -313,6 +314,7 @@ fun ReplayEntryCard(
     onEnableReplay: () -> Unit,
     onTriggerReplayOnce: () -> Unit,
     onTriggerRealRoadReplay: () -> Unit,
+    onTriggerRealRoadSuccessReplay: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -357,6 +359,14 @@ fun ReplayEntryCard(
                     enabled = isAdvertising && !isReplayPlaying,
                 ) {
                     Text(if (isReplayPlaying) "PLAYING…" else "真实0-100路测回放(25Hz)")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onTriggerRealRoadSuccessReplay,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isAdvertising && !isReplayPlaying,
+                ) {
+                    Text(if (isReplayPlaying) "PLAYING…" else "真实0-100·过百版(预期≈7.95s)")
                 }
             }
         }
