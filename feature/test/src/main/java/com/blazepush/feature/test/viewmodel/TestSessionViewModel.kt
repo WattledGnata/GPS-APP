@@ -134,9 +134,10 @@ class TestSessionViewModel(
         private const val TRIGGER_CONFIRMATION_COUNT = 5
         // launch-arming-feedback Decision 1(2026-06-04 路测:2.7 km/h 缓动被当静止武装 → 起步
         // 锚点缺失结构性 DNF):静止阈值与成绩窗口起步锚点 MOTION_THRESHOLD_KMH(1.0)单一口径;
-        // 确认帧数 3(120ms 形同虚设)→ 25(1 秒真停稳)。
+        // 确认改按**数据时间窗**(1000ms)而非帧数——帧数计数隐含 25Hz 假设,5Hz 模拟器回放下
+        // "25 帧"=5 秒,把模拟器验证路径锁死(2026-06-04 夜实施缺陷修正)。
         private val STANDSTILL_SPEED_THRESHOLD = MOTION_THRESHOLD_KMH
-        private const val STANDSTILL_CONFIRMATION_COUNT = 25
+        private const val STANDSTILL_CONFIRMATION_MS = 1000L
         private const val LAP_LIVE_TICK_PERIOD_MS = 50L
         private const val LAP_LIVE_SUBSCRIPTION_TIMEOUT_MS = 5_000L
 
@@ -332,7 +333,10 @@ class TestSessionViewModel(
     private val preTriggerBuffer = mutableListOf<FilteredGpsData>()
 
     private var isStartReady = false
-    private var standstillCount = 0
+
+    // 静止确认窗口起点(数据时间戳 ms);null = 当前不在静止段。时间窗判定对任意帧率
+    // (25Hz 真机 / 5Hz 模拟器)语义一致:持续 <1.0 km/h 满 1000ms 即武装。
+    private var standstillSinceTs: Long? = null
     private var consecutiveTriggerCount = 0
 
     init {
@@ -494,7 +498,7 @@ class TestSessionViewModel(
             is TestTemplate.Braking100To0 -> TestMode.Braking
         }
         isStartReady = false
-        standstillCount = 0
+        standstillSinceTs = null
         consecutiveTriggerCount = 0
         _launchArmed.value = false // launch-arming-feedback:重进武装流程,复位防误播
         isFinishing = false  // 重置完成标记，允许新测试
@@ -641,7 +645,7 @@ class TestSessionViewModel(
         countdownJob = null
         consecutiveTriggerCount = 0
         isStartReady = false
-        standstillCount = 0
+        standstillSinceTs = null
         _launchArmed.value = false // launch-arming-feedback:取消即解除武装
         _testState.value = TestState.Idle
     }
@@ -723,16 +727,16 @@ class TestSessionViewModel(
     private fun checkAccelerationTrigger(filteredData: FilteredGpsData): Boolean {
         if (!isStartReady) {
             if (filteredData.speed < STANDSTILL_SPEED_THRESHOLD) {
-                standstillCount++
-                if (standstillCount >= STANDSTILL_CONFIRMATION_COUNT) {
+                val since = standstillSinceTs ?: filteredData.timestamp.also { standstillSinceTs = it }
+                if (filteredData.timestamp - since >= STANDSTILL_CONFIRMATION_MS) {
                     isStartReady = true
-                    standstillCount = 0
+                    standstillSinceTs = null
                     // launch-arming-feedback:武装就绪上升沿(UI 据此播报 + Banner 切就绪态)
                     _launchArmed.value = true
-                    FileLogger.d(TAG, "launchArmed: 静止确认通过(<${STANDSTILL_SPEED_THRESHOLD}km/h ×${STANDSTILL_CONFIRMATION_COUNT}帧),随时可起步")
+                    FileLogger.d(TAG, "launchArmed: 静止确认通过(<${STANDSTILL_SPEED_THRESHOLD}km/h 持续 ${STANDSTILL_CONFIRMATION_MS}ms),随时可起步")
                 }
             } else {
-                standstillCount = 0
+                standstillSinceTs = null
             }
             return false
         }
