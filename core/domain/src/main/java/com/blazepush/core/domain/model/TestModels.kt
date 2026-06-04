@@ -135,8 +135,11 @@ data class TestSession(
     fun markStarted(filteredData: FilteredGpsData, preTriggerBuffer: List<FilteredGpsData>) {
         triggerTime = filteredData.timestamp
 
-        // 添加pre-trigger数据
-        filteredDataPoints.addAll(preTriggerBuffer)
+        // 添加 pre-trigger 数据(2026-06-04 修复:原 `filteredDataPoints.addAll(buffer)` 只进
+        // filteredDataPoints,**从未进 dataPoints**——而成绩计算消费的是 dataPoints,导致"静止
+        // 起步上穿 1.0"的窗口锚点(必在触发前 buffer 里:trigger 5 帧确认时速度已爬高)永远
+        // 丢失,0-100 结构性 DNF。逐帧走 addFilteredDataPoint,elapsedTime 为负值(触发前)。
+        preTriggerBuffer.forEach { addFilteredDataPoint(it) }
 
         // 添加触发点
         addFilteredDataPoint(filteredData, 0.0)
