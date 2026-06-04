@@ -294,6 +294,14 @@ class TestSessionViewModel(
     private val _launchArmed = MutableStateFlow(false)
     val launchArmed: StateFlow<Boolean> = _launchArmed.asStateFlow()
 
+    // 实时尝试计时(2026-06-05 用户反馈"elapsed 从触发一直数 50 多秒"):与成绩窗口同语义——
+    // 滤波速度上穿 1.0 起步开始计时,掉回 <1.0(本次尝试作废)立即清零,再起步重新数;
+    // 最后一把的实时数值 ≈ 最终播报成绩(所见即所得延续)。Running 期 UI 显示本值,
+    // Completed 显示 result.totalTime(不变)。
+    private var liveAttemptStartTs: Long? = null
+    private val _liveAttemptElapsedSeconds = MutableStateFlow(0.0)
+    val liveAttemptElapsedSeconds: StateFlow<Double> = _liveAttemptElapsedSeconds.asStateFlow()
+
     private var lastLapGpsSample: GpsSample? = null
     private var isLapRecording = false
 
@@ -654,6 +662,8 @@ class TestSessionViewModel(
         isStartReady = false
         standstillSinceTs = null
         _launchArmed.value = false // launch-arming-feedback:取消即解除武装
+        liveAttemptStartTs = null
+        _liveAttemptElapsedSeconds.value = 0.0
         _testState.value = TestState.Idle
     }
 
@@ -697,6 +707,14 @@ class TestSessionViewModel(
                 // 会溢出污染 0-100 用时等结果计算。Preparing / Running 两分支必须对称守卫。
                 if (!filteredData.raw.isTimeSynced) return
                 state.session.addFilteredDataPoint(filteredData)
+                // 实时尝试计时:掉回静止(<1.0)清零(本次尝试作废),再起步从新锚点重数
+                if (filteredData.speed < STANDSTILL_SPEED_THRESHOLD) {
+                    liveAttemptStartTs = null
+                    _liveAttemptElapsedSeconds.value = 0.0
+                } else {
+                    val start = liveAttemptStartTs ?: filteredData.timestamp.also { liveAttemptStartTs = it }
+                    _liveAttemptElapsedSeconds.value = (filteredData.timestamp - start) / 1000.0
+                }
                 val sessionStartTs = telemetryRepository.activeSessionStartTs
                 if (sessionStartTs != null) {
                     telemetryRepository.writeSample(
@@ -785,6 +803,14 @@ class TestSessionViewModel(
         )
 
         session.markStarted(filteredData, lockedPreTriggerBuffer)
+
+        // 实时尝试计时初值:从 buffer+触发帧里找最后一次上穿 1.0 的帧(与成绩窗口锚点同语义;
+        // 帧级精度即可,显示用途)。找不到(理论上触发时必已 >1.0)退化为触发帧。
+        val seqForLive = lockedPreTriggerBuffer + filteredData
+        liveAttemptStartTs = seqForLive.zipWithNext()
+            .lastOrNull { (a, b) -> a.speed < STANDSTILL_SPEED_THRESHOLD && b.speed >= STANDSTILL_SPEED_THRESHOLD }
+            ?.second?.timestamp ?: filteredData.timestamp
+        _liveAttemptElapsedSeconds.value = (filteredData.timestamp - liveAttemptStartTs!!) / 1000.0
 
         _testState.value = TestState.Running(session)
 

@@ -144,8 +144,12 @@ fun TrackTechTestExecutionScreen(
     // unify-speed-judgement-source Decision 2:仪表用滤波后速度(与判停/成绩同源);
     // raw 仅保留给状态条/卫星等非速度字段
     val speed by sessionViewModel.filteredSpeedKmh.collectAsState()
+    // 实时尝试计时(2026-06-05):Running 期不再显示 session 总时长(蠕动回撤也一直涨到
+    // 50 多秒,与成绩窗口语义脱节)——改 VM 的 liveAttemptElapsedSeconds:上穿 1.0 起步
+    // 开始数,掉回静止清零重数;最后一把的实时值 ≈ 最终成绩
+    val liveAttemptElapsed by sessionViewModel.liveAttemptElapsedSeconds.collectAsState()
     val elapsedSeconds: Double = when (val s = testState) {
-        is TestState.Running -> s.session.dataPoints.lastOrNull()?.elapsedTime ?: 0.0
+        is TestState.Running -> liveAttemptElapsed
         is TestState.Completed -> s.result.totalTime
         else -> 0.0
     }
