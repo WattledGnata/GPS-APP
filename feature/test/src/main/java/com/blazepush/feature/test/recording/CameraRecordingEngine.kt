@@ -547,17 +547,21 @@ class CameraRecordingEngine(
                         FileLogger.e(
                             TAG,
                             "ERROR 降级救援: attachVideoToSession sessionId=$sessionId path=$filePath " +
-                                "size=${fileSize}B wallClock=$wallClock code=${event.error}",
+                                "size=${fileSize}B wallClock=$wallClock code=${event.error} playable=null",
                         )
                         engineScope.launch {
                             runCatching {
+                                // video-segment-schema ②a：救援段 playable=null（moov 损坏时长未知，
+                                // 可播性待 ②c 首播回写）；durationMs ERROR 分支 stats 不可信传 null。
                                 telemetryRepository.attachVideoToSession(
                                     sessionId = sessionId,
                                     videoFilePath = filePath,
                                     videoStartedAtWallClock = wallClock,
+                                    playable = null,
+                                    durationMs = null,
                                 )
                             }.onSuccess {
-                                FileLogger.d(TAG, "ERROR 降级救援: 写库 OK")
+                                FileLogger.d(TAG, "ERROR 降级救援: 写库 OK (segment append)")
                             }.onFailure { t ->
                                 FileLogger.e(TAG, "ERROR 降级救援: 写库失败", t)
                             }
@@ -586,16 +590,25 @@ class CameraRecordingEngine(
                     FileLogger.d(TAG, "VideoRecordEvent.Finalize: OK path=$filePath size=${fileSize}B wallClock=$wallClock")
 
                     if (sessionId != null) {
-                        FileLogger.d(TAG, "attachVideoToSession: 调用 sessionId=$sessionId path=$filePath wallClock=$wallClock")
+                        // video-segment-schema ②a：正常 Finalize playable=true + 实测时长（纳秒→毫秒）。
+                        val durationMs = event.recordingStats.recordedDurationNanos
+                            .takeIf { it > 0 }?.let { it / 1_000_000 }
+                        FileLogger.d(
+                            TAG,
+                            "attachVideoToSession: 调用 sessionId=$sessionId path=$filePath " +
+                                "wallClock=$wallClock playable=true durationMs=$durationMs",
+                        )
                         engineScope.launch {
                             runCatching {
                                 telemetryRepository.attachVideoToSession(
                                     sessionId = sessionId,
                                     videoFilePath = filePath,
                                     videoStartedAtWallClock = wallClock,
+                                    playable = true,
+                                    durationMs = durationMs,
                                 )
                             }.onSuccess {
-                                FileLogger.d(TAG, "attachVideoToSession: 写库 OK")
+                                FileLogger.d(TAG, "attachVideoToSession: 写库 OK (segment append)")
                             }.onFailure { t ->
                                 FileLogger.e(TAG, "attachVideoToSession: 写库失败", t)
                             }

@@ -11,8 +11,10 @@ import com.blazepush.core.data.local.binary.LapTelemetryReader
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.data.local.dao.CrossingEventDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
+import com.blazepush.core.data.local.dao.VideoSegmentDao
 import com.blazepush.core.data.local.entity.CrossingEventEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 import com.blazepush.core.domain.model.LapTelemetry
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
@@ -38,6 +40,8 @@ class TelemetryRepository(
     private val context: Context,
     private val sessionDao: TelemetrySessionDao,
     private val crossingDao: CrossingEventDao,
+    // video-segment-schema round ②a：视频段一对多 DAO（attach append + 全段 cascade）
+    private val videoSegmentDao: VideoSegmentDao,
 ) {
     private var activeWriter: BinaryTelemetryWriter? = null
     private var activeSessionId: String? = null
@@ -250,6 +254,15 @@ class TelemetryRepository(
      */
     suspend fun deleteSession(sessionId: String) {
         val entity = sessionDao.queryBySessionId(sessionId) ?: return
+        // video-segment-schema round ②a：行删除前先取全段路径逐个删文件
+        //（FK CASCADE 只删行不管文件系统；旧字段单文件与最新段同路径，二次 delete no-op）。
+        // 段行显式删（FK CASCADE 仅兜底——不依赖 pragma 状态，且与 deleteSessionVideo 语义一致）。
+        val segments = videoSegmentDao.queryBySessionId(sessionId)
+        segments.forEach { deleteVideoFileIfPresent(it.filePath, "deleteSession-segment") }
+        videoSegmentDao.deleteBySessionId(sessionId)
+        if (segments.isNotEmpty()) {
+            Log.d("VideoSegment", "deleteSession cascade removed ${segments.size} segment files: sessionId=$sessionId")
+        }
         crossingDao.deleteCrossingsBySessionId(sessionId)
         sessionDao.deleteSession(entity)
         // 删 binary file（原有逻辑）
@@ -306,37 +319,66 @@ class TelemetryRepository(
      */
     suspend fun deleteSessionVideo(sessionId: String) {
         val entity = sessionDao.queryBySessionId(sessionId) ?: return
+        // video-segment-schema round ②a：全段删除（文件 + 行），旧字段照旧置空。
+        val segments = videoSegmentDao.queryBySessionId(sessionId)
+        segments.forEach { deleteVideoFileIfPresent(it.filePath, "deleteSessionVideo-segment") }
+        videoSegmentDao.deleteBySessionId(sessionId)
         deleteVideoFileIfPresent(entity.videoFilePath, "deleteSessionVideo")
         sessionDao.clearVideo(sessionId)
-        Log.d("deleteSessionVideo", "video removed, lap data kept: sessionId=$sessionId")
+        Log.d(
+            "VideoSegment",
+            "deleteSessionVideo: removed ${segments.size} segments, lap data kept: sessionId=$sessionId",
+        )
     }
 
     /**
-     * 写入视频元数据（供 round 3 camera-recording-and-gps-sync 录制引擎调用）。
-     * round 3 录制首帧回调取 videoStartedAtWallClock = System.currentTimeMillis()（与 binary absoluteTsMs 同时钟域）。
-     * 录制结束后调本方法写 videoFilePath + videoStartedAtWallClock 两字段。
-     * sessionId 不存在时无副作用（Room UPDATE 不存在行，不抛）。
+     * 写入视频元数据（供录制引擎调用；video-segment-schema round ②a 改 append 语义）。
      *
+     * 多段模型（一对多 video_segments 表）：
+     * 1. INSERT 子表新段（segmentIndex = 现有 max+1，首段 0）——停录再录 / ERROR 救援重录
+     *    全部保留，不再覆盖（修 2026-06-03 路测"圈 1 救援段被 5 秒尾段覆盖"）。
+     * 2. 照旧 UPDATE session 旧字段 = 本段（双写向后兼容：16 个消费文件零改动，读到"最新段"
+     *    与改造前一致；②c 切到子表后废弃旧字段写入）。
+     *
+     * round A"覆盖前删旧文件"已取消——旧段是子表登记的合法数据，删除走成绩页删视频（全段）
+     * 或 deleteSession。两步顺序写（INSERT 先 UPDATE 后）：repository 不持 db 实例无跨 DAO
+     * 事务能力；半写最坏情形 = 段已入子表但旧字段陈旧，消费方读旧段不致命，日志可诊断。
+     *
+     * @param playable true=Finalize OK；null=ERROR 救援时长未知（②c 首播回写）
+     * @param durationMs Finalize event 可取则传（endWallClock = start + duration），取不到 null
      * @author CC
-     * @description attach video path + wallClock anchor to a session after recording
-     * @date 2026-05-30
+     * @description append video segment + dual-write legacy fields (②a)
+     * @date 2026-06-07
      */
     suspend fun attachVideoToSession(
         sessionId: String,
         videoFilePath: String,
         videoStartedAtWallClock: Long,
+        playable: Boolean?,
+        durationMs: Long?,
     ) {
-        // video-storage-cleanup round：覆盖前删旧文件（同 session 重录的源头断孤儿）。
-        val oldPath = sessionDao.queryBySessionId(sessionId)?.videoFilePath
-        if (oldPath != null && oldPath != videoFilePath) {
-            deleteVideoFileIfPresent(oldPath, "attachVideoToSession-replaceOld")
-        }
+        val nextIndex = (videoSegmentDao.maxSegmentIndex(sessionId) ?: -1) + 1
+        videoSegmentDao.insert(
+            VideoSegmentEntity(
+                sessionId = sessionId,
+                segmentIndex = nextIndex,
+                filePath = videoFilePath,
+                startWallClock = videoStartedAtWallClock,
+                endWallClock = durationMs?.let { videoStartedAtWallClock + it },
+                durationMs = durationMs,
+                playable = playable,
+            )
+        )
         sessionDao.updateVideoMetadata(
             sessionId = sessionId,
             videoFilePath = videoFilePath,
             videoStartedAtWallClock = videoStartedAtWallClock,
         )
-        Log.d("attachVideoToSession", "video attached: $videoFilePath wallClock: $videoStartedAtWallClock sessionId: $sessionId")
+        Log.d(
+            "VideoSegment",
+            "segment appended: sessionId=$sessionId index=$nextIndex playable=$playable " +
+                "durationMs=$durationMs path=$videoFilePath (legacy fields dual-written)",
+        )
     }
 
     /**

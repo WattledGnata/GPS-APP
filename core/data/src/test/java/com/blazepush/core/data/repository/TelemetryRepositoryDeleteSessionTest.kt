@@ -20,6 +20,8 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import java.io.File
 import java.nio.file.Files
+import com.blazepush.core.data.local.dao.VideoSegmentDao
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 /**
  * TelemetryRepository.deleteSession cascade 单测（add-history-deletion round）。
@@ -39,6 +41,7 @@ class TelemetryRepositoryDeleteSessionTest {
     private lateinit var context: Context
     private lateinit var fakeSessionDao: FakeTelemetrySessionDao
     private lateinit var fakeCrossingDao: FakeCrossingEventDao
+    private lateinit var fakeVideoSegmentDao: FakeVideoSegmentDao
     private lateinit var repo: TelemetryRepository
 
     @Before
@@ -48,7 +51,8 @@ class TelemetryRepositoryDeleteSessionTest {
         `when`(context.filesDir).thenReturn(tempDir)
         fakeSessionDao = FakeTelemetrySessionDao()
         fakeCrossingDao = FakeCrossingEventDao()
-        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao)
+        fakeVideoSegmentDao = FakeVideoSegmentDao()
+        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao, fakeVideoSegmentDao)
     }
 
     @After
@@ -192,7 +196,7 @@ class TelemetryRepositoryDeleteSessionTest {
     fun `deleteSessionVideo - removes file and clears fields but keeps session`() = runTest {
         val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
         val videoFile = File(File(tempDir, "video").apply { mkdirs() }, "v.mp4").apply { writeText("x") }
-        repo.attachVideoToSession(sessionId, videoFile.absolutePath, 123L)
+        repo.attachVideoToSession(sessionId, videoFile.absolutePath, 123L, playable = true, durationMs = null)
         assertTrue(videoFile.exists())
 
         repo.deleteSessionVideo(sessionId)
@@ -203,20 +207,29 @@ class TelemetryRepositoryDeleteSessionTest {
         assertNull("videoFilePath cleared", entity?.videoFilePath)
     }
 
-    /** 同 session 重录覆盖前删旧文件（spec 重录 Requirement）。 */
+    /**
+     * 同 session 重录两段都保留（video-segment-schema ②a delta spec 语义反转：
+     * 原 round A "覆盖前删旧"已废止——旧段是子表登记的合法数据，重录 append 不删）。
+     */
     @Test
-    fun `attachVideoToSession - deletes old file on re-record`() = runTest {
+    fun `attachVideoToSession - keeps old file and appends segment on re-record`() = runTest {
         val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
         val videoDir = File(tempDir, "video").apply { mkdirs() }
         val oldFile = File(videoDir, "old.mp4").apply { writeText("o") }
         val newFile = File(videoDir, "new.mp4").apply { writeText("n") }
-        repo.attachVideoToSession(sessionId, oldFile.absolutePath, 100L)
+        repo.attachVideoToSession(sessionId, oldFile.absolutePath, 100L, playable = null, durationMs = null)
 
-        repo.attachVideoToSession(sessionId, newFile.absolutePath, 200L)
+        repo.attachVideoToSession(sessionId, newFile.absolutePath, 200L, playable = true, durationMs = 5000L)
 
-        assertFalse("old file deleted on re-record", oldFile.exists())
+        assertTrue("old file kept on re-record (②a append 语义)", oldFile.exists())
         assertTrue("new file kept", newFile.exists())
-        assertEquals(newFile.absolutePath, fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
+        val segments = fakeVideoSegmentDao.queryBySessionId(sessionId)
+        assertEquals("两段都入子表", 2, segments.size)
+        assertEquals(0, segments[0].segmentIndex)
+        assertEquals(1, segments[1].segmentIndex)
+        assertEquals("救援段 playable=null", null, segments[0].playable)
+        assertEquals("正常段 endWallClock=start+duration", 5200L, segments[1].endWallClock)
+        assertEquals("旧字段双写=最新段", newFile.absolutePath, fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
     }
 
     /** 白名单外路径不删文件（spec 删除安全反例），但字段仍置空。 */
@@ -224,7 +237,7 @@ class TelemetryRepositoryDeleteSessionTest {
     fun `deleteSessionVideo - whitelist rejects path outside video or telemetry`() = runTest {
         val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
         val strayFile = File(tempDir, "stray.mp4").apply { writeText("x") }
-        repo.attachVideoToSession(sessionId, strayFile.absolutePath, 100L)
+        repo.attachVideoToSession(sessionId, strayFile.absolutePath, 100L, playable = true, durationMs = null)
 
         repo.deleteSessionVideo(sessionId)
 
@@ -312,5 +325,13 @@ class TelemetryRepositoryDeleteSessionTest {
         override suspend fun deleteCrossingsBySessionId(sessionId: String) {
             crossings.removeIf { it.sessionId == sessionId }
         }
+    }
+    // video-segment-schema round ②a：构造第 4 参连锁 stub（minimal in-memory fake）。
+    private class FakeVideoSegmentDao : VideoSegmentDao {
+        val segments = mutableListOf<VideoSegmentEntity>()
+        override suspend fun insert(entity: VideoSegmentEntity): Long { segments.add(entity); return segments.size.toLong() }
+        override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
+        override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
+        override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
     }
 }

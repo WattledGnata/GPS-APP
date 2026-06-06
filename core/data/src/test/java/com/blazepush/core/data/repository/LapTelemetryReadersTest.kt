@@ -26,6 +26,8 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import java.io.File
 import java.nio.file.Files
+import com.blazepush.core.data.local.dao.VideoSegmentDao
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 /**
  * lap-data-readers round: getLapTelemetry + getDataPointsForResult reader API。
@@ -55,7 +57,7 @@ class LapTelemetryReadersTest {
         fakeCrossingDao = FakeCrossingEventDao()
         fakeTestRecordDao = FakeTestRecordDao()
         fakeSpeedSegmentDao = FakeSpeedSegmentDao()
-        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao)
+        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao, FakeVideoSegmentDao())
         testResultRepo = TestResultRepository(fakeTestRecordDao, fakeSpeedSegmentDao, repo)
     }
 
@@ -408,5 +410,13 @@ class LapTelemetryReadersTest {
         override suspend fun getSegmentsByTestIdSync(id: String) = emptyList<SpeedSegmentEntity>()
         override suspend fun insertSegments(s: List<SpeedSegmentEntity>) {}
         override suspend fun deleteSegmentsByTestId(id: String) {}
+    }
+    // video-segment-schema round ②a：构造第 4 参连锁 stub（minimal in-memory fake）。
+    private class FakeVideoSegmentDao : VideoSegmentDao {
+        val segments = mutableListOf<VideoSegmentEntity>()
+        override suspend fun insert(entity: VideoSegmentEntity): Long { segments.add(entity); return segments.size.toLong() }
+        override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
+        override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
+        override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
     }
 }

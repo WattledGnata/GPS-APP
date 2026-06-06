@@ -20,6 +20,8 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import java.io.File
 import java.nio.file.Files
+import com.blazepush.core.data.local.dao.VideoSegmentDao
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 /**
  * unify-lap-count-pairing-semantics round 跨站点同源测试：endSession（站点 A）与
@@ -56,7 +58,7 @@ class LapPairingCrossSiteConsistencyTest {
         `when`(context.filesDir).thenReturn(tempDir)
         fakeSessionDao = FakeSessionDao()
         fakeCrossingDao = FakeCrossingDao()
-        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao)
+        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao, FakeVideoSegmentDao())
     }
 
     @After
@@ -278,5 +280,13 @@ class LapPairingCrossSiteConsistencyTest {
         override suspend fun deleteCrossingsBySessionId(sessionId: String) {
             crossings.removeIf { it.sessionId == sessionId }
         }
+    }
+    // video-segment-schema round ②a：构造第 4 参连锁 stub（minimal in-memory fake）。
+    private class FakeVideoSegmentDao : VideoSegmentDao {
+        val segments = mutableListOf<VideoSegmentEntity>()
+        override suspend fun insert(entity: VideoSegmentEntity): Long { segments.add(entity); return segments.size.toLong() }
+        override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
+        override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
+        override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
     }
 }

@@ -26,6 +26,8 @@ import org.mockito.Mockito.`when`
 import java.io.File
 import java.nio.file.Files
 import java.util.UUID
+import com.blazepush.core.data.local.dao.VideoSegmentDao
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 /**
  * cleanup-perftest-telemetry-session-orphan round 单测。
@@ -65,7 +67,7 @@ class PerftestOrphanCleanupTest {
         // sweep 语义复刻需要反向查 test_records.dataFilePath —— 注入 records provider
         fakeSessionDao = FakeTelemetrySessionDao { fakeTestRecordDao.records.toList() }
         fakeCrossingDao = FakeCrossingEventDao()
-        telemetryRepo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao)
+        telemetryRepo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao, FakeVideoSegmentDao())
         testResultRepo = TestResultRepository(fakeTestRecordDao, FakeSpeedSegmentDao(), telemetryRepo)
     }
 
@@ -336,5 +338,13 @@ class PerftestOrphanCleanupTest {
         override suspend fun insertInTransaction(e: CrossingEventEntity) { crossings.add(e) }
         override suspend fun queryBySessionId(sid: String) = crossings.filter { it.sessionId == sid }
         override suspend fun deleteCrossingsBySessionId(sid: String) { crossings.removeIf { it.sessionId == sid } }
+    }
+    // video-segment-schema round ②a：构造第 4 参连锁 stub（minimal in-memory fake）。
+    private class FakeVideoSegmentDao : VideoSegmentDao {
+        val segments = mutableListOf<VideoSegmentEntity>()
+        override suspend fun insert(entity: VideoSegmentEntity): Long { segments.add(entity); return segments.size.toLong() }
+        override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
+        override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
+        override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
     }
 }

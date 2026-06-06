@@ -75,6 +75,8 @@ val databaseModule = module {
     single { get<AppDatabase>().telemetrySessionDao() }
     single { get<AppDatabase>().crossingEventDao() }
     single { get<AppDatabase>().pendingLapUploadDao() }
+    // video-segment-schema round ②a：视频段一对多 DAO
+    single { get<AppDatabase>().videoSegmentDao() }
 }
 
 /**
@@ -113,7 +115,8 @@ val repositoryModule = module {
     single { TestResultRepository(get(), get(), get()) }
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
-    single { TelemetryRepository(androidContext(), get(), get()) }
+    // video-segment-schema round ②a：第 4 参 VideoSegmentDao
+    single { TelemetryRepository(androidContext(), get(), get(), get()) }
     // driver-display-name round：车手显示名（livetiming lap-upload driver 本地前置）
     single { UserProfileRepository(androidContext()) }
     // round `replace-nearby-tracks-with-recent-strip` §2.2：接口为 key、生产 RecentTracksStore 实例为 value

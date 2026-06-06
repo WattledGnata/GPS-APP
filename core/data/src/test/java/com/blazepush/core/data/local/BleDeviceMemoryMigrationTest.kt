@@ -20,9 +20,12 @@ class BleDeviceMemoryMigrationTest {
 
     @Test
     fun migrationChain_lastIsSevenToEight() {
+        // video-segment-schema round（v8→v9）后链尾更替：本测试守护的不变量是
+        // "链尾 endVersion == @Database version"（Room runtime 配套校验的 JVM 侧等价物）。
+        // 7→8 的存在性由 migrationChain_containsSevenToEight 独立守护，不受链尾更替影响。
         val last = AppDatabase.migrationChain.last()
-        assertEquals(7, last.startVersion)
-        assertEquals(8, last.endVersion)
+        assertEquals(8, last.startVersion)
+        assertEquals(9, last.endVersion)
     }
 
     @Test

@@ -12,6 +12,7 @@ import com.blazepush.core.data.local.dao.PendingLapUploadDao
 import com.blazepush.core.data.local.dao.SpeedSegmentDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
 import com.blazepush.core.data.local.dao.TestRecordDao
+import com.blazepush.core.data.local.dao.VideoSegmentDao
 import com.blazepush.core.data.local.entity.BluetoothDeviceEntity
 import com.blazepush.core.data.local.entity.CarModelEntity
 import com.blazepush.core.data.local.entity.CrossingEventEntity
@@ -19,6 +20,7 @@ import com.blazepush.core.data.local.entity.PendingLapUploadEntity
 import com.blazepush.core.data.local.entity.SpeedSegmentEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
 import com.blazepush.core.data.local.entity.TestRecordEntity
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 @Database(
     entities = [
@@ -29,8 +31,9 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
         TelemetrySessionEntity::class,
         CrossingEventEntity::class,
         PendingLapUploadEntity::class,
+        VideoSegmentEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 /**
@@ -79,6 +82,11 @@ abstract class AppDatabase : RoomDatabase() {
      * livetiming 待传圈队列 DAO（schema v7，livetiming-lap-upload round）。
      */
     abstract fun pendingLapUploadDao(): PendingLapUploadDao
+
+    /**
+     * 视频段一对多 DAO（schema v9，video-segment-schema round ②a）。
+     */
+    abstract fun videoSegmentDao(): VideoSegmentDao
 
     companion object {
         /**
@@ -322,13 +330,63 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * 完整迁移链（v2→v8），供 AppModule Room builder 和 JVM 单测使用。
-         * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
-         * v2→v8 全程严格覆盖，fallbackFrom 列表不含 2-7。
+         * MIGRATION_8_9 SQL（v8 → v9）。
+         *
+         * video-segment-schema round ②a：CREATE TABLE video_segments（一对多视频段）
+         * + sessionId 索引 + 存量单路径数据迁移（videoFilePath 非空的 session 各迁出
+         * segmentIndex=0 一行，playable=1——历史段都走过 Finalize OK 或救援入库，按可播处理，
+         * 错判由 ②c 首播回写纠正；COALESCE 防御 path 非空但 wallClock 空的脏行，0=epoch
+         * 排序稳定且永不命中圈窗口，不让 migration 崩）。
+         *
+         * ⚠️ CREATE TABLE 列定义/NOT NULL/FK/索引名 MUST 与 Room 注解期望 schema 精确一致
+         * （AUTOINCREMENT PK / 索引名 index_video_segments_sessionId / FK ON DELETE CASCADE），
+         * 任一不符升级用户开库抛 "Migration didn't properly handle"。真机升级安装是攒批 MUST 第一项。
          *
          * @author CC
-         * @description aggregated migration chain v2→v8
-         * @date 2026-06-06
+         * @description schema v8→v9 CREATE TABLE + 存量迁移 SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-06-07
+         */
+        internal val migration8To9Sql: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS video_segments (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "sessionId TEXT NOT NULL, " +
+                "segmentIndex INTEGER NOT NULL, " +
+                "filePath TEXT NOT NULL, " +
+                "startWallClock INTEGER NOT NULL, " +
+                "endWallClock INTEGER, " +
+                "durationMs INTEGER, " +
+                "startLapIndex INTEGER, " +
+                "endLapIndex INTEGER, " +
+                "playable INTEGER, " +
+                "FOREIGN KEY(sessionId) REFERENCES telemetry_sessions(sessionId) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)",
+            "CREATE INDEX IF NOT EXISTS index_video_segments_sessionId ON video_segments(sessionId)",
+            "INSERT INTO video_segments (sessionId, segmentIndex, filePath, startWallClock, playable) " +
+                "SELECT sessionId, 0, videoFilePath, COALESCE(videoStartedAtWallClock, 0), 1 " +
+                "FROM telemetry_sessions WHERE videoFilePath IS NOT NULL",
+        )
+
+        /**
+         * Room migration v8 → v9：建 video_segments 表 + 存量单视频 session 迁移。
+         *
+         * @author CC
+         * @description Room migration from schema v8 to v9
+         * @date 2026-06-07
+         */
+        val migration8To9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration8To9Sql.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
+         * 完整迁移链（v2→v9），供 AppModule Room builder 和 JVM 单测使用。
+         * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
+         * v2→v9 全程严格覆盖，fallbackFrom 列表不含 2-8。
+         *
+         * @author CC
+         * @description aggregated migration chain v2→v9
+         * @date 2026-06-07
          */
         val migrationChain: List<Migration> = listOf(
             migration2To3,
@@ -337,6 +395,7 @@ abstract class AppDatabase : RoomDatabase() {
             migration5To6,
             migration6To7,
             migration7To8,
+            migration8To9,
         )
     }
 }

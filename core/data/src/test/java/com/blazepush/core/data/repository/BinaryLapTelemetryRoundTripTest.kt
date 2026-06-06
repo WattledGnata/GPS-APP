@@ -22,6 +22,8 @@ import org.mockito.Mockito.`when`
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
+import com.blazepush.core.data.local.dao.VideoSegmentDao
+import com.blazepush.core.data.local.entity.VideoSegmentEntity
 
 /**
  * fix-lap-binary-ts-hygiene round 测试套件：lap session binary 写入读取的时钟域 hygiene + anchor 同源验证。
@@ -62,7 +64,7 @@ class BinaryLapTelemetryRoundTripTest {
         `when`(context.filesDir).thenReturn(tempDir)
         fakeSessionDao = FakeTelemetrySessionDao()
         fakeCrossingDao = FakeCrossingEventDao()
-        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao)
+        repo = TelemetryRepository(context, fakeSessionDao, fakeCrossingDao, FakeVideoSegmentDao())
     }
 
     /**
@@ -405,5 +407,13 @@ class BinaryLapTelemetryRoundTripTest {
         override suspend fun deleteCrossingsBySessionId(sessionId: String) {
             crossings.removeIf { it.sessionId == sessionId }
         }
+    }
+    // video-segment-schema round ②a：构造第 4 参连锁 stub（minimal in-memory fake）。
+    private class FakeVideoSegmentDao : VideoSegmentDao {
+        val segments = mutableListOf<VideoSegmentEntity>()
+        override suspend fun insert(entity: VideoSegmentEntity): Long { segments.add(entity); return segments.size.toLong() }
+        override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
+        override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
+        override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
     }
 }
