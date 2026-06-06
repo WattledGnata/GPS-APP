@@ -288,6 +288,19 @@ class TelemetryRepository(
     }
 
     /**
+     * 存量 PERFORMANCE_TEST 孤儿行一次性 sweep（cleanup-perftest-telemetry-session-orphan round）。
+     * App 启动时由 BlazePushApplication 调一次；幂等，cascade 修复后理论恒返回 0。
+     * 落盘锚点（FileLogger）在调用方——core/data 依赖方向不可达 feature/test 的 FileLogger。
+     *
+     * @return 删除行数（=0 为健康基线，>0 说明有旧存量或 cascade 漏）
+     */
+    suspend fun cleanupPerftestOrphans(): Int {
+        val removed = sessionDao.deletePerftestOrphans()
+        Log.d("PerftestCascade", "cleanupPerftestOrphans removed=$removed")
+        return removed
+    }
+
+    /**
      * 单删 session 视频（video-storage-cleanup round · 成绩页"删视频"，保留圈速成绩）。
      * 删视频文件 + 置空 video 字段；MUST NOT 动圈速 / crossing / binary / session 行。
      */

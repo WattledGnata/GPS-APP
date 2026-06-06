@@ -205,7 +205,15 @@ class LapTelemetryReadersTest {
         val gateC = Regex("""^\s*(import |private val |val |var |fun |class |suspend fun ).*\b(TestResultRepository|TestRecordDao|TestRecordEntity|TestResultSummary)\b""")
         assertEquals("gate-C: 0 production refs to TestResult series", 0, trSrc.lines().filter { !it.trimStart().startsWith("*") && gateC.containsMatchIn(it) }.count())
         val trrSrc = File(root, "core/data/src/main/java/com/blazepush/core/data/repository/TestResultRepository.kt").readText()
-        assertEquals("gate-D: only readPerformanceSamples", 0, Regex("""telemetryRepository\.(?!readPerformanceSamples\b)\w+""").findAll(trrSrc).count())
+        // gate-D 白名单（cleanup-perftest-telemetry-session-orphan round 放宽）：
+        // W1 spec 原义只约束 getDataPointsForResult"仅调 readPerformanceSamples、不碰 mutable
+        // session state 路径"；deleteResult cascade 合法消费 deleteSession（J round 已测 cascade，
+        // 非 reader 偷写），加入白名单。其余 telemetryRepository.* 调用仍 0 容忍。
+        assertEquals(
+            "gate-D: only readPerformanceSamples (reader) + deleteSession (delete cascade)",
+            0,
+            Regex("""telemetryRepository\.(?!readPerformanceSamples\b|deleteSession\b)\w+""").findAll(trrSrc).count(),
+        )
     }
 
     // --- case L：sentinel entity.timestamp 返回 null（unify-perftest-anchor-cross-clock round）---
@@ -372,6 +380,8 @@ class LapTelemetryReadersTest {
         // session-video-metadata-persist round：同步 abstract 方法，no-op。
         override suspend fun clearVideo(sessionId: String) {}
         override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {}
+        override suspend fun deletePerftestOrphans(): Int = 0
+
         override suspend fun deleteSession(e: TelemetrySessionEntity) { sessions.removeIf { it.sessionId == e.sessionId } }
     }
     private class FakeCrossingEventDao : CrossingEventDao {

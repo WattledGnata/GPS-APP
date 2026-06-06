@@ -531,6 +531,8 @@ class BinaryPerftestTelemetryRoundTripTest {
         override suspend fun updateVideoMetadata(sessionId: String, videoFilePath: String, videoStartedAtWallClock: Long) {
         }
 
+        override suspend fun deletePerftestOrphans(): Int = 0
+
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {
             sessions.removeIf { it.sessionId == entity.sessionId }
         }

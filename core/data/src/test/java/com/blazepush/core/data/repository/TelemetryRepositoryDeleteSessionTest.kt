@@ -292,6 +292,8 @@ class TelemetryRepositoryDeleteSessionTest {
             if (idx >= 0) sessions[idx] = sessions[idx].copy(videoFilePath = videoFilePath, videoStartedAtWallClock = videoStartedAtWallClock)
         }
 
+        override suspend fun deletePerftestOrphans(): Int = 0
+
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {
             sessions.removeIf { it.sessionId == entity.sessionId }
         }

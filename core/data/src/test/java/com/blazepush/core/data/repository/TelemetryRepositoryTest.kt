@@ -230,6 +230,8 @@ class TelemetryRepositoryTest {
         }
 
         // add-history-deletion round：同步 abstract 方法。本套件不消费删除路径，no-op。
+        override suspend fun deletePerftestOrphans(): Int = 0
+
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {
             sessions.removeIf { it.sessionId == entity.sessionId }
         }

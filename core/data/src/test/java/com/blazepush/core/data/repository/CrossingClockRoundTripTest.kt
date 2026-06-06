@@ -394,6 +394,8 @@ class CrossingClockRoundTripTest {
         }
 
         // J round add-history-deletion 引入的 abstract 方法（v3 高频盲点 #14）；本套件不消费 cascade，stub 即可。
+        override suspend fun deletePerftestOrphans(): Int = 0
+
         override suspend fun deleteSession(entity: TelemetrySessionEntity) {
             sessions.removeIf { it.sessionId == entity.sessionId }
         }

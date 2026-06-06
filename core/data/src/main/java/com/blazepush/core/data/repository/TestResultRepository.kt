@@ -5,6 +5,7 @@
 //       按 scope-boundary 推到 D round（kt-format-cleanup-pass）批量补齐，本 round 不顺手改。
 package com.blazepush.core.data.repository
 
+import android.util.Log
 import com.blazepush.core.data.local.dao.SpeedSegmentDao
 import com.blazepush.core.data.local.dao.TestRecordDao
 import com.blazepush.core.data.local.entity.SpeedSegmentEntity
@@ -103,10 +104,25 @@ class TestResultRepository(
     )
 
     /**
-     * 删除测试记录，并清理对应 binary 文件（安全边界限定 /telemetry/ 目录内）。
+     * 删除测试记录，cascade 清理 telemetry_sessions 同 sessionId 行 + binary 文件
+     * （cleanup-perftest-telemetry-session-orphan round：PERFORMANCE 删除与 LAPS 同标准）。
+     *
+     * 顺序（design Decision 3，与 LAPS cascade 一致：关联先删 / db 后 fs）：
+     * 1. test_records 主表行
+     * 2. telemetry_sessions cascade（复用 [TelemetryRepository.deleteSession]：null-safe，
+     *    crossing/视频步骤对 PERFORMANCE 行自然 no-op，binary 经 binaryFilePath 删除）
+     * 3. 原 dataFilePath 白名单删除保留为兜底（非 UUID 旧记录 / telemetry_sessions 无行时
+     *    仍能删文件；与步骤 2 双删同一文件时第二次 delete() 返回 false 无害）
      */
     suspend fun deleteResult(entity: TestRecordEntity) {
         testRecordDao.deleteTestRecord(entity)
+        val sessionId = extractSessionIdFromDataFilePath(entity.dataFilePath)
+        if (sessionId != null) {
+            Log.d(TAG_CASCADE, "deleteResult cascade -> deleteSession($sessionId)")
+            telemetryRepository.deleteSession(sessionId)
+        } else {
+            Log.d(TAG_CASCADE, "deleteResult skip cascade: non-UUID basename in '${entity.dataFilePath}'")
+        }
         if (entity.dataFilePath.isNotEmpty()) {
             val file = java.io.File(entity.dataFilePath)
             // 安全边界：只删除 app telemetry 目录内的文件，防止路径穿越
@@ -114,6 +130,18 @@ class TestResultRepository(
                 file.delete()
             }
         }
+    }
+
+    /**
+     * 从 dataFilePath basename 提取 sessionId（design Decision 2）。
+     * A56 写入端 invariant：PERFORMANCE 路径 test_records.dataFilePath 的 basename（去 .bin）
+     * 与 telemetry_sessions.sessionId 同 UUID 派生。UUID regex 验证防御非 UUID 命名的
+     * 旧 binary path 误匹配（向后兼容）；空 path / 非 UUID 返回 null。
+     */
+    private fun extractSessionIdFromDataFilePath(path: String): String? {
+        if (path.isEmpty()) return null
+        val basename = java.io.File(path).nameWithoutExtension
+        return if (UUID_REGEX.matches(basename)) basename else null
     }
 
     /**
@@ -174,5 +202,14 @@ class TestResultRepository(
             testEndWallClock = testEndWallClock,
             samples = samples,
         )
+    }
+
+    private companion object {
+        // core/data 内用 android.util.Log（FileLogger 在 feature/test，依赖方向不可达，
+        // 对齐 TelemetryRepository.deleteSessionVideo 既有惯例）；
+        // 落盘锚点在 BlazePushApplication sweep 调用处（design Decision 5）。
+        private const val TAG_CASCADE = "PerftestCascade"
+        private val UUID_REGEX =
+            Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
 }

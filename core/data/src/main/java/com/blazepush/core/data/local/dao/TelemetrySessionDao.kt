@@ -132,4 +132,24 @@ interface TelemetrySessionDao {
      */
     @Delete
     suspend fun deleteSession(entity: TelemetrySessionEntity)
+
+    /**
+     * 存量 PERFORMANCE_TEST 孤儿行一次性 sweep（cleanup-perftest-telemetry-session-orphan round）。
+     * 孤儿 = 已被删除的 PERFORMANCE 测试记录留下的 telemetry_sessions 行（cascade 修复前的历史遗留）。
+     * 反向 LIKE 关联检查（J round 真机 sanity check 实测写法，2/2 命中 0 误删）；
+     * MUST NOT 改用 path 前缀 REPLACE 提取——对多用户路径 / 厂商 ROM filesDir / 格式迁移敏感，
+     * 有误删正常记录风险（memo perftest-cascade-orphan-cleanup-deferred.md §5.3 反例）。
+     * WHERE sessionType 限定保证 LAP_SESSION 行绝不参与。
+     *
+     * @return 删除行数（=0 为健康基线）
+     */
+    @Query(
+        "DELETE FROM telemetry_sessions " +
+            "WHERE sessionType = 'PERFORMANCE_TEST' " +
+            "AND NOT EXISTS (" +
+            "SELECT 1 FROM test_records tr " +
+            "WHERE tr.dataFilePath LIKE '%' || sessionId || '%'" +
+            ")"
+    )
+    suspend fun deletePerftestOrphans(): Int
 }
