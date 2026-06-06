@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.feature.test.viewmodel
 
 import android.util.Log
@@ -7,6 +8,9 @@ import com.blazepush.feature.test.FileLogger
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.bluetooth.ScannedDevice
 import com.blazepush.core.bluetooth.GpsDataRepository
+import com.blazepush.core.data.model.BluetoothDeviceModel
+import com.blazepush.core.data.model.displayName
+import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.DataStats
@@ -25,6 +29,8 @@ class GpsDataViewModel(
     private val gpsDataRepository: GpsDataRepository,
     private val bleDeviceManager: BleDeviceManager,
     private val dataQualityEvaluator: DataQualityEvaluator,
+    // ble-device-memory round：设备记忆（别名/已保存列表/记录管理）
+    private val bluetoothDeviceRepository: BluetoothDeviceRepository,
 ) : ViewModel() {
 
     // GPS数据流（直接使用repository的数据）
@@ -57,9 +63,22 @@ class GpsDataViewModel(
     private val _dataQuality = MutableStateFlow(DataQuality.Empty)
     val dataQuality: StateFlow<DataQuality> = _dataQuality.asStateFlow()
 
-    // 已连接设备名（connectDevice 时写入，DISCONNECTED 时清零）
+    // 已连接设备名（connectDevice 时写入，DISCONNECTED 时清零；
+    // ble-device-memory：冷启动自动连成功后由 Decision 8 回填，别名优先）
     private val _connectedDeviceName = MutableStateFlow<String?>(null)
     val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
+
+    // ble-device-memory：当前连接目标 address（setAlias 判断是否需同步主屏名 + 管理 sheet 绿点标识）
+    private val _connectedDeviceAddress = MutableStateFlow<String?>(null)
+    val connectedDeviceAddress: StateFlow<String?> = _connectedDeviceAddress.asStateFlow()
+
+    // ble-device-memory：已保存设备列表（扫描列表 join 别名/Last connected 徽标 + 管理 sheet 数据源）
+    val savedDevices: StateFlow<List<BluetoothDeviceModel>> = bluetoothDeviceRepository.devicesFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     // 数据统计
     private var lastDataTime = 0L
@@ -106,6 +125,29 @@ class GpsDataViewModel(
                 .collect {
                     resetStats()
                     _connectedDeviceName.value = null
+                    _connectedDeviceAddress.value = null
+                }
+        }
+
+        // ble-device-memory（design Decision 8）：冷启动自动连成功后主屏设备名回填。
+        // 自动连不经 connectDevice()，_connectedDeviceName 为 null 会显示 "No device"
+        // 与 Connected 状态矛盾。仅 name 为 null 时触发（手动连接路径不受影响）；
+        // 冷启动目标本就是表内 lastConnectedAtMs 最大者，落库 touch 不改查询结果，无时序竞争。
+        viewModelScope.launch {
+            connectionState
+                .filter { it == ConnectionState.CONNECTED }
+                .collect {
+                    if (_connectedDeviceName.value == null) {
+                        val last = bluetoothDeviceRepository.getLastConnectedDevice()
+                        if (last != null) {
+                            _connectedDeviceName.value = last.displayName
+                            _connectedDeviceAddress.value = last.address
+                            FileLogger.d(
+                                "BleDeviceMemory",
+                                "cold-start name backfill addr=${last.address} name=${last.displayName}"
+                            )
+                        }
+                    }
                 }
         }
     }
@@ -179,10 +221,50 @@ class GpsDataViewModel(
 
     /**
      * 连接扫描到的BLE设备
+     * ble-device-memory：传广播名给 manager（CONNECTED 后落库）；
+     * 已设别名的设备主屏显示别名优先（异步查表覆盖）。
      */
     fun connectDevice(device: ScannedDevice) {
         _connectedDeviceName.value = device.name
-        bleDeviceManager.connect(device.address)
+        _connectedDeviceAddress.value = device.address
+        viewModelScope.launch {
+            val alias = bluetoothDeviceRepository.getSavedDevices()
+                .firstOrNull { it.address == device.address }
+                ?.alias?.takeIf { it.isNotBlank() }
+            if (alias != null && _connectedDeviceAddress.value == device.address) {
+                _connectedDeviceName.value = alias
+            }
+        }
+        bleDeviceManager.connect(device.address, device.name)
+    }
+
+    /**
+     * ble-device-memory：设置/清除设备别名（null 或空白 = 还原固件名显示）。
+     * 改的是当前连接设备时同步刷新主屏显示名（design Decision 8）。
+     */
+    fun setAlias(address: String, alias: String?) {
+        viewModelScope.launch {
+            val normalized = alias?.takeIf { it.isNotBlank() }
+            bluetoothDeviceRepository.setAlias(address, normalized)
+            FileLogger.d("BleDeviceMemory", "alias set addr=$address alias=$normalized")
+            if (_connectedDeviceAddress.value == address) {
+                val updated = bluetoothDeviceRepository.getSavedDevices()
+                    .firstOrNull { it.address == address }
+                if (updated != null) {
+                    _connectedDeviceName.value = updated.displayName
+                }
+            }
+        }
+    }
+
+    /**
+     * ble-device-memory：删除已保存设备记录（不断开当前连接——spec 锁此语义）。
+     */
+    fun deleteSavedDevice(address: String) {
+        viewModelScope.launch {
+            bluetoothDeviceRepository.removeDevice(address)
+            FileLogger.d("BleDeviceMemory", "record deleted addr=$address")
+        }
     }
 
     /**

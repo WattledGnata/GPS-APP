@@ -1,7 +1,9 @@
+// @IgnoreFormatCheck
 package com.blazepush.feature.test.di
 
 import androidx.room.Room
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.datastore.RecentTracksStore
 import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.feature.test.recording.CameraRecordingEngine
@@ -81,7 +83,26 @@ val databaseModule = module {
 val bluetoothModule = module {
     single { RaceChronoParser() }
     single { BluetoothDataSource(androidContext(), get()) }
-    single { BleDeviceManager(androidContext(), get()) }
+    // ble-device-memory round（design Decision 1）：闭包注入设备记忆能力，core/bluetooth 不依赖
+    // core/data（模块图不动）。single lambda 体在 BleDeviceManager 首次被注入时才执行（Koin 惰性），
+    // 彼时 repositoryModule 已注册完毕，get<BluetoothDeviceRepository>() 不会 MissingDefinition。
+    single {
+        val deviceRepository = get<BluetoothDeviceRepository>()
+        BleDeviceManager(
+            androidContext(),
+            get(),
+            lastDeviceProvider = {
+                val last = deviceRepository.getLastConnectedDevice()
+                FileLogger.d("BleDeviceMemory", "cold-start target=${last?.address ?: "none"}")
+                last?.address
+            },
+            onDeviceConnected = { address, name ->
+                val firstTime = deviceRepository.getSavedDevices().none { it.address == address }
+                deviceRepository.recordConnected(address, name, System.currentTimeMillis())
+                FileLogger.d("BleDeviceMemory", "persisted addr=$address name=$name firstTime=$firstTime")
+            },
+        )
+    }
 }
 
 /**
@@ -161,7 +182,8 @@ val recordingModule = module {
  */
 val viewModelModule = module {
     // GpsDataViewModel作为单例，所有页面共享同一个数据流
-    single { GpsDataViewModel(get(), get(), get()) }
+    // ble-device-memory：第 4 参 BluetoothDeviceRepository（设备记忆）
+    single { GpsDataViewModel(get(), get(), get(), get()) }
     viewModel { TestSessionViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { TestHistoryViewModel(get()) }
 }

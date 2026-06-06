@@ -8,6 +8,8 @@ package com.blazepush.feature.test.viewmodel
 
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.bluetooth.GpsDataRepository
+import com.blazepush.core.data.model.BluetoothDeviceModel
+import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
@@ -52,10 +54,15 @@ class GpsDataViewModelTest {
         doReturn(gpsDataFlow).`when`(repo).gpsDataFlow
         doReturn(connectionStateFlow).`when`(repo).connectionState
 
+        // ble-device-memory：VM 构造期访问 devicesFlow 做 stateIn，mock 默认 null 会 NPE，必须 stub
+        val deviceRepo = mock(BluetoothDeviceRepository::class.java)
+        doReturn(MutableStateFlow(emptyList<BluetoothDeviceModel>())).`when`(deviceRepo).devicesFlow
+
         viewModel = GpsDataViewModel(
             gpsDataRepository = repo,
             bleDeviceManager = mock(BleDeviceManager::class.java),
             dataQualityEvaluator = DataQualityEvaluator(),
+            bluetoothDeviceRepository = deviceRepo,
         )
     }
 

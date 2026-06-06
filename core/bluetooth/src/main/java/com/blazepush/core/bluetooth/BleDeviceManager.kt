@@ -20,7 +20,11 @@ import kotlinx.coroutines.launch
  */
 class BleDeviceManager(
     private val context: Context,
-    private val bluetoothDataSource: BluetoothDataSource
+    private val bluetoothDataSource: BluetoothDataSource,
+    // ble-device-memory round（design Decision 1）：Koin 闭包注入设备记忆能力，
+    // core/bluetooth 不依赖 core/data（模块图不动）；默认 null 保持既有构造兼容。
+    private val lastDeviceProvider: (suspend () -> String?)? = null,
+    private val onDeviceConnected: (suspend (address: String, name: String?) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "BleDeviceManager"
@@ -41,7 +45,29 @@ class BleDeviceManager(
 
     private var autoReconnectInProgress = false
 
+    // ble-device-memory（design Decision 2）：最后一次经 manager 发起的连接意图（address + 扫描广播名）。
+    // 仅 connect() 设置/覆盖，首次 CONNECTED 落库后清空；不在 DISCONNECTED 清——
+    // connect 发起 → 连接超时 → BluetoothDataSource 退避重连 → 最终 CONNECTED 时仍正确落表。
+    @Volatile
+    private var pendingPersist: Pair<String, String?>? = null
+
     init {
+        // ble-device-memory：首次 CONNECTED 时把 pending 设备经闭包落库（FileLogger 由 feature 层闭包侧落）
+        scope.launch {
+            connectionState.collect { state ->
+                if (state == ConnectionState.CONNECTED) {
+                    val pending = pendingPersist
+                    if (pending != null) {
+                        pendingPersist = null
+                        try {
+                            onDeviceConnected?.invoke(pending.first, pending.second)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "设备记录持久化失败", e)
+                        }
+                    }
+                }
+            }
+        }
         // 自动重连上次设备
         autoReconnectLastDevice()
     }
@@ -59,9 +85,10 @@ class BleDeviceManager(
 
         scope.launch {
             try {
-                // TODO: 从Repository获取上次连接的设备地址
-                // val lastDeviceAddress = deviceRepository.getLastConnectedDevice()
-                val lastDeviceAddress: String? = null // 暂时为null，待后续实现
+                // ble-device-memory（design Decision 6）：经 Koin 闭包查最近成功连接设备
+                // （单表真相源 bluetooth_devices，lastConnectedAtMs 最大者；删记录即遗忘）。
+                val lastDeviceAddress: String? = lastDeviceProvider?.invoke()
+                Log.d(TAG, "cold-start target=${lastDeviceAddress ?: "none"}")
 
                 if (lastDeviceAddress != null) {
                     Log.d(TAG, "尝试自动重连设备: $lastDeviceAddress")
@@ -69,8 +96,8 @@ class BleDeviceManager(
                     // 等待一小段时间确保蓝牙就绪
                     delay(1000)
 
-                    // 尝试连接
-                    bluetoothDataSource.connect(lastDeviceAddress)
+                    // 尝试连接（经自身 connect 统一 pending 落库机制，design Decision 2）
+                    connect(lastDeviceAddress)
 
                     // 等待连接结果
                     var waited = 0L
@@ -125,9 +152,13 @@ class BleDeviceManager(
 
     /**
      * 连接指定设备
+     * @param deviceName 扫描广播名（手动连接时传入）；冷启动自动连无广播名传 null
+     *（落库时 COALESCE 保留已存固件名）。
      */
-    fun connect(deviceAddress: String) {
+    fun connect(deviceAddress: String, deviceName: String? = null) {
         Log.d(TAG, "connect() called with address: $deviceAddress")
+        // ble-device-memory（design Decision 2）：记连接意图，CONNECTED 后经 onDeviceConnected 落库
+        pendingPersist = deviceAddress to deviceName
         scope.launch {
             try {
                 // 停止当前扫描
@@ -137,9 +168,6 @@ class BleDeviceManager(
                 // 连接设备
                 bluetoothDataSource.connect(deviceAddress)
                 Log.d(TAG, "bluetoothDataSource.connect() 调用完成")
-
-                // TODO: 连接成功后保存设备信息到Repository
-                // deviceRepository.saveDevice(deviceAddress, deviceName)
             } catch (e: Exception) {
                 Log.e(TAG, "连接失败", e)
             }

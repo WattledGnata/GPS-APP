@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.core.data.repository
 
 import android.content.Context
@@ -280,7 +281,11 @@ class BinaryPerftestTelemetryRoundTripTest {
      * `tsDeltaMs = X.timestamp - Y` 形态：
      *   (a) 命中数 == 0（无任何文件用协议时间形态）
      *   (b) 扫到的 .kt 文件总数 ≥ 30（防扫错路径假性绿）
-     * MUST 排除 src/test 子树 + .worktrees 副本路径。
+     * MUST 排除 src/test 子树。
+     * 注（ble-device-memory round 修正，对齐 CrossingWallClockEscapeContractTest:48-50 已验证结论）：
+     * mainJavaRoot 经 helper 上溯只走 feature/test/src/main/java 子树，其下不存在 .worktrees
+     * （worktrees 在 repo root）；而 cwd 在 worktree 内跑时 mainJavaRoot 绝对路径本身含
+     * /.worktrees/，按绝对路径排除会把所有文件全排除 → 触发下界断言假性红。故不排除 .worktrees。
      */
     @Test
     fun `case F - cross-file grep gate forbids timestamp subtraction across feature-test-main`() {
@@ -288,7 +293,6 @@ class BinaryPerftestTelemetryRoundTripTest {
         val ktFiles = mainJavaRoot.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .filterNot { it.absolutePath.contains("/src/test/") }
-            .filterNot { it.absolutePath.contains("/.worktrees/") }
             .toList()
 
         assertTrue(

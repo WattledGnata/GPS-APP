@@ -30,7 +30,7 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
         CrossingEventEntity::class,
         PendingLapUploadEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 /**
@@ -290,13 +290,45 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * 完整迁移链（v2→v6），供 AppModule Room builder 和 JVM 单测使用。
-         * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
-         * v2→v6 全程严格覆盖，fallbackFrom 列表不含 2-6。
+         * MIGRATION_7_8 SQL（v7 → v8）。
+         *
+         * ble-device-memory round：bluetooth_devices 加 alias + lastConnectedAtMs 两个 nullable 列
+         * （无 NOT NULL / 无 DEFAULT——0 哨兵会被"最近设备"排序误命中，盲点 #6）。
+         * 历史 v7 行 migration 后 alias=NULL（无别名）/ lastConnectedAtMs=NULL（无成功连接记录，
+         * 冷启动自动连查询 WHERE lastConnectedAtMs IS NOT NULL 天然排除）。
+         * 该表在 v7 及之前零写入链路（dead code），实际作用于空表。
          *
          * @author CC
-         * @description aggregated migration chain v2→v6
-         * @date 2026-05-30
+         * @description schema v7→v8 ALTER TABLE SQL（暴露给 JVM 单元测试自检）
+         * @date 2026-06-06
+         */
+        internal val migration7To8Sql: List<String> = listOf(
+            "ALTER TABLE bluetooth_devices ADD COLUMN alias TEXT",
+            "ALTER TABLE bluetooth_devices ADD COLUMN lastConnectedAtMs INTEGER",
+        )
+
+        /**
+         * Room migration v7 → v8：ADD COLUMN 两个 nullable 设备记忆字段。
+         * 不重建表，向下兼容历史数据。
+         *
+         * @author CC
+         * @description Room migration from schema v7 to v8
+         * @date 2026-06-06
+         */
+        val migration7To8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration7To8Sql.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
+         * 完整迁移链（v2→v8），供 AppModule Room builder 和 JVM 单测使用。
+         * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
+         * v2→v8 全程严格覆盖，fallbackFrom 列表不含 2-7。
+         *
+         * @author CC
+         * @description aggregated migration chain v2→v8
+         * @date 2026-06-06
          */
         val migrationChain: List<Migration> = listOf(
             migration2To3,
@@ -304,6 +336,7 @@ abstract class AppDatabase : RoomDatabase() {
             migration4To5,
             migration5To6,
             migration6To7,
+            migration7To8,
         )
     }
 }

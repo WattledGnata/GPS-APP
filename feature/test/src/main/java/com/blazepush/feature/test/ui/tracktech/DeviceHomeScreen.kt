@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.blazepush.core.data.model.displayName
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.datastore.UserProfileRepository
@@ -61,6 +62,8 @@ private fun deriveHeroState(
     isTestReady: Boolean,
     frequencyHz: Int,
     qualityLabel: String,
+    // ble-device-memory（UI 交互细化 §5）：冷启动自动连（CONNECTING 且无设备名）提示用户"不用动"
+    isAutoConnecting: Boolean = false,
 ): HeroState = when {
     connectionState == ConnectionState.CONNECTED && isTestReady -> HeroState(
         title = "READY TO TEST",
@@ -77,7 +80,7 @@ private fun deriveHeroState(
     connectionState == ConnectionState.CONNECTING -> HeroState(
         title = "CONNECTING…",
         subtitle = "Establishing BLE link",
-        statusLine = "—",
+        statusLine = if (isAutoConnecting) "Auto-connecting last device…" else "—",
         accent = TrackTechColors.TextSecondary,
     )
     else -> HeroState(
@@ -101,8 +104,11 @@ fun DeviceHomeScreen(
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
+    // ble-device-memory：已保存设备（入口 subtitle + 管理 sheet）
+    val savedDevices by gpsViewModel.savedDevices.collectAsState()
 
     var showSheet by remember { mutableStateOf(false) }
+    var showSavedDevicesSheet by remember { mutableStateOf(false) }
 
     // 首开车手名引导（first-launch-driver-prompt capability）：仅首次启动弹一次。
     // 弹出即置 flag（不论用户选哪个 / 是否真设名），保证只弹一次。
@@ -148,8 +154,10 @@ fun DeviceHomeScreen(
         QualityLevel.POOR -> "Poor"
     }
     val frequencyHz = gpsData.frequency.toInt().coerceAtLeast(0)
-    val hero = remember(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel) {
-        deriveHeroState(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel)
+    // ble-device-memory（UI 交互细化 §5）：CONNECTING 且设备名尚空 = 冷启动自动连接中
+    val isAutoConnecting = connectionState == ConnectionState.CONNECTING && connectedDeviceName == null
+    val hero = remember(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel, isAutoConnecting) {
+        deriveHeroState(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel, isAutoConnecting)
     }
 
     Column(
@@ -217,6 +225,20 @@ fun DeviceHomeScreen(
                 subtitle = "$qualityLabel · ${gpsData.satelliteCount} sats · ${frequencyHz}Hz",
                 onClick = { navController.navigate("gps_details") },
             )
+            // ble-device-memory（UI 交互细化 §1）：已保存设备管理入口
+            TrackTechRow(
+                leadingIcon = Icons.Filled.Bluetooth,
+                title = "SAVED DEVICES",
+                subtitle = if (savedDevices.isEmpty()) {
+                    "None yet"
+                } else {
+                    val latest = savedDevices.filter { it.lastConnectedAtMs != null }
+                        .maxByOrNull { it.lastConnectedAtMs!! }
+                    "${savedDevices.size} device${if (savedDevices.size > 1) "s" else ""}" +
+                        (latest?.let { " · ${it.displayName}" } ?: "")
+                },
+                onClick = { showSavedDevicesSheet = true },
+            )
             TrackTechRow(
                 leadingIcon = Icons.Filled.Settings,
                 title = "SETTINGS",
@@ -231,6 +253,13 @@ fun DeviceHomeScreen(
     BleScanBottomSheet(
         visible = showSheet,
         onDismiss = { showSheet = false },
+        gpsViewModel = gpsViewModel,
+    )
+
+    // ble-device-memory（design Decision 5）：已保存设备管理 sheet
+    SavedDevicesSheet(
+        visible = showSavedDevicesSheet,
+        onDismiss = { showSavedDevicesSheet = false },
         gpsViewModel = gpsViewModel,
     )
 }

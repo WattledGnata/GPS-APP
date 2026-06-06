@@ -81,4 +81,35 @@ class BleDeviceManagerTest {
             logLine.trim().endsWith("没有上次连接的设备记录\")"),
         )
     }
+
+    /**
+     * ble-device-memory round 新形态断言：autoReconnectLastDevice 的 lastDeviceAddress
+     * MUST 来自 lastDeviceProvider 闭包调用（防回退到硬编码 null 的旧 TODO 形态），
+     * 且冷启动连接 MUST 走自身 connect()（统一 pending 落库机制，design Decision 2），
+     * 不再直调 bluetoothDataSource.connect()。
+     */
+    @Test
+    fun autoReconnectLastDevice_queriesLastDeviceProvider_andConnectsViaSelf() {
+        val source = File(
+            "src/main/java/com/blazepush/core/bluetooth/BleDeviceManager.kt"
+        ).readText()
+
+        val fnStart = source.indexOf("fun autoReconnectLastDevice()")
+        assertTrue("autoReconnectLastDevice 必须定义", fnStart > 0)
+        val fnEnd = source.indexOf("fun startScan()", fnStart)
+        val fnBody = source.substring(fnStart, fnEnd)
+
+        assertTrue(
+            "lastDeviceAddress MUST 来自 lastDeviceProvider?.invoke()（防回退硬编码 null）",
+            fnBody.contains("lastDeviceProvider?.invoke()"),
+        )
+        assertFalse(
+            "旧 TODO 硬编码 null 形态 MUST 已移除",
+            fnBody.contains("val lastDeviceAddress: String? = null"),
+        )
+        assertFalse(
+            "冷启动连接 MUST 不直调 bluetoothDataSource.connect（应走自身 connect 统一 pending）",
+            fnBody.contains("bluetoothDataSource.connect("),
+        )
+    }
 }

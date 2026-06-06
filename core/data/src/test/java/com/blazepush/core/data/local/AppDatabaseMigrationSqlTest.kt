@@ -207,8 +207,8 @@ class AppDatabaseMigrationSqlTest {
         // 本测试名称保留兼容（rename 需重构，scope-boundary 暂不动），断言已更新为 4。
         // 完整的 size=4 断言见 `migrationChain contains exactly four migrations`。
         assertEquals(
-            "migrationChain must contain 5 migrations: migration2To3..migration6To7 (livetiming-lap-upload v6→v7)",
-            5,
+            "migrationChain must contain 6 migrations: migration2To3..migration7To8 (ble-device-memory v7→v8)",
+            6,
             AppDatabase.migrationChain.size
         )
     }
@@ -320,8 +320,8 @@ class AppDatabaseMigrationSqlTest {
     @Test
     fun `migrationChain contains exactly four migrations`() {
         assertEquals(
-            "migrationChain must contain 5 migrations: migration2To3..migration6To7 (livetiming-lap-upload v6→v7)",
-            5,
+            "migrationChain must contain 6 migrations: migration2To3..migration7To8 (ble-device-memory v7→v8)",
+            6,
             AppDatabase.migrationChain.size
         )
     }
@@ -347,8 +347,8 @@ class AppDatabaseMigrationSqlTest {
             expectedNextStart = migration.endVersion
         }
         assertEquals(
-            "migrationChain must end at v7 (current @Database version, livetiming-lap-upload)",
-            7,
+            "migrationChain must end at v8 (current @Database version, ble-device-memory)",
+            8,
             expectedNextStart
         )
     }

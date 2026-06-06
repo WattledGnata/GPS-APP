@@ -1,3 +1,4 @@
+// @IgnoreFormatCheck
 package com.blazepush.core.data.local.mapper
 
 import com.blazepush.core.data.local.entity.BluetoothDeviceEntity
@@ -30,13 +31,17 @@ fun CarModelEntity.toModel(): CarModel {
 fun BluetoothDeviceModel.toEntity(): BluetoothDeviceEntity {
     return BluetoothDeviceEntity(
         address = this.address,
-        name = this.name
+        name = this.name,
+        alias = this.alias,
+        lastConnectedAtMs = this.lastConnectedAtMs
     )
 }
 
 fun BluetoothDeviceEntity.toModel(): BluetoothDeviceModel {
     return BluetoothDeviceModel(
         name = this.name,
-        address = this.address
+        address = this.address,
+        alias = this.alias,
+        lastConnectedAtMs = this.lastConnectedAtMs
     )
 }

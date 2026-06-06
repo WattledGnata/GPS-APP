@@ -28,8 +28,13 @@ class PendingLapUploadMigrationTest {
 
     @Test
     fun migrationChain_lastIsSixToSeven() {
-        val last = AppDatabase.migrationChain.last()
-        assertEquals(6, last.startVersion)
-        assertEquals(7, last.endVersion)
+        // ble-device-memory round（v8）：链尾已升至 7→8，链尾断言移交 BleDeviceMemoryMigrationTest。
+        // 本测试名称保留兼容（沿用 AppDatabaseMigrationSqlTest 既有惯例），断言更新为
+        // "6→7 存在且其后继为 7→8"（位置语义不丢）。
+        val idx = AppDatabase.migrationChain.indexOfFirst { it.startVersion == 6 && it.endVersion == 7 }
+        assertTrue("6→7 必须在链中", idx >= 0)
+        val next = AppDatabase.migrationChain.getOrNull(idx + 1)
+        assertEquals("6→7 的后继必须是 7→8", 7, next?.startVersion)
+        assertEquals("6→7 的后继必须是 7→8", 8, next?.endVersion)
     }
 }

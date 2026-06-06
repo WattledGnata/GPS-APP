@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.bluetooth.ScannedDevice
 import com.blazepush.core.domain.model.ConnectionState
@@ -79,7 +80,15 @@ fun BleScanBottomSheet(
     val isScanning by gpsViewModel.isScanning.collectAsState()
     val scanResults by gpsViewModel.scanResults.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
+    // ble-device-memory（design Decision 7）：join 已保存设备——别名优先显示 + Last connected 标识
+    val savedDevices by gpsViewModel.savedDevices.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val savedByAddress = remember(savedDevices) { savedDevices.associateBy { it.address } }
+    val lastConnectedAddress = remember(savedDevices) {
+        savedDevices.filter { it.lastConnectedAtMs != null }
+            .maxByOrNull { it.lastConnectedAtMs!! }
+            ?.address
+    }
 
     var selectedDevice by remember { mutableStateOf<ScannedDevice?>(null) }
     var attemptedConnectAddress by remember { mutableStateOf<String?>(null) }
@@ -154,6 +163,8 @@ fun BleScanBottomSheet(
                         DeviceRow(
                             device = device,
                             selected = selectedDevice?.address == device.address,
+                            alias = savedByAddress[device.address]?.alias?.takeIf { it.isNotBlank() },
+                            isLastConnected = device.address == lastConnectedAddress,
                             onClick = {
                                 selectedDevice = device
                             },
@@ -259,6 +270,9 @@ private fun DeviceRow(
     device: ScannedDevice,
     selected: Boolean,
     onClick: () -> Unit,
+    // ble-device-memory（design Decision 7 + UI 交互细化 §2）
+    alias: String? = null,
+    isLastConnected: Boolean = false,
 ) {
     val label = classifyDevice(device.name)
     val borderColor = if (selected) TrackTechColors.Purple else TrackTechColors.BorderAlpha60
@@ -276,30 +290,50 @@ private fun DeviceRow(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f),
+            ) {
                 SelectedRadio(selected = selected)
                 Spacer(Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f, fill = false)) {
                     Text(
-                        text = device.name,
+                        text = alias ?: device.name,
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.size(2.dp))
-                    Text(
-                        text = label.label,
-                        style = TrackTechTypography.UiTextSmall,
-                        color = label.color,
-                    )
+                    // UI 交互细化 §2：Last connected（绿）与既有分类标签 " · " 拼接并列
+                    Row {
+                        if (isLastConnected) {
+                            Text(
+                                text = "Last connected · ",
+                                style = TrackTechTypography.UiTextSmall,
+                                color = TrackTechColors.Green,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = label.label,
+                            style = TrackTechTypography.UiTextSmall,
+                            color = label.color,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
+            Spacer(Modifier.width(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "${device.rssi} dBm",
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
                 )
                 Spacer(Modifier.width(8.dp))
                 SignalBars(bars = rssiToBars(device.rssi))
