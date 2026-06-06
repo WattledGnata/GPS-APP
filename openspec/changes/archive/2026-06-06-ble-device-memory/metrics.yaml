@@ -1,0 +1,24 @@
+estimated_days: 0.5
+actual_days: 0.3
+complexity: "medium"            # Room schema migration 命中强制升级场景(v7→v8)
+review_mode: "road-test-first"  # user 2026-06-06 拍板;去 Codex + 不调 Opus 子 agent
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []           # road-test-first 模式去 Codex
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "实际 0.3 天 < 估 0.5 天:baseline 侦查期(L0)已核清 dead code 现状,apply 期无方向返工"
+phase: "BlazePush 1.3.0 对标(蓝牙易用性)"
+model_apply: "opus"             # 主会话直跑
+design_decisions_diverged_during_apply: []  # 8 Decision 全程无 drift;两处"实施期补充"(COALESCE 保固件名 / _connectedDeviceAddress 支撑 Decision 8)已写入 design 非修订
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# FileLogger 锚点(road-test-first MANDATORY,tag=BleDeviceMemory):
+#   persisted addr=.. name=.. firstTime=..   —— AppModule onDeviceConnected 闭包(设备落库)
+#   cold-start target=<addr|none>            —— AppModule lastDeviceProvider 闭包(冷启动决策)
+#   cold-start name backfill addr=.. name=.. —— GpsDataViewModel Decision 8 回填(成功信号)
+#   alias set addr=.. alias=..               —— VM.setAlias
+#   record deleted addr=..                   —— VM.deleteSavedDevice
+#   冷启动失败信号由既有 BleLiveness connectionState 流组合覆盖(core 模块无 FileLogger,实施期修订见 design 埋点表)
+# pre-existing 发现:BinaryPerftestTelemetryRoundTripTest case G 在主区 387edcb 即红 → follow-up fix-perftest-case-g-shape-drift(tasks §10)
