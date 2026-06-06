@@ -1,5 +1,13 @@
 # Records 历史按赛道过滤 — 延期立项设计 memo
 
+> ✅ **已消化（2026-06-06 盘点确认，无需立项）**：本 memo 描述的问题在沉淀同日（2026-05-01）
+> 即被两个并行 round 修复——C round `persist-session-summary-fields` 给
+> `TelemetrySessionEntity` 加 `trackId`/`trackNameSnapshot` 字段（schema v3→v4 migration），
+> F round `wire-real-data-to-records-and-laps-tabs` 在 DAO 加全套 `WHERE trackId = :trackId`
+> 聚合查询（`getBestLapForTrack`/`getSessionCountForTrack`/`getTotalLapCountForTrack`/
+> `getRecentSessionsForTrack`）并接线 `TestSessionViewModel.kt:226` `flatMapLatest`，
+> SESSION HISTORY 已跟随当前选中赛道过滤。memo 当时未回标状态导致幽灵待办。以下原文仅作历史留档。
+
 > 触发场景：OpenSpec change `add-debug-preset-track-boyu-loop` 真机验证（2026-05-01）暴露
 > 出 RecordsHomeScreen 的"session list 不按当前赛道过滤"的预先存在问题。本 memo 用于
 > 下次开 round 时直接对照、起草 proposal/design，**禁止仅靠对话沉淀**。
