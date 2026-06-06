@@ -1,0 +1,21 @@
+estimated_days: 0.5
+actual_days: 0.2
+complexity: "small"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []   # road-test-first 模式去 Codex
+codex_l2_findings: []   # road-test-first 模式去 Codex
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "CC 主会话自审发现 1 P1(FileLogger core/data 模块边界不可达,design Decision 5 修订为分模块取齐);apply 期编译 gate 抓出第 8 个非标准命名 fake(FakeSessionDao,工件按类名 grep 漏数);apply 期 W1 case J gate-D 整文件扫描过宽误报,白名单放宽 deleteSession(spec 原义只约束 getDataPointsForResult)"
+phase: "Phase 1 后收尾(release 前债)"
+model_apply: "opus"
+design_decisions_diverged_during_apply: []  # Decision 1-5 无 drift;gate-D 放宽属 W1 round gate 实现修正非本 round design 修订
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# FileLogger/日志锚点摘要(road-test-first MANDATORY):
+#   - Log.d tag=PerftestCascade @ TestResultRepository.deleteResult(cascade 命中/skip)
+#   - Log.d tag=PerftestCascade @ TelemetryRepository.cleanupPerftestOrphans(sweep 行数)
+#   - FileLogger.d tag=PerftestCascade @ BlazePushApplication(sweep removed=N 落盘,路测 pull 锚点)
+# 真机攒批清单:冷启动 pull debug_log 查 sweep 行数(首次 ≥0 此后恒 0)+ 删 PERFORMANCE 记录核对 db 三处全清
