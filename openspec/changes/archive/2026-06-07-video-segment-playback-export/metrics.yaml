@@ -1,0 +1,22 @@
+estimated_days: 1.0
+actual_days: 0.2
+complexity: "medium"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []   # road-test-first 模式去 Codex
+codex_l2_findings: []
+review_findings_l1: []
+review_findings_l2: []
+divergence_reason: "apply 期 3 透明声明:(1) design D3 'gap 剪辑跳过'与实际 playhead 主导架构不符,修订为段感知状态机+pauseAtEndOfMediaItems+半开区间防粘滞;(2) D4 '跨段降级最长段'实测被 isLapFullyCovered gate 拦截不可达,改明确拒绝;(3) Pipeline 零改动(loader 设首选段 start 渐进兼容)"
+phase: "视频管线债务批 ②c(三子 round 之二,user 拍板顺序对调先于 ②b)"
+model_apply: "opus"
+design_decisions_diverged_during_apply: []  # D3/D4 修订均为'初稿描述与代码现实对齐',方案核心未变,#17 caveat spec drift 路径
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+# 日志锚点摘要(road-test-first MANDATORY):
+#   - FileLogger tag=VideoOverlay @ loader(segments total/selected/window)
+#   - FileLogger tag=LapVideoPlayback @ 回放屏(setMediaItems n/seekIntoSegment/blackout 转移/playable write-back)
+#   - FileLogger.e tag=VideoExport @ Service(cross-segment rejected)
+# 真机攒批:录两段→按圈回放第一段画面可见;跨段圈黑屏渡 gap;救援段首播 playable 回写 sqlite3 验证
+# Follow-up:②b rotation(N=3) / video-export-cross-segment-concat / playable=false UI 灰显
