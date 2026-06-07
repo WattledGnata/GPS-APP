@@ -32,4 +32,11 @@ interface VideoSegmentDao {
     /** 显式删该 session 全部段行（deleteSessionVideo 用；deleteSession 走 FK CASCADE 兜底也可达）。 */
     @Query("DELETE FROM video_segments WHERE sessionId = :sessionId")
     suspend fun deleteBySessionId(sessionId: String)
+
+    /**
+     * playable 首播回写（②c）：救援段（playable=NULL）首帧渲染成功 → true / 播放错误 → false。
+     * 调用方负责幂等条件（仅 playable==null 的段写）。
+     */
+    @Query("UPDATE video_segments SET playable = :playable WHERE id = :id")
+    suspend fun updatePlayable(id: Long, playable: Boolean)
 }

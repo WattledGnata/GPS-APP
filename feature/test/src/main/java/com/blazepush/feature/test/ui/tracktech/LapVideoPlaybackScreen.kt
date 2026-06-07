@@ -62,9 +62,11 @@ import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.GaugeMath
 import com.blazepush.feature.test.usecase.VideoOverlayTelemetry
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 import kotlin.math.abs
@@ -169,15 +171,50 @@ fun LapVideoPlaybackScreen(
         }
     }
 
-    // 视频 setMediaItem（session 就绪后）；playWhenReady=false，由播放循环根据覆盖段控制 play/pause
-    LaunchedEffect(session) {
-        val s = session
-        if (s != null && s.videoFilePath != null) {
-            exoPlayer.setMediaItem(MediaItem.fromUri(s.videoFilePath!!))
+    // 视频 setMediaItems（②c 多段 playlist，选中段升序=item 顺序）；playWhenReady=false，
+    // 由播放循环段感知状态机控制 play/pause/跨段 seek。
+    // pauseAtEndOfMediaItems：item 播完不自动续下一段——段间 gap 必须交还黑屏 ticker
+    // 推进时间轴（保真），由状态机在 playhead 进入下段区间时主动 seekTo(index, pos)。
+    LaunchedEffect(playbackContext) {
+        val ctx = playbackContext
+        if (ctx != null && ctx.segments.isNotEmpty()) {
+            exoPlayer.setMediaItems(ctx.segments.map { MediaItem.fromUri(it.filePath) })
+            exoPlayer.pauseAtEndOfMediaItems = true
             exoPlayer.prepare()
             exoPlayer.playWhenReady = false
-            FileLogger.d(TAG, "setMediaItem ${s.videoFilePath} startedAt=${s.videoStartedAtWallClock}")
+            FileLogger.d(
+                TAG,
+                "setMediaItems n=${ctx.segments.size} idx=${ctx.segments.map { it.segmentIndex }} " +
+                    "starts=${ctx.segments.map { it.startWallClock }}",
+            )
         }
+    }
+
+    // ②c playable 首播回写（spec Req4）：首帧渲染成功 → 当前段 playable null→true；
+    // 播放错误 → null→false。仅 null 段写（幂等）；回写失败仅日志不阻塞播放。
+    val playableScope = rememberCoroutineScope()
+    DisposableEffect(playbackContext) {
+        val ctx = playbackContext
+        val listener = object : Player.Listener {
+            private fun writeBack(value: Boolean) {
+                val segs = ctx?.segments ?: return
+                val idx = exoPlayer.currentMediaItemIndex
+                val seg = segs.getOrNull(idx) ?: return
+                if (seg.playable != null) return // 幂等：已知段不重复写
+                playableScope.launch(Dispatchers.IO) {
+                    runCatching { telemetryRepository.updateSegmentPlayable(seg.id, value) }
+                        .onSuccess { FileLogger.d(TAG, "playable write-back seg=${seg.segmentIndex} id=${seg.id} -> $value") }
+                        .onFailure { t -> FileLogger.e(TAG, "playable write-back failed id=${seg.id}", t) }
+                }
+            }
+            override fun onRenderedFirstFrame() = writeBack(true)
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                FileLogger.e(TAG, "player error: ${error.errorCodeName}", error)
+                writeBack(false)
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
     }
 
     // 当前帧 overlay 数据（轮询更新）
@@ -282,24 +319,33 @@ fun LapVideoPlaybackScreen(
                 "uiRefreshThrottle=${PLAYHEAD_TICK_MS}ms(${1000 / PLAYHEAD_TICK_MS}Hz, 采样仍25Hz)",
         )
 
+        // ②c 段感知 helper（闭包捕获 ctx.segments；单段时与旧单文件行为完全等价）
+        fun segDurationMs(idx: Int): Long = ctx.segments[idx].durationMs ?: 0L // <=0 → position 不设上界 clamp
+        fun seekIntoSegment(playhead: Long, segIdx: Int) {
+            val seg = ctx.segments[segIdx]
+            val pos = VideoTelemetrySync.playheadToVideoPosition(playhead, seg.startWallClock, segDurationMs(segIdx))
+            exoPlayer.seekTo(segIdx, pos)
+            exoPlayer.play()
+            FileLogger.d(TAG, "seekIntoSegment item=$segIdx pos=$pos playhead=$playhead segStart=${seg.startWallClock}")
+        }
+        fun playheadFromPlayer(): Long {
+            val idx = exoPlayer.currentMediaItemIndex.coerceIn(0, ctx.segments.lastIndex)
+            return VideoTelemetrySync.frameWallClock(ctx.segments[idx].startWallClock, exoPlayer.currentPosition)
+        }
+
         // playhead 从圈起点前导秒开始
         var playheadWallClock = playheadStart
-        // 进圈初始定位：若起点已在视频覆盖段内 → seek + play；否则黑屏 ticker 起步
-        var wasWithinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
-            playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-        )
-        if (wasWithinCoverage) {
-            val seekPos = VideoTelemetrySync.playheadToVideoPosition(
-                playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-            )
-            exoPlayer.seekTo(seekPos)
-            exoPlayer.play()
+        // 进圈初始定位：若起点已落某段内 → 跨段 seek + play；否则黑屏 ticker 起步
+        var currentSegIdx = VideoTelemetrySync.segmentIndexAt(playheadWallClock, ctx.segments)
+        var wasWithinCoverage = currentSegIdx != null
+        if (currentSegIdx != null) {
+            seekIntoSegment(playheadWallClock, currentSegIdx!!)
             blackout = false
-            FileLogger.d(TAG, "init within coverage: seek=$seekPos play; playhead=$playheadWallClock")
+            FileLogger.d(TAG, "init within segment=$currentSegIdx playhead=$playheadWallClock")
         } else {
             exoPlayer.pause()
             blackout = true
-            FileLogger.d(TAG, "init blackout (lap head before video): playhead=$playheadWallClock videoStart=${ctx.videoStartedAtWallClock}")
+            FileLogger.d(TAG, "init blackout (gap/越界): playhead=$playheadWallClock firstSegStart=${ctx.segments.firstOrNull()?.startWallClock}")
         }
 
         var lastIdx = -1
@@ -317,22 +363,16 @@ fun LapVideoPlaybackScreen(
                 playheadWallClock = req.coerceIn(playheadStart, playheadEnd)
                 atEnd = false
                 lastTickRealtimeMs = nowRealtime
-                val within = VideoTelemetrySync.isWithinVideoCoverage(
-                    playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-                )
-                if (within) {
-                    val seekPos = VideoTelemetrySync.playheadToVideoPosition(
-                        playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-                    )
-                    exoPlayer.seekTo(seekPos)
-                    exoPlayer.play()
+                val segIdx = VideoTelemetrySync.segmentIndexAt(playheadWallClock, ctx.segments)
+                if (segIdx != null) {
+                    seekIntoSegment(playheadWallClock, segIdx)
                     blackout = false
                 } else {
                     exoPlayer.pause()
                     blackout = true
                 }
-                wasWithinCoverage = within
-                FileLogger.d(TAG, "进度条 seek → playhead=$playheadWallClock within=$within")
+                wasWithinCoverage = segIdx != null
+                FileLogger.d(TAG, "进度条 seek → playhead=$playheadWallClock segIdx=$segIdx")
             }
 
             if (atEnd) {
@@ -341,27 +381,24 @@ fun LapVideoPlaybackScreen(
                 continue
             }
 
-            val withinCoverage = VideoTelemetrySync.isWithinVideoCoverage(
-                playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-            )
+            val segIdxNow = VideoTelemetrySync.segmentIndexAt(playheadWallClock, ctx.segments)
+            // STATE_ENDED（救援段 endWallClock=null 无法靠区间离段）强制交还黑屏 ticker
+            val withinCoverage = segIdxNow != null && exoPlayer.playbackState != Player.STATE_ENDED
 
             if (withinCoverage) {
                 // 覆盖段：视频驱动 playhead
                 if (!wasWithinCoverage) {
-                    // 黑屏段 → 覆盖段：seek 视频到 position 0（圈头早于视频，刚追到 videoStart）+ play
-                    val seekPos = VideoTelemetrySync.playheadToVideoPosition(
-                        playheadWallClock, ctx.videoStartedAtWallClock, localDurationMs,
-                    )
-                    exoPlayer.seekTo(seekPos)
-                    exoPlayer.play()
+                    // 黑屏/gap → 进段：跨段 seek + play（playhead 刚追到某段 start）
+                    seekIntoSegment(playheadWallClock, segIdxNow!!)
                     blackout = false
-                    FileLogger.d(TAG, "blackout->coverage seek=$seekPos play; playhead=$playheadWallClock")
+                    FileLogger.d(TAG, "blackout->segment $segIdxNow play; playhead=$playheadWallClock")
+                } else if (segIdxNow != exoPlayer.currentMediaItemIndex) {
+                    // 段感知防御：playhead 所在段与 player 当前 item 不一致（进度条快拖等）→ 对齐
+                    seekIntoSegment(playheadWallClock, segIdxNow!!)
                 } else if (!exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
                     exoPlayer.play()
                 }
-                playheadWallClock = VideoTelemetrySync.frameWallClock(
-                    ctx.videoStartedAtWallClock, exoPlayer.currentPosition,
-                )
+                playheadWallClock = playheadFromPlayer()
             } else {
                 // 覆盖段外：黑屏 ticker 以 1x 实时推进 playhead
                 if (wasWithinCoverage) {

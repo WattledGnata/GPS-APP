@@ -5,7 +5,10 @@ import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.LapTelemetry
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.VideoSegment
+import com.blazepush.core.domain.usecase.VideoSegmentSelector
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.ReferenceLapIndex
@@ -51,6 +54,9 @@ object LapPlaybackLoader {
         val lapWindows: List<VideoOverlayTelemetry.LapWindow>,
         val bestReference: ReferenceLapIndex?,
         val trackPoints: List<GeoPoint>,
+        // ②c：按圈窗口选中的视频段（segmentIndex 升序，回放 playlist / 导出输入的数据源）
+        val segments: List<VideoSegment>,
+        // 双写兼容字段 = 选中首段 startWallClock（②c 起单段消费方的渐进兼容路径）
         val videoStartedAtWallClock: Long,
         val lapStartWallClock: Long,
         val lapEndWallClock: Long,
@@ -74,11 +80,38 @@ object LapPlaybackLoader {
         trackCatalog: TrackCatalog,
     ): Pair<TelemetrySession, LapPlaybackContext>? {
         val session = repo.getSession(sessionId) ?: return null
-        val videoStartedAt = session.videoStartedAtWallClock ?: return null
-        if (session.videoFilePath == null) return null
 
         // 目标圈：lapIndex 指向的圈（lapNumber = lapIndex + 1，与详情屏 VALID/BEST 圈一致）
         val targetLap: LapTelemetry = repo.getLapTelemetry(sessionId, lapIndex) ?: return null
+
+        // ②c：消费侧切 video_segments 子表，按圈窗口（±lead，与回放 playhead 窗口同语义）选段。
+        // 子表空时 fallback 旧字段合成单段（v9 migration 已迁存量，理论不触发，纯防御）。
+        val allSegments = repo.getVideoSegments(sessionId).ifEmpty {
+            val legacyStart = session.videoStartedAtWallClock
+            val legacyPath = session.videoFilePath
+            if (legacyStart != null && legacyPath != null) {
+                listOf(
+                    VideoSegment(
+                        id = 0L, sessionId = sessionId, segmentIndex = 0,
+                        filePath = legacyPath, startWallClock = legacyStart,
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+        }
+        val selected = VideoSegmentSelector.selectForWindow(
+            segments = allSegments,
+            windowStartMs = targetLap.lapStartWallClock - VideoTelemetrySync.LAP_LEAD_IN_MS,
+            windowEndMs = targetLap.lapEndWallClock + VideoTelemetrySync.LAP_LEAD_OUT_MS,
+        )
+        FileLogger.d(
+            TAG,
+            "loader segments total=${allSegments.size} selected=${selected.map { it.segmentIndex }} " +
+                "window=[${targetLap.lapStartWallClock},${targetLap.lapEndWallClock}] sid=$sessionId lap=$lapIndex",
+        )
+        if (selected.isEmpty()) return null // 该圈无录像（语义同改造前 guard）
+        val videoStartedAt = selected.first().startWallClock
 
         // 逐圈拼接整 session 样本（升序 absoluteTsMs）+ 各圈窗口（overlay 仍需全 session 上下文）
         val allSamples = mutableListOf<LapTelemetrySample>()
@@ -119,6 +152,7 @@ object LapPlaybackLoader {
             lapWindows = lapWindows,
             bestReference = bestReference,
             trackPoints = trackPoints,
+            segments = selected,
             videoStartedAtWallClock = videoStartedAt,
             lapStartWallClock = targetLap.lapStartWallClock,
             lapEndWallClock = targetLap.lapEndWallClock,

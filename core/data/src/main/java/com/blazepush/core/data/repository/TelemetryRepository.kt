@@ -21,6 +21,7 @@ import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TelemetrySessionType
+import com.blazepush.core.domain.model.VideoSegment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -299,6 +300,31 @@ class TelemetryRepository(
             Log.e(tag, "failed to delete video: $videoPath")
         }
     }
+
+    /**
+     * 该 session 全部视频段（②c 回放/导出消费侧数据源，按 segmentIndex 升序）。
+     */
+    suspend fun getVideoSegments(sessionId: String): List<VideoSegment> =
+        videoSegmentDao.queryBySessionId(sessionId).map { it.toDomain() }
+
+    /**
+     * playable 首播回写 wrapper（②c）。失败由调用方 catch，仅日志不阻塞播放。
+     */
+    suspend fun updateSegmentPlayable(id: Long, playable: Boolean) {
+        videoSegmentDao.updatePlayable(id, playable)
+        Log.d("VideoSegment", "playable write-back: id=$id playable=$playable")
+    }
+
+    private fun VideoSegmentEntity.toDomain() = VideoSegment(
+        id = id,
+        sessionId = sessionId,
+        segmentIndex = segmentIndex,
+        filePath = filePath,
+        startWallClock = startWallClock,
+        endWallClock = endWallClock,
+        durationMs = durationMs,
+        playable = playable,
+    )
 
     /**
      * 存量 PERFORMANCE_TEST 孤儿行一次性 sweep（cleanup-perftest-telemetry-session-orphan round）。

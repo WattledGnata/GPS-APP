@@ -333,5 +333,9 @@ class TelemetryRepositoryDeleteSessionTest {
         override suspend fun queryBySessionId(sessionId: String) = segments.filter { it.sessionId == sessionId }.sortedBy { it.segmentIndex }
         override suspend fun maxSegmentIndex(sessionId: String) = segments.filter { it.sessionId == sessionId }.maxOfOrNull { it.segmentIndex }
         override suspend fun deleteBySessionId(sessionId: String) { segments.removeIf { it.sessionId == sessionId } }
+        override suspend fun updatePlayable(id: Long, playable: Boolean) {
+            val i = segments.indexOfFirst { it.id == id }
+            if (i >= 0) segments[i] = segments[i].copy(playable = playable)
+        }
     }
 }

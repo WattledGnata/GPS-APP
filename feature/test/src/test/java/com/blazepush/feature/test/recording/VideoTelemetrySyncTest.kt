@@ -1,7 +1,9 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.recording
 
+import com.blazepush.core.domain.model.VideoSegment
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -352,5 +354,47 @@ class VideoTelemetrySyncTest {
             videoDurationMs = 0L,
         )
         assertEquals(80_000L, pos) // 仅下界 clamp，无上界
+    }
+    // ──── segmentIndexAt（②c 多段回放 · 段定位半开区间）────
+
+    private fun seg(index: Int, start: Long, end: Long?) = VideoSegment(
+        id = index.toLong(), sessionId = "s", segmentIndex = index,
+        filePath = "/video/$index.mp4", startWallClock = start,
+        endWallClock = end, durationMs = end?.minus(start),
+    )
+
+    @Test
+    fun `segmentIndexAt - playhead 落第二段返回 1`() {
+        val segs = listOf(seg(0, 1000, 5000), seg(1, 8000, 12000))
+        assertEquals(1, VideoTelemetrySync.segmentIndexAt(8500, segs))
+    }
+
+    @Test
+    fun `segmentIndexAt - gap 返回 null 交还黑屏 ticker`() {
+        val segs = listOf(seg(0, 1000, 5000), seg(1, 8000, 12000))
+        assertNull(VideoTelemetrySync.segmentIndexAt(6000, segs))
+    }
+
+    @Test
+    fun `segmentIndexAt - 段尾半开离段防粘滞`() {
+        val segs = listOf(seg(0, 1000, 5000))
+        assertEquals(0, VideoTelemetrySync.segmentIndexAt(4999, segs))
+        assertNull("playhead==endWallClock MUST 离段（半开区间）", VideoTelemetrySync.segmentIndexAt(5000, segs))
+    }
+
+    @Test
+    fun `segmentIndexAt - 救援段 null end 无穷覆盖`() {
+        val segs = listOf(seg(0, 3000, null))
+        assertEquals(0, VideoTelemetrySync.segmentIndexAt(999_999_999L, segs))
+        assertNull(VideoTelemetrySync.segmentIndexAt(2999, segs))
+    }
+
+    @Test
+    fun `segmentIndexAt - 单段行为与旧单文件等价`() {
+        // 与 isWithinVideoCoverage(1000, start=1000, dur=4000) 单段语义对照（除段尾半开差异）
+        val segs = listOf(seg(0, 1000, 5000))
+        assertEquals(0, VideoTelemetrySync.segmentIndexAt(1000, segs))
+        assertEquals(0, VideoTelemetrySync.segmentIndexAt(3000, segs))
+        assertNull(VideoTelemetrySync.segmentIndexAt(999, segs))
     }
 }

@@ -87,7 +87,21 @@ class VideoExportService : Service(), KoinComponent {
                 return
             }
             val (session, ctx) = loaded
-            val sourcePath = session.videoFilePath!!
+            // ②c（spec Req3）：导出输入从选段取——单段主路径直接用；跨段圈明确拒绝
+            //（降级某段必然不完整覆盖、会被下方 isLapFullyCovered gate 拦截，不可达降级不如诚实拒绝；
+            // 完整拼裁 follow-up video-export-cross-segment-concat）。
+            if (ctx.segments.size > 1) {
+                FileLogger.e(
+                    tag,
+                    "cross-segment lap export rejected: n=${ctx.segments.size} " +
+                        "idx=${ctx.segments.map { it.segmentIndex }} sid=$sessionId lap=$lapNumber",
+                )
+                fail("该圈横跨多段录像，导出暂不支持", sessionId, lapNumber)
+                return
+            }
+            // loader 保证选段非空（空选段已 return null → loaded==null 走上方 fail）；
+            // ctx.videoStartedAtWallClock 已=该段 startWallClock（loader ②c 设置），下游 clip 计算直接正确。
+            val sourcePath = ctx.segments.first().filePath
 
             // 视频时长：从源 mp4 metadata 取（与回放 ExoPlayer duration 同源不可得 → 用 extractor 时长）
             val videoDurationMs = probeVideoDurationMs(sourcePath)

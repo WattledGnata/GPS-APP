@@ -1,6 +1,8 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.recording
 
+import com.blazepush.core.domain.model.VideoSegment
+
 /**
  * 视频时间轴 ↔ 遥测时间轴同步纯函数（无副作用，可单测）。
  *
@@ -31,6 +33,27 @@ object VideoTelemetrySync {
      */
     fun frameWallClock(videoStartedAtWallClock: Long, framePtsMs: Long): Long =
         videoStartedAtWallClock + framePtsMs
+
+    /**
+     * playhead 所在视频段 index（②c 多段回放 · design Decision 3）。
+     *
+     * 段定位区间 = 半开 [startWallClock, endWallClock ?: +∞)（段尾即离段防粘滞；选段侧
+     * VideoSegmentSelector 用闭区间宽容重叠）；多段重叠时取 segmentIndex 较小者（升序首命中）。
+     * gap / 越界 → null（调用方走黑屏 ticker 既有机制）。
+     *
+     * @param playheadWallClock 当前 playhead 绝对 wallClock
+     * @param segments 选中段列表（segmentIndex 升序，与 ExoPlayer playlist item 顺序一致）
+     * @return 所在段在 segments 中的下标（== playlist item index）；不在任何段内 → null
+     */
+    fun segmentIndexAt(playheadWallClock: Long, segments: List<VideoSegment>): Int? {
+        segments.forEachIndexed { index, seg ->
+            val segEnd = seg.endWallClock ?: Long.MAX_VALUE
+            // 半开 [start, end)：playhead 推进到段尾即离段，交还黑屏 ticker（防段尾粘滞卡死；
+            // 与 Selector 的闭区间重叠判定不同——选段宽容、定位严格）
+            if (playheadWallClock >= seg.startWallClock && playheadWallClock < segEnd) return index
+        }
+        return null
+    }
 
     /**
      * 给定 frameWallClock + 一组遥测样本的 absoluteTsMs 升序列表，返回最近邻的样本 index。

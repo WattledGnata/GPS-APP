@@ -48,9 +48,31 @@ data class TelemetrySession(
     val trackId: String? = null,
     val trackNameSnapshot: String? = null,
     // schema v6 起：视频文件 absolute path（由 round 3 录制引擎写入）；null = 无视频
+    // ②a 起为"最新段"双写镜像（消费侧应优先 video_segments 子表，见 VideoSegment）
     val videoFilePath: String? = null,
     // schema v6 起：录制首帧 wallClock（与 binary absoluteTsMs 同时钟域）；null = 无视频
     val videoStartedAtWallClock: Long? = null,
+)
+
+/**
+ * 视频段领域模型（对应 Room VideoSegmentEntity，schema v9 / video-segment-schema ②a）。
+ * 一个 session 一对多段：停录再录 / ERROR 救援重录 / ②b 按圈轮换分段。
+ * endWallClock/durationMs null = ERROR 救援段时长未知（选段时 MUST 保守入选，见 VideoSegmentSelector）；
+ * playable 三态：true=Finalize OK / null=未知（首播回写）/ false=首播失败已证损坏。
+ *
+ * @author CC
+ * @description video segment domain model (one-to-many per session)
+ * @date 2026-06-07
+ */
+data class VideoSegment(
+    val id: Long,
+    val sessionId: String,
+    val segmentIndex: Int,
+    val filePath: String,
+    val startWallClock: Long,
+    val endWallClock: Long? = null,
+    val durationMs: Long? = null,
+    val playable: Boolean? = null,
 )
 
 /**
