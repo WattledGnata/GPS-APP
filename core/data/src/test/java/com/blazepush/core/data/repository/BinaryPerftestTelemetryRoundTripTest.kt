@@ -365,7 +365,11 @@ class BinaryPerftestTelemetryRoundTripTest {
         val p1 = firstLineIn(pfdRange) { it.contains("val sessionStartTs = telemetryRepository.activeSessionStartTs") }
         val p2 = firstLineIn(pfdRange) { it.contains("if (sessionStartTs != null)") }
         val p3 = firstLineIn(pfdRange) { it.contains("\"processFilteredData: missing activeSessionStartTs") }
-        val p4 = firstLineIn(pfdRange) { it.contains("if (state.session.template.shouldEnd(filteredData.raw))") }
+        // fix-perftest-case-g-shape-drift(2026-06-07):P4 锚点同步 unify-speed-judgement-source
+        // round(02cfb94)Decision 1——判停改用滤波后速度(raw.copy(speed = filteredData.speed)),
+        // 与成绩窗口同源。M round 锁的 anchor fallback 语义(P1-P3)不受影响;新锚点同时锁住
+        // unify 的口径统一形态防回退(若有人改回裸 raw 判停,本锚点即红)。
+        val p4 = firstLineIn(pfdRange) { it.contains("if (state.session.template.shouldEnd(filteredData.raw.copy(speed = filteredData.speed)))") }
 
         assertTrue("processFilteredData 形态 A: P1 未命中", p1 >= 0)
         assertTrue("processFilteredData 形态 A: P2 未命中", p2 >= 0)
