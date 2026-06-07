@@ -149,6 +149,20 @@ fun LapLiveScreen(
 
     // screen 顶层收集录制状态：供绑定条件 LaunchedEffect + RecIndicator + 资源安全 onDispose 共用
     val recordingState by recordingEngine.recordingState.collectAsState()
+
+    // video-segment-recording-rotation ②b：录制中每完成一圈通知引擎（N=3 自动切段）。
+    // 范式同上方语音播报增量观察；仅 Recording 态通知（engine 侧另有状态 gate 双保险）。
+    // 基线语义（spec）：engine 计数在 startRecording 时清零，录制前已完成的圈这里不会
+    // 产生通知（增量判定 + Recording gate），天然不计入。
+    var lastRotationNotifiedCount by remember { mutableStateOf(completedLapsForVoice.size) }
+    LaunchedEffect(completedLapsForVoice.size) {
+        if (completedLapsForVoice.size > lastRotationNotifiedCount &&
+            recordingState is RecordingState.Recording
+        ) {
+            recordingEngine.notifyLapCompleted(context)
+        }
+        lastRotationNotifiedCount = completedLapsForVoice.size
+    }
     // recording-params-config-screen round：录制参数（齿轮设置屏写入，此处读出驱动 bind）
     val recordingConfig by recordingPrefsRepository.configFlow.collectAsState(initial = RecordingConfig.DEFAULT)
 

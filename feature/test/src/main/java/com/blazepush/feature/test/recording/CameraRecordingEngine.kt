@@ -59,12 +59,12 @@ import kotlin.coroutines.resume
  * （避免 bind + 首帧延迟引入偏差；Start 事件是首帧捕获后的最早确认点）。
  *
  * ## wallClock 持久化（重要）
- * [_capturedWallClock] 在 VideoRecordEvent.Start 时写入，在 Finalize 时读取。
+ * per-recording wallClock 在 VideoRecordEvent.Start 时写入 SegmentContext，Finalize 时读取（②b 闭包化）。
  * 即使状态已从 Recording 变为 Stopping，wallClock 仍可通过此字段获取。
  *
  * ## 线程安全
  * [startRecording] / [stopRecording] MUST 在主线程调用（CameraX 要求主线程操作）。
- * [_recordingState] 更新通过 StateFlow 传播；[_capturedWallClock] / [_capturedSessionId]
+ * [_recordingState] 更新通过 StateFlow 传播；SegmentContext 各字段
  * 仅在主线程回调（VideoRecordEvent listener 使用 MainExecutor）里读写，无竞态。
  *
  * @author CC
@@ -77,6 +77,12 @@ class CameraRecordingEngine(
     companion object {
         private const val TAG = "CamRec"
         private const val VIDEO_DIR = "video"
+
+        // video-segment-recording-rotation ②b：按圈轮换段上限（user 2026-06-07 拍板，对标 RaceChrono ≤3）
+        internal const val SEGMENT_MAX_LAPS = 3
+
+        // ②b：段时长硬上限兜底（单圈异常长/挂死不过线时防单文件无限增长，memo M5）
+        internal const val MAX_SEGMENT_DURATION_MS = 600_000L
     }
 
     private val engineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -103,10 +109,31 @@ class CameraRecordingEngine(
     private var boundConfig: RecordingConfig? = null
     private var camera: Camera? = null
 
-    // Start 事件时持久化，供 Finalize 分支读取（即使 state 已从 Recording 变 Stopping）
-    // 仅在 MainExecutor 回调内读写，无竞态
-    private var _capturedWallClock: Long = 0L
-    private var _capturedSessionId: String? = null
+    /**
+     * per-recording 事件上下文（②b design Decision 1）。
+     * 轮换时旧段 finalizing 与新段 starting 并存——wallClock/sessionId/outputFile 随各自
+     * listener 闭包走，互不污染（替代原实例单字段 capturedWallClock/capturedSessionId，
+     * 单字段会被新段 Start 覆盖导致旧段写库时间轴错位）。
+     * 仅在 MainExecutor 回调内读写，无竞态。
+     */
+    private class SegmentContext(
+        val outputFile: File,
+        val sessionId: String?,
+    ) {
+        var wallClock: Long = 0L
+    }
+
+    // 当前段上下文（身份标识：Finalize 用 === 判"本段是否仍是当前段"，轮换旧段只写库不动状态机）
+    private var activeSegmentCtx: SegmentContext? = null
+
+    // ②b 轮换状态（仅 MainExecutor / 主线程读写）
+    private var lapsInCurrentSegment = 0
+    // 旧段结束估计（stop 时刻最近 Status 时长推算），新段 Start 时算 gap 落盘（memo M1/M6 观测）
+    private var lastRotationEndEstimateMs = 0L
+    // 当前段最近 Status 时长（兜底检查 + 轮换 end 估计）
+    private var currentSegmentElapsedMs = 0L
+    // 轮换 startSegment 需要 context（Status 回调无 context）；存 applicationContext 不泄漏
+    private var appContext: Context? = null
 
     // stopRecording 落盘完成回调（onDispose 路径延迟 unbind 用）。
     // 在 VideoRecordEvent.Finalize（OK 或 ERROR 两分支）末尾 invoke，然后清空。
@@ -390,33 +417,92 @@ class CameraRecordingEngine(
             FileLogger.d(TAG, "startRecording: WARN 无 active lap session → 孤立视频，录制完成不关联 session")
         }
 
-        // 确保 video 目录存在
-        val videoDir = File(context.filesDir, VIDEO_DIR)
-        if (!videoDir.exists()) {
-            val created = videoDir.mkdirs()
-            FileLogger.d(TAG, "startRecording: video 目录创建 ${videoDir.absolutePath} created=$created")
-        }
+        // ②b：新一轮录制重置轮换计数 + gap 基线（目录创建在 startSegment 内）
+        lapsInCurrentSegment = 0
+        lastRotationEndEstimateMs = 0L
+        startSegment(context, activeSessionId)
+    }
 
+    /**
+     * 启动一个录制段（②b：startRecording 与 rotateSegment 共用主体）。
+     * per-recording 上下文随 listener 闭包走（design Decision 1）。
+     */
+    @MainThread
+    private fun startSegment(context: Context, sessionId: String?) {
+        val vc = videoCapture
+        if (vc == null) {
+            val msg = "startSegment: videoCapture 未绑定"
+            FileLogger.e(TAG, msg)
+            _recordingState.value = RecordingState.Error(msg)
+            return
+        }
+        appContext = context.applicationContext
+
+        val videoDir = File(context.filesDir, VIDEO_DIR)
+        if (!videoDir.exists()) videoDir.mkdirs()
         val outputFile = File(videoDir, "${System.currentTimeMillis()}.mp4")
         val outputOptions = FileOutputOptions.Builder(outputFile).build()
 
-        // 将 sessionId 持久化到实例字段，供 Finalize 分支读取（不依赖 state 值）
-        _capturedSessionId = activeSessionId
+        val segCtx = SegmentContext(outputFile, sessionId)
+        activeSegmentCtx = segCtx
+        currentSegmentElapsedMs = 0L
 
         // 麦克风：按 bind 时生效 config 的 audioEnabled 条件调用（spec 麦克风 Requirement）
         val audioEnabled = boundConfig?.audioEnabled ?: true
         val pendingRecording = vc.output
             .prepareRecording(context, outputOptions)
             .let { if (audioEnabled) it.withAudioEnabled() else it }
-        FileLogger.d(TAG, "startRecording: audioEnabled=$audioEnabled")
+        FileLogger.d(TAG, "startSegment: audioEnabled=$audioEnabled file=${outputFile.name}")
 
         val recording = pendingRecording.start(
             ContextCompat.getMainExecutor(context),
         ) { event ->
-            handleVideoRecordEvent(event, outputFile)
+            handleVideoRecordEvent(event, segCtx)
         }
         activeRecording = recording
-        FileLogger.d(TAG, "startRecording: Recording 启动，等待 VideoRecordEvent.Start 回调")
+        FileLogger.d(TAG, "startSegment: Recording 启动，等待 VideoRecordEvent.Start 回调")
+    }
+
+    /**
+     * 圈完成通知（②b design Decision 2）：LapLiveScreen 观察 completedLaps 增量逐圈调用。
+     * 录制中计数达 [SEGMENT_MAX_LAPS] 自动轮换；非录制状态 no-op（spec 反例）。
+     */
+    @MainThread
+    fun notifyLapCompleted(context: Context) {
+        if (_recordingState.value !is RecordingState.Recording) {
+            FileLogger.d(TAG, "notifyLapCompleted: 非录制态 no-op")
+            return
+        }
+        lapsInCurrentSegment++
+        FileLogger.d(TAG, "notifyLapCompleted: lapsInSegment=$lapsInCurrentSegment/$SEGMENT_MAX_LAPS")
+        if (lapsInCurrentSegment >= SEGMENT_MAX_LAPS) {
+            rotateSegment(context, "lap-count")
+        }
+    }
+
+    /**
+     * 切段（②b design Decision 2）：旧段 stop() 异步 finalize 入库（②a append 自动成段），
+     * 立即起新段；状态保持 Recording 不过 Stopping（用户视角连续录制）。
+     */
+    @MainThread
+    private fun rotateSegment(context: Context, reason: String) {
+        val state = _recordingState.value
+        if (state !is RecordingState.Recording) {
+            FileLogger.d(TAG, "rotateSegment: 非录制态 no-op reason=$reason")
+            return
+        }
+        val oldCtx = activeSegmentCtx
+        FileLogger.d(
+            TAG,
+            "rotateSegment: reason=$reason oldFile=${oldCtx?.outputFile?.name} " +
+                "lapsInSegment=$lapsInCurrentSegment elapsed=${currentSegmentElapsedMs}ms",
+        )
+        // 旧段结束估计 = 旧段 Start wallClock + 最近 Status 时长（新段 Start 时算 gap，memo M1）
+        lastRotationEndEstimateMs = (oldCtx?.wallClock ?: 0L) + currentSegmentElapsedMs
+        // 不走 stopRecording（不置 Stopping）；旧段 Finalize 因 activeSegmentCtx 已指新段只写库
+        activeRecording?.stop()
+        lapsInCurrentSegment = 0
+        startSegment(context, oldCtx?.sessionId)
     }
 
     /**
@@ -498,24 +584,39 @@ class CameraRecordingEngine(
      */
     private fun handleVideoRecordEvent(
         event: VideoRecordEvent,
-        outputFile: File,
+        segCtx: SegmentContext,
     ) {
+        val outputFile = segCtx.outputFile
+        // ②b：本段是否仍是当前段——轮换后旧段事件只写库，不动 activeRecording/状态机/回调
+        val isCurrentSegment = activeSegmentCtx === segCtx
         when (event) {
             is VideoRecordEvent.Start -> {
                 // ★ wallClock 锚点核心（同时钟域关键时刻）：
                 //   VideoRecordEvent.Start = 首帧捕获后的最早回调，此时取 System.currentTimeMillis()。
                 //   与遥测 absoluteTsMs = sessionStartTs + tsDeltaMs 同为 wallClock（Linux epoch）。
                 val wallClock = System.currentTimeMillis()
-                _capturedWallClock = wallClock
-                val sessionId = _capturedSessionId
+                segCtx.wallClock = wallClock
+                val sessionId = segCtx.sessionId
 
-                _recordingState.value = RecordingState.Recording(
-                    startedAtWallClock = wallClock,
-                    sessionId = sessionId,
-                )
+                // 轮换 gap 观测（memo M1/M6）：新段首帧 vs 旧段结束估计
+                if (lastRotationEndEstimateMs > 0L) {
+                    val gap = wallClock - lastRotationEndEstimateMs
+                    FileLogger.d(TAG, "segment gap=${gap}ms (rotation; 真机攒批读数定双 Recorder 是否立项)")
+                    lastRotationEndEstimateMs = 0L
+                }
+
+                // 状态仅在首段进入 Recording 时写（轮换新段不重置 startedAtWallClock——
+                // UI 录制时长显示保持整次录制起点连续）
+                if (_recordingState.value !is RecordingState.Recording) {
+                    _recordingState.value = RecordingState.Recording(
+                        startedAtWallClock = wallClock,
+                        sessionId = sessionId,
+                    )
+                }
                 FileLogger.d(
                     TAG,
                     "VideoRecordEvent.Start: ★ wallClock=$wallClock sessionId=$sessionId " +
+                        "file=${outputFile.name} current=$isCurrentSegment " +
                         "(同时钟域: System.currentTimeMillis, 与遥测 absoluteTsMs 可直接差值对齐)",
                 )
                 if (sessionId == null) {
@@ -524,14 +625,30 @@ class CameraRecordingEngine(
             }
 
             is VideoRecordEvent.Status -> {
+                val elapsedMs = event.recordingStats.recordedDurationNanos / 1_000_000L
                 // 高频状态更新:VERBOSE + 降频采样(每秒最多 1 条,2026-06-04)
                 FileLogger.vSampled(TAG, "video-status") {
-                    "VideoRecordEvent.Status: elapsed=${event.recordingStats.recordedDurationNanos / 1_000_000L}ms"
+                    "VideoRecordEvent.Status: elapsed=${elapsedMs}ms"
+                }
+                // ②b：仅当前段维护时长 + 硬上限兜底（design Decision 3，memo M5）
+                if (isCurrentSegment) {
+                    currentSegmentElapsedMs = elapsedMs
+                    val ctx = appContext
+                    if (elapsedMs >= MAX_SEGMENT_DURATION_MS && ctx != null &&
+                        _recordingState.value is RecordingState.Recording
+                    ) {
+                        FileLogger.d(TAG, "Status: 段时长 ${elapsedMs}ms ≥ 上限，触发轮换")
+                        rotateSegment(ctx, "duration-cap")
+                    }
                 }
             }
 
             is VideoRecordEvent.Finalize -> {
-                activeRecording = null
+                // ②b：仅当前段 Finalize 清 activeRecording（轮换旧段 Finalize 时引用已指新段，不误杀）
+                if (isCurrentSegment) activeRecording = null
+                if (!isCurrentSegment) {
+                    FileLogger.d(TAG, "Finalize(rotation 旧段): file=${outputFile.name} 只写库不动状态机")
+                }
                 if (event.hasError()) {
                     val errMsg = "VideoRecordEvent.Finalize ERROR: code=${event.error} cause=${event.cause?.message}"
                     FileLogger.e(TAG, errMsg)
@@ -541,8 +658,8 @@ class CameraRecordingEngine(
                     // 损坏风险由播放路径自然暴露(可感知优于黑洞)。
                     val filePath = outputFile.absolutePath
                     val fileSize = outputFile.length()
-                    val wallClock = _capturedWallClock
-                    val sessionId = _capturedSessionId
+                    val wallClock = segCtx.wallClock
+                    val sessionId = segCtx.sessionId
                     if (sessionId != null && outputFile.exists() && fileSize > 0) {
                         FileLogger.e(
                             TAG,
@@ -573,21 +690,21 @@ class CameraRecordingEngine(
                     } else {
                         FileLogger.d(TAG, "ERROR 文件无数据(size=$fileSize),不救援 path=$filePath")
                     }
-                    // 清脏字段(对齐 OK 分支;原 ERROR 分支不清,下段录制前残留)
-                    _capturedWallClock = 0L
-                    _capturedSessionId = null
-                    _recordingState.value = RecordingState.Error(errMsg)
-                    // ERROR 分支也必须 invoke onFinalized，防 onDispose 路径 camera 永不解绑泄漏
-                    val cb = pendingOnFinalized
-                    pendingOnFinalized = null
-                    FileLogger.d(TAG, "VideoRecordEvent.Finalize ERROR: invoke pendingOnFinalized=${cb != null}")
-                    cb?.invoke()
+                    // ②b：状态转移 + 回调仅当前段（轮换旧段 ERROR 只救援写库，新段继续录）
+                    if (isCurrentSegment) {
+                        _recordingState.value = RecordingState.Error(errMsg)
+                        // ERROR 分支也必须 invoke onFinalized，防 onDispose 路径 camera 永不解绑泄漏
+                        val cb = pendingOnFinalized
+                        pendingOnFinalized = null
+                        FileLogger.d(TAG, "VideoRecordEvent.Finalize ERROR: invoke pendingOnFinalized=${cb != null}")
+                        cb?.invoke()
+                    }
                 } else {
                     val filePath = outputFile.absolutePath
                     val fileSize = outputFile.length()
-                    val wallClock = _capturedWallClock
-                    val sessionId = _capturedSessionId
-                    FileLogger.d(TAG, "VideoRecordEvent.Finalize: OK path=$filePath size=${fileSize}B wallClock=$wallClock")
+                    val wallClock = segCtx.wallClock
+                    val sessionId = segCtx.sessionId
+                    FileLogger.d(TAG, "VideoRecordEvent.Finalize: OK path=$filePath size=${fileSize}B wallClock=$wallClock current=$isCurrentSegment")
 
                     if (sessionId != null) {
                         // video-segment-schema ②a：正常 Finalize playable=true + 实测时长（纳秒→毫秒）。
@@ -623,15 +740,15 @@ class CameraRecordingEngine(
                         )
                     }
 
-                    // 清空临时状态字段
-                    _capturedWallClock = 0L
-                    _capturedSessionId = null
-                    _recordingState.value = RecordingState.Idle
-                    // OK 分支：invoke onFinalized（onDispose 路径在此触发延迟 unbind）
-                    val cb = pendingOnFinalized
-                    pendingOnFinalized = null
-                    FileLogger.d(TAG, "VideoRecordEvent.Finalize OK: invoke pendingOnFinalized=${cb != null}")
-                    cb?.invoke()
+                    // ②b：状态转移 + 回调仅当前段（轮换旧段 OK 只写库，新段继续录）
+                    if (isCurrentSegment) {
+                        _recordingState.value = RecordingState.Idle
+                        // OK 分支：invoke onFinalized（onDispose 路径在此触发延迟 unbind）
+                        val cb = pendingOnFinalized
+                        pendingOnFinalized = null
+                        FileLogger.d(TAG, "VideoRecordEvent.Finalize OK: invoke pendingOnFinalized=${cb != null}")
+                        cb?.invoke()
+                    }
                 }
             }
 
