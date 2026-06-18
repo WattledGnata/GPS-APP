@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -95,8 +97,22 @@ fun LapDetailScreen(
     // 加载管线——overlay 帧/圈窗口/赛道点与全屏页同源;load 失败(无视频/无覆盖)即不渲染面板)。
     var videoFilePath by remember { mutableStateOf<String?>(null) }
     var videoPlaybackContext by remember { mutableStateOf<LapPlaybackLoader.LapPlaybackContext?>(null) }
+    // round fix-lap-detail-ux-three-touch-issues Bug 2 二轮：sessionHasVideo 三态
+    // (null=待判定乐观假设 / true=有视频 / false=无视频)。null/true 阶段 VIDEO panel
+    // 立即占位到 list[0]，加载完替换为真 LapVideoPanel；false 阶段 VIDEO 从 visiblePanels filter 掉。
+    // 不再依赖加载完后 scrollToItem 锚定（消除"先到非 VIDEO 再滑过去"的视觉跳跃）。
+    var sessionHasVideo by remember { mutableStateOf<Boolean?>(null) }
+    var videoCtxLoadFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(sessionId, lapIndex) {
+        // 先快查 session.videoFilePath（Room 单表 select，<50ms）判定 sessionHasVideo —
+        // 让 VIDEO panel 占位状态尽快稳定（视频 session：保持占位；无视频 session：filter 掉）
+        val sessionVideo = withContext(Dispatchers.IO) {
+            telemetryRepository.getSession(sessionId)?.videoFilePath
+        }
+        sessionHasVideo = sessionVideo != null
+        FileLogger.d("LapDetail", "sessionHasVideo=$sessionHasVideo sid=$sessionId")
+
         val result = telemetryRepository.getLapTelemetry(sessionId, lapIndex)
         if (result != null) {
             FileLogger.d(
@@ -109,27 +125,35 @@ fun LapDetailScreen(
         lapTelemetry = result
 
         // 视频面板数据(spec R1):LapPlaybackLoader 共享管线(全屏页/导出同源)——
-        // 无 session/无视频/无圈/无样本 → null → 不渲染面板
-        val loaded = withContext(Dispatchers.IO) {
-            LapPlaybackLoader.load(sessionId, lapIndex, telemetryRepository, trackCatalog)
-        }
-        if (loaded != null) {
-            videoFilePath = loaded.first.videoFilePath
-            videoPlaybackContext = loaded.second
-            FileLogger.d(
-                "LapDetail",
-                "triview ctx lap=[${loaded.second.lapStartWallClock}..${loaded.second.lapEndWallClock}] " +
-                    "videoStart=${loaded.second.videoStartedAtWallClock} frames=${loaded.second.frames.size}",
-            )
-        } else {
-            videoFilePath = null
-            videoPlaybackContext = null
+        // 无 session/无视频/无圈/无样本 → null → 占位变 "视频不可用"
+        if (sessionHasVideo == true) {
+            val loaded = withContext(Dispatchers.IO) {
+                LapPlaybackLoader.load(sessionId, lapIndex, telemetryRepository, trackCatalog)
+            }
+            if (loaded != null) {
+                videoFilePath = loaded.first.videoFilePath
+                videoPlaybackContext = loaded.second
+                FileLogger.d(
+                    "LapDetail",
+                    "triview ctx lap=[${loaded.second.lapStartWallClock}..${loaded.second.lapEndWallClock}] " +
+                        "videoStart=${loaded.second.videoStartedAtWallClock} frames=${loaded.second.frames.size}",
+                )
+            } else {
+                videoFilePath = null
+                videoPlaybackContext = null
+                videoCtxLoadFailed = true
+                FileLogger.e("LapDetail", "video ctx load failed sid=$sessionId idx=$lapIndex")
+            }
         }
     }
 
     // 共享游标 single source of truth（Cursor 决策）：SpeedTimeChart / AccelTimeChart 发起变更，
     // 4 组件入参全传它。25Hz 拖动用 v 级别埋点（可被 level 过滤）。
     var cursorAbsoluteTs by remember { mutableStateOf<Long?>(null) }
+
+    // round fix-lap-detail-ux-three-touch-issues：LazyColumn 状态 hoist，
+    // 视频面板异步加载完成后由 LaunchedEffect 锚到可见区顶部。
+    val listState = rememberLazyListState()
 
     // 三联动回环抑制(triview design Decision 1):标记最近一次 cursor 变更来源;
     // 仅 CHART 来源触发视频 seek,VIDEO 来源(播放回写/拖进度)不再回环 seek。
@@ -180,12 +204,15 @@ fun LapDetailScreen(
                 )
             }
         } else {
-            // 面板可见清单:VIDEO 仅 loader 成功渲染(spec R1;顺序键仍保留偏好,spec R3)
-            val videoEligible = videoFilePath != null && videoPlaybackContext != null
+            // round fix-lap-detail-ux-three-touch-issues Bug 2 二轮：占位准入用 sessionHasVideo
+            // 三态（null=待判定乐观假设/true=有视频/false=无视频）。null/true 阶段 VIDEO 立即占位到 list[0]；
+            // false 阶段 VIDEO 从 visiblePanels filter 掉。videoCtxReady 控制 VIDEO panel 内部三态（占位 vs 真内容）。
+            val videoSlotEligible = sessionHasVideo != false
+            val videoCtxReady = videoFilePath != null && videoPlaybackContext != null
             // 反馈 3(2026-06-05):视频回写的任意毫秒值吸附到最近样本 absoluteTsMs——
             // 图表游标/地图亮点是精确相等匹配,不吸附永远 miss
             val sampleWallClocks = remember(telemetry) { telemetry.samples.map { it.absoluteTsMs } }
-            val visiblePanels = panelOrder.filter { it != LapDetailPanelId.VIDEO || videoEligible }
+            val visiblePanels = panelOrder.filter { it != LapDetailPanelId.VIDEO || videoSlotEligible }
 
             // 长按拖拽 reorder(design Decision 3):draggingId + 累计位移;跨过相邻面板
             // 实测高度的一半即交换;松手序列化持久化。
@@ -194,6 +221,7 @@ fun LapDetailScreen(
             val panelHeights = remember { mutableMapOf<LapDetailPanelId, Int>() }
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -246,25 +274,44 @@ fun LapDetailScreen(
                     ) {
                         when (panelId) {
                             LapDetailPanelId.VIDEO -> ChartCard(title = "VIDEO") {
-                                LapVideoPanel(
-                                    videoFilePath = videoFilePath!!,
-                                    playbackContext = videoPlaybackContext!!,
-                                    cursorAbsoluteTs = cursorAbsoluteTs,
-                                    cursorSource = cursorSource,
-                                    onCursorChangeFromVideo = { wc ->
-                                        cursorSource = TriviewCursorSource.VIDEO
-                                        // 吸附最近样本(反馈 3:驱动图表游标/地图亮点)
-                                        if (sampleWallClocks.isNotEmpty()) {
-                                            val idx = VideoTelemetrySync.findNearestSampleIndex(wc, sampleWallClocks)
-                                            cursorAbsoluteTs = sampleWallClocks[idx]
-                                        }
-                                    },
-                                    onFullscreen = { wc ->
-                                        // 进度接力:全屏从面板当前时刻继续(lap-detail-triview-panel)
-                                        navController.navigate("lap_video/$sessionId/$lapIndex?startWc=$wc")
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                                if (videoCtxReady) {
+                                    LapVideoPanel(
+                                        videoFilePath = videoFilePath!!,
+                                        playbackContext = videoPlaybackContext!!,
+                                        cursorAbsoluteTs = cursorAbsoluteTs,
+                                        cursorSource = cursorSource,
+                                        onCursorChangeFromVideo = { wc ->
+                                            cursorSource = TriviewCursorSource.VIDEO
+                                            // 吸附最近样本(反馈 3:驱动图表游标/地图亮点)
+                                            if (sampleWallClocks.isNotEmpty()) {
+                                                val idx = VideoTelemetrySync.findNearestSampleIndex(wc, sampleWallClocks)
+                                                cursorAbsoluteTs = sampleWallClocks[idx]
+                                            }
+                                        },
+                                        onFullscreen = { wc ->
+                                            // 进度接力:全屏从面板当前时刻继续(lap-detail-triview-panel)
+                                            navController.navigate("lap_video/$sessionId/$lapIndex?startWc=$wc")
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                } else {
+                                    // round fix-lap-detail-ux-three-touch-issues Bug 2 二轮：占位
+                                    // 锁定 LapVideoPanel 默认 16:9 高度避免 ctx ready 后 layout 跳动
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(16f / 9f),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = if (videoCtxLoadFailed) "视频不可用" else "加载视频中…",
+                                            style = TrackTechTypography.ScoreSmall,
+                                            color = TrackTechColors.TextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
                             }
                             LapDetailPanelId.OVERVIEW ->
                                 LapOverviewSection(lapIndex = lapIndex, telemetry = telemetry)

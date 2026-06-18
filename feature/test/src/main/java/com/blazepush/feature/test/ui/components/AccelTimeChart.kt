@@ -1,7 +1,7 @@
 package com.blazepush.feature.test.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import com.blazepush.core.domain.model.LapTelemetrySample
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.ui.tracktech.MetricKind
 import com.blazepush.feature.test.ui.tracktech.MetricNumber
 import com.blazepush.feature.test.ui.tracktech.MetricSize
@@ -55,7 +56,11 @@ fun AccelTimeChart(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(samples) {
-                    detectDragGestures { change, _ ->
+                    // round fix-lap-detail-ux-three-touch-issues：水平方向锁定，
+                    // 垂直方向不消费 → 父级 LazyColumn 接管上下滚动。
+                    detectHorizontalDragGestures(
+                        onDragStart = { FileLogger.v("Chart", "horizDrag start chart=Accel") },
+                    ) { change, _ ->
                         change.consume()
                         val touchX = change.position.x
                         val lapDurationMs = if (samples.size >= 2) {

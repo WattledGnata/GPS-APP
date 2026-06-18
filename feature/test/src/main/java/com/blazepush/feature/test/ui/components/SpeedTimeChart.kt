@@ -2,7 +2,7 @@
 package com.blazepush.feature.test.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.domain.model.LapTelemetrySample
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.ui.tracktech.MetricKind
 import com.blazepush.feature.test.ui.tracktech.MetricNumber
 import com.blazepush.feature.test.ui.tracktech.MetricSize
@@ -150,10 +151,13 @@ fun SpeedTimeChart(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(samples) {
-                    detectDragGestures { change, _ ->
+                    // round fix-lap-detail-ux-three-touch-issues：水平方向锁定，
+                    // 垂直方向不消费 → 父级 LazyColumn 接管上下滚动。
+                    detectHorizontalDragGestures(
+                        onDragStart = { FileLogger.v("Chart", "horizDrag start chart=Speed") },
+                    ) { change, _ ->
                         // L1 R2 P0-R2-1 保险层：触摸 detector 内 size <= 1 守卫
-                        // （与 Composable 入口 early-return 双层保护，防 Composable 重组瞬态）
-                        if (samples.size <= 1) return@detectDragGestures
+                        if (samples.size <= 1) return@detectHorizontalDragGestures
                         change.consume()
                         val touchX = change.position.x
                         val lapDurationMs =

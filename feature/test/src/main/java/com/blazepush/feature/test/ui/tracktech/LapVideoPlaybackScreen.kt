@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,7 +25,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -38,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
@@ -228,6 +235,10 @@ fun LapVideoPlaybackScreen(
     var playheadRangeUi by remember { mutableStateOf<LongRange?>(null) }
     // 进度条拖动 seek 请求(循环每 tick 消费;atEnd 停驻态也会被它唤醒)
     var seekRequestWallClock by remember { mutableStateOf<Long?>(null) }
+    // round fix-lap-detail-ux-three-touch-issues Bug 3：用户暂停 flag。
+    // true 时状态机循环开头 exoPlayer.pause() 且 skip playhead 推进；
+    // 双击屏幕 / 中央 IconButton 都切换它。Slider seek 仍写入，恢复播放后下一 tick 消费。
+    var userPaused by remember { mutableStateOf(false) }
     // round move-export-to-playback-and-relax-replay-gate：视频时长（ExoPlayer READY 后回填），
     // 用于在播放页算当前圈相对视频覆盖段的覆盖程度（决定导出按钮 enable/disable）。<=0 表示未知。
     var videoDurationMs by remember { mutableStateOf(0L) }
@@ -355,6 +366,15 @@ fun LapVideoPlaybackScreen(
         var atEnd = false
 
         while (isActive) {
+            // round fix-lap-detail-ux-three-touch-issues Bug 3：用户暂停 flag 优先判定。
+            // userPaused 时 ExoPlayer pause + playhead 不推进 + 不消费 seek（待恢复播放后消费），
+            // 段切换 / 覆盖判定 / atEnd 既有语义全跳过。
+            if (userPaused) {
+                if (exoPlayer.isPlaying) exoPlayer.pause()
+                playheadUiWallClock = playheadWallClock
+                delay(PLAYHEAD_TICK_MS)
+                continue
+            }
             val nowRealtime = System.currentTimeMillis()
 
             // 进度条 seek 请求(任意时刻,含 atEnd 停驻态)
@@ -460,7 +480,14 @@ fun LapVideoPlaybackScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            // round fix-lap-detail-ux-three-touch-issues Bug 3：双击屏幕任意非按钮位置切换 userPaused
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = {
+                    userPaused = !userPaused
+                    FileLogger.d(TAG, "userPaused -> $userPaused via doubleTap")
+                })
+            },
     ) {
         // 加载/失败/内容三态：if/else 分支（M2：禁 early-return）
         if (loadFailed) {
@@ -525,6 +552,27 @@ fun LapVideoPlaybackScreen(
                         .fillMaxWidth(0.5f)
                         .padding(bottom = 8.dp),
                 )
+            }
+            // round fix-lap-detail-ux-three-touch-issues Bug 3：中央播放按钮仅暂停态可见，
+            // 半透明圆形背景 + Play 图标；点击恢复播放。播放中无视觉干扰。
+            if (userPaused) {
+                IconButton(
+                    onClick = {
+                        userPaused = false
+                        FileLogger.d(TAG, "userPaused -> false via centerButton")
+                    },
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(80.dp)
+                        .background(Color.Black.copy(alpha = 0.4f), shape = CircleShape),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = "play",
+                        tint = Color.White,
+                        modifier = Modifier.size(56.dp),
+                    )
+                }
             }
             // 导出进度遮罩（观察 VideoExportProgressBus；完成弹分享 / 失败 Toast）。
             // 导出从本屏发起，进度/分享在本屏显示。M2：三态 if/else 禁 early-return。
