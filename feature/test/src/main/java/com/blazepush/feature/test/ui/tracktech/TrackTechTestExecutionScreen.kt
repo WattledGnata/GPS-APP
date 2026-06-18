@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -107,6 +109,10 @@ fun TrackTechTestExecutionScreen(
         onDispose { view.keepScreenOn = false }
     }
 
+    // round perftest-result-detail-navigation-feedback：成绩闭合后 Toast "已保存到历史" + 按钮
+    // 文案改"查看详情" + 点击 navigate 详情屏（消除"必须点 Done 才记录"的体感错觉）。
+    val context = LocalContext.current
+
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
@@ -128,6 +134,9 @@ fun TrackTechTestExecutionScreen(
     LaunchedEffect(testState) {
         val s = testState
         if (s is TestState.Completed) {
+            // round perftest-result-detail-navigation-feedback：成绩落库后 Toast 反馈消除
+            // "必须点 Done 才记录"体感错觉（实际 finishTest 已自动 saveResult）
+            Toast.makeText(context, "已保存到历史", Toast.LENGTH_SHORT).show()
             // unify-speed-judgement-source Decision 3:DNF(totalTime<=0)播"测试未完成",
             // 不播"零点零零秒"
             if (s.result.totalTime <= 0.0) {
@@ -247,7 +256,16 @@ fun TrackTechTestExecutionScreen(
                 sessionViewModel.cancelTest()
                 navController.popBackStack()
             },
-            onDone = { navController.popBackStack() },
+            // round perftest-result-detail-navigation-feedback：Completed → navigate 详情屏
+            // （跟 RecordsHomeScreen 历史入口同源 performance_result/{testId}）；race fallback popBackStack
+            onDone = {
+                val s = testState
+                if (s is TestState.Completed) {
+                    navController.navigate("performance_result/${s.result.id}")
+                } else {
+                    navController.popBackStack()
+                }
+            },
         )
 
         Spacer(Modifier.height(16.dp))
@@ -730,7 +748,7 @@ private fun CancelOrDoneButton(
     onDone: () -> Unit,
 ) {
     val isComplete = testState is TestState.Completed
-    val label = if (isComplete) "DONE" else "CANCEL TEST"
+    val label = if (isComplete) "查看详情" else "CANCEL TEST"
     val color = if (isComplete) TrackTechColors.Green else TrackTechColors.Red
     val onClick = if (isComplete) onDone else onCancel
     val shape = CutCornerPanelShape(10.dp, cutCornersAll)
