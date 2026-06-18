@@ -81,6 +81,81 @@ private val mainPresets: List<Track> = listOf(
                 minDirectionalSpeedMps = null
             )
         )
+    ),
+    // round add-preset-track-xic：厦门国际赛车场（XIC, Xiamen International Circuit）。
+    // 数据来源：vbo session_20260530_1340.vbo（25Hz × 1758 samples / lap=002 fast lap 70.3s
+    // 累计 haversine 1662.0m）+ rcz track_厦门国际赛车场.rcz（3 traps：S/F + Split1 + Split2）。
+    // referencePath：lap=002 等距采样 15 点 + 闭合（design D1）；trap GeoLine 端点 = center ±
+    // (width/2) × right_perp(bearing)（design D2）；passDirection magnitude 0.00025° 跟 TFIC
+    // 同量级（design D3）。详见 OpenSpec change add-preset-track-xic/design.md。
+    // id 命名跟 TFIC `preset-tfic-lpcc` 风格一致，对齐 livetiming 服务端 trackId 契约。
+    Track(
+        id = "preset-xic-lpcc",
+        name = TrackName(
+            zh = "厦门国际赛车场",
+            en = "Xiamen International Racetrack",
+            abbr = "XIC",
+        ),
+        lengthKm = 1.662,
+        thumbnailAssetPath = null,
+        referencePath = TrackPath(
+            points = listOf(
+                GeoPoint(24.6546828, 118.3154782),
+                GeoPoint(24.6552135, 118.3164043),
+                GeoPoint(24.6546617, 118.3168557),
+                GeoPoint(24.6536902, 118.3166453),
+                GeoPoint(24.6531167, 118.3157807),
+                GeoPoint(24.6523408, 118.3151843),
+                GeoPoint(24.6522182, 118.3142233),
+                GeoPoint(24.6529005, 118.3149722),
+                GeoPoint(24.6535662, 118.3157582),
+                GeoPoint(24.6542783, 118.3163143),
+                GeoPoint(24.6540497, 118.3154542),
+                GeoPoint(24.6533417, 118.3146808),
+                GeoPoint(24.6527822, 118.3138377),
+                GeoPoint(24.6535010, 118.3137048),
+                GeoPoint(24.6540982, 118.3145875),
+                GeoPoint(24.6546828, 118.3154782)
+            )
+        ),
+        startFinishGate = TimingGate(
+            id = "start-finish",
+            name = "起点",
+            type = TimingGateType.StartFinish,
+            line = GeoLine(
+                start = GeoPoint(24.6544286231580, 118.3156752761548),
+                end = GeoPoint(24.6549747101753, 118.3152387238452)
+            ),
+            passDirection = GeoVector(x = 0.0002225331396, y = 0.0001469463131),
+            sequenceIndex = 0,
+            minDirectionalSpeedMps = null
+        ),
+        sectorGates = listOf(
+            TimingGate(
+                id = "s1",
+                name = "s1",
+                type = TimingGateType.Sector,
+                line = GeoLine(
+                    start = GeoPoint(24.6524060479335, 118.3147959732798),
+                    end = GeoPoint(24.6519949520665, 118.3149973600536)
+                ),
+                passDirection = GeoVector(x = -0.0002512853751, y = -0.0001016841608),
+                sequenceIndex = 1,
+                minDirectionalSpeedMps = null
+            ),
+            TimingGate(
+                id = "s2",
+                name = "s2",
+                type = TimingGateType.Sector,
+                line = GeoLine(
+                    start = GeoPoint(24.6540243516169, 118.3150808585765),
+                    end = GeoPoint(24.6537006483831, 118.3154248080901)
+                ),
+                passDirection = GeoVector(x = -0.0001978659847, y = -0.0001736645926),
+                sequenceIndex = 2,
+                minDirectionalSpeedMps = null
+            )
+        )
     )
 )
 
