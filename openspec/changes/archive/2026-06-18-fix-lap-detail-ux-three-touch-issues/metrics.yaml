@@ -1,0 +1,24 @@
+estimated_days: 0.3
+actual_days: 0.4
+complexity: "small"
+review_mode: "road-test-first"
+review_rounds_l1: 0
+review_rounds_l2: 0
+codex_l1_findings: []  # road-test-first 模式跳过 Codex review
+codex_l2_findings: []
+review_findings_l1: []  # 加速通道无 Opus 子 agent
+review_findings_l2: []
+divergence_reason: "Bug 2 一轮 scrollToItem 方案治标不治本（vivo 真机反馈"先看到非 VIDEO 再滑过去"），中途撤销改"占位准入"二轮 fix——transparent 声明，apply 期发现 design drift 但属于 UX 行为不合预期触发的方案重写，非 design Decision drift"
+phase: "Track Tech V2 维护期"
+model_apply: "opus"
+design_decisions_diverged_during_apply:
+  - "Bug 2 Decision 2 从 LaunchedEffect(videoEligible) animateScrollToItem 改为 sessionHasVideo 三态占位准入；真机反馈驱动方案重写，非偏离决策"
+cross_round_field_drift_resolved: []
+accelerated_escalation: null
+file_logger_anchors:
+  - "Chart.horizDrag start (SpeedTimeChart/AccelTimeChart onDragStart)"
+  - "LapDetail.sessionHasVideo=$value sid=$sid"
+  - "LapDetail.video panel anchor scrollToItem idx=$idx (Bug 2 一轮残留埋点，二轮 fix 后不会触发)"
+  - "LapDetail.video ctx load failed sid=$sid idx=$idx"
+  - "VideoOverlay.userPaused -> $value via doubleTap"
+  - "VideoOverlay.userPaused -> false via centerButton"
