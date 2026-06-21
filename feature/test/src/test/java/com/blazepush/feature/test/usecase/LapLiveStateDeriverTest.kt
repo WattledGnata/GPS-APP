@@ -321,18 +321,68 @@ class LapLiveStateDeriverTest {
     }
 
     @Test
-    fun `gps signal lost when data age exceeds 1000ms`() {
+    fun `gps signal lost only when data age exceeds 30s`() {
+        // F2：短暂丢点不再 1 秒就报丢失，必须持续超过 30 秒才提示
         val state = LapLiveStateDeriver.derive(
             session = null,
             currentDisplayTimeMs = 0L,
             gpsData = goodGpsData(),
             connectionState = ConnectionState.CONNECTED,
-            dataQuality = goodDataQuality().copy(dataAge = 1_500L),
+            dataQuality = goodDataQuality().copy(dataAge = 31_000L),
             deltaToBestMs = null,
             deltaIsStale = false,
         )
 
         assertEquals(AbnormalState.GPS_SIGNAL_LOST, state.abnormalState)
+    }
+
+    @Test
+    fun `short gps dropout under 30s stays silent`() {
+        // F2 核心：录制中 GPS 短暂丢点（10 秒）不弹任何异常提示，计时画面照常
+        val state = LapLiveStateDeriver.derive(
+            session = null,
+            currentDisplayTimeMs = 0L,
+            gpsData = goodGpsData(),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality().copy(dataAge = 10_000L),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertNull(state.abnormalState)
+    }
+
+    @Test
+    fun `gps dropout exactly at 30s threshold stays silent`() {
+        // F2 边界：dataAge 恰好 30 秒仍静默，必须严格超过才提示
+        val state = LapLiveStateDeriver.derive(
+            session = null,
+            currentDisplayTimeMs = 0L,
+            gpsData = goodGpsData(),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality().copy(dataAge = 30_000L),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertNull(state.abnormalState)
+    }
+
+    @Test
+    fun `satellite zero with fresh data is waiting not signal lost`() {
+        // F2：卫星瞬间 0 但数据新鲜（仍在收帧）不再立即报 GPS SIGNAL LOST，
+        // 降级为 WAITING_FOR_GPS_LOCK（柔和"等待定位"语义）
+        val state = LapLiveStateDeriver.derive(
+            session = null,
+            currentDisplayTimeMs = 0L,
+            gpsData = goodGpsData().copy(satelliteCount = 0),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertEquals(AbnormalState.WAITING_FOR_GPS_LOCK, state.abnormalState)
     }
 
     @Test

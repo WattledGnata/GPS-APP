@@ -429,20 +429,39 @@ private fun LapHudPage(
                 isReady = lapLiveState.abnormalState == null,
             )
 
-            if (lapLiveState.abnormalState != null) {
+            val abnormal = lapLiveState.abnormalState
+            // F2（fix-gps-stale-ux）：异常态分两档渲染。
+            // 硬打断（BLE 断开 / 圈失效）继续用大 banner 盖住仪表盘强提醒；
+            // 软提示（GPS 信号丢失 / 等待定位）不盖计时，仅在仪表盘顶部叠加柔和小条，
+            // 行驶中 GPS 短暂丢点（已由 deriver 静默 30s 内）即便超时也不抢走计时画面。
+            val isHardInterrupt = abnormal == AbnormalState.BLE_DISCONNECTED ||
+                abnormal == AbnormalState.LAP_INVALIDATED
+            if (isHardInterrupt) {
                 AbnormalBanner(
-                    state = lapLiveState.abnormalState!!,
+                    state = abnormal!!,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                 )
             } else {
-                Lap2x2Dashboard(
-                    state = lapLiveState,
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                )
+                ) {
+                    Lap2x2Dashboard(
+                        state = lapLiveState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    if (abnormal != null) {
+                        SoftSignalHint(
+                            state = abnormal,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 4.dp),
+                        )
+                    }
+                }
             }
 
             HoldToEndButton(
@@ -915,6 +934,40 @@ private fun AbnormalBanner(
                 text = text,
                 style = TrackTechTypography.RacingTitleLarge,
                 color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * F2（fix-gps-stale-ux）软提示：GPS 信号丢失 / 等待定位时在仪表盘顶部叠加的柔和小条，
+ * 不盖住计时数字（区别于硬打断的 [AbnormalBanner] 全屏大字 + 边框）。
+ */
+@Composable
+private fun SoftSignalHint(
+    state: AbnormalState,
+    modifier: Modifier = Modifier,
+) {
+    val text = when (state) {
+        AbnormalState.GPS_SIGNAL_LOST -> "信号搜索中…"
+        AbnormalState.WAITING_FOR_GPS_LOCK -> "等待 GPS 定位…"
+        // 硬打断由 LapHudPage 分流到 AbnormalBanner，不会走到这里
+        AbnormalState.BLE_DISCONNECTED, AbnormalState.LAP_INVALIDATED -> null
+    }
+    if (text != null) {
+        Row(
+            modifier = modifier
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .background(TrackTechColors.Cyan.copy(alpha = 0.14f))
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = text,
+                style = TrackTechTypography.RacingTitleSmall,
+                color = TrackTechColors.Cyan,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

@@ -45,7 +45,12 @@ enum class AbnormalState {
  */
 object LapLiveStateDeriver {
 
-    private const val GPS_DATA_AGE_THRESHOLD_MS = 1000L
+    // F2（fix-gps-stale-ux）：GPS 丢点提示分级阈值
+    // 数据新鲜门：仅当 dataAge ≤ 此值才用瞬时卫星数判 WAITING（典型出发前还没锁星）
+    private const val GPS_DATA_FRESH_THRESHOLD_MS = 1_000L
+    // 信号丢失门：持续收不到新数据超过此值才报"信号丢失"。录制中行驶时短暂丢点（隧道/遮挡）
+    // 保持静默不吓人；用户设定 30 秒。
+    private const val GPS_SIGNAL_LOST_THRESHOLD_MS = 30_000L
     private const val MIN_SATELLITES_FOR_FIX = 6
 
     // LAP_INVALIDATED banner 显示时长：触发后 banner 持续显示这么久。
@@ -140,10 +145,15 @@ object LapLiveStateDeriver {
         if (connectionState != ConnectionState.CONNECTED) {
             return AbnormalState.BLE_DISCONNECTED
         }
-        if (dataQuality.dataAge > GPS_DATA_AGE_THRESHOLD_MS || gpsData.satelliteCount == 0) {
+        // F2：仅当持续超过 30 秒收不到新数据才报"信号丢失"。录制中行驶时 GPS 短暂丢点
+        // （隧道/遮挡，dataAge 1~30s）保持静默，gpsData 维持上一帧旧值、计时画面照常显示。
+        if (dataQuality.dataAge > GPS_SIGNAL_LOST_THRESHOLD_MS) {
             return AbnormalState.GPS_SIGNAL_LOST
         }
-        if (gpsData.satelliteCount < MIN_SATELLITES_FOR_FIX) {
+        // F2：仅在数据仍新鲜（≤1s）时才用瞬时卫星数判"等待定位"——典型出发前还没锁星。
+        // 短暂丢点期间数据不新鲜，gpsData 卫星数是丢失前旧值（通常充足）不会误触发；
+        // 瞬时卫星 0 但仍在收帧也归这里（柔和"等待"而非吓人的"信号丢失"）。
+        if (dataQuality.dataAge <= GPS_DATA_FRESH_THRESHOLD_MS && gpsData.satelliteCount < MIN_SATELLITES_FOR_FIX) {
             return AbnormalState.WAITING_FOR_GPS_LOCK
         }
         val invalidatingEvents = session?.crossingEvents
