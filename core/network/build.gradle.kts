@@ -61,6 +61,9 @@ dependencies {
     implementation(libs.gson)
 
     testImplementation(libs.junit)
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // coroutines-test 在本 android module 离线 transform 失败；诊断上传单测无真实挂起点
+    // （OkHttp execute 同步阻塞），改用 stdlib startCoroutine 跑 suspend（见 DiagnosticLogUploaderTest）
+    // testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    // mockwebserver 离线无缓存且无测试实际使用；诊断上传单测改用 JDK 内置 HttpServer（见 DiagnosticLogUploaderTest）
+    // testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

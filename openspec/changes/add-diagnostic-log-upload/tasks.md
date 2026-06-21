@@ -5,19 +5,19 @@
 
 ## 2. 元数据采集
 
-- [ ] 2.1 新建 `diagnostic/DiagnosticMetadata.kt`：`data class DiagnosticMetadata(deviceModel, androidId, versionName, versionCode, capturedAtMs, ticket: String?)` + `fun collect(context, ticket): DiagnosticMetadata`（`Build.MANUFACTURER+" "+MODEL`、`Settings.Secure.ANDROID_ID`、`BuildConfig.VERSION_NAME/CODE`、`System.currentTimeMillis()`）。done：data class + collect（实现 design Decision 7）
-- [ ] 2.2 新增测试 `DiagnosticMetadataTest.kt`：mock/Robolectric context，断言必填字段非空、ticket 透传。对应 spec『上传元数据随包上送』。
+- [x] 2.1 新建 `diagnostic/DiagnosticMetadata.kt`：`data class DiagnosticMetadata(deviceModel, androidId, versionName, versionCode, capturedAtMs, ticket: String?)` + `fun collect(context, ticket): DiagnosticMetadata`（`Build.MANUFACTURER+" "+MODEL`、`Settings.Secure.ANDROID_ID`、`BuildConfig.VERSION_NAME/CODE`、`System.currentTimeMillis()`）。done：data class + collect（实现 design Decision 7）
+- [x] 2.2 新增测试 `DiagnosticMetadataTest.kt`：mock/Robolectric context，断言必填字段非空、ticket 透传。对应 spec『上传元数据随包上送』。
 
 ## 3. 上传链路（core/network）
 
-- [ ] 3.1 新建 `core/network/src/main/java/com/blazepush/core/network/DiagnosticLogUploader.kt`：`suspend fun upload(zip: File, meta: DiagnosticMetadata, onProgress: (Float)->Unit): Result<String>`。OkHttp `MultipartBody`：`file`(zip, application/zip) + meta form 字段；进度用自定义 `RequestBody` 包装；复用 `LivetimingClient` 的 OkHttp 实例 + baseUrl + Bearer token；解析响应 JSON `logId`。done：suspend 返回 `Result<logId>`（实现 design Decision 5/9）
-- [ ] 3.2 改 `app/build.gradle`（+ 相关 module build.gradle 如需）：BuildConfig 加 `LIVETIMING_LOGS_PATH = "/api/v1/logs"` 常量（baseUrl/token 复用 livetiming，不新增）。done：BuildConfig 字段可用
-- [ ] 3.3 新增测试 `core/network/src/test/.../DiagnosticLogUploaderTest.kt`：MockWebServer 断言请求是 multipart 且含 `file` + 全部必填 meta 字段、200+`{logId}` 解析成功、400/IO 异常 → `Result.failure`。对应 spec『服务端 API 契约』客户端侧 + 『上传状态』失败路径。
+- [x] 3.1 新建 `core/network/src/main/java/com/blazepush/core/network/DiagnosticLogUploader.kt`：`suspend fun upload(zip: File, meta: DiagnosticMetadata, onProgress: (Float)->Unit): Result<String>`。OkHttp `MultipartBody`：`file`(zip, application/zip) + meta form 字段；进度用自定义 `RequestBody` 包装；复用 `LivetimingClient` 的 OkHttp 实例 + baseUrl + Bearer token；解析响应 JSON `logId`。done：suspend 返回 `Result<logId>`（实现 design Decision 5/9）
+- [x] 3.2 实施期简化：端点路径固定无需注入 → 改用代码常量 `DiagnosticLogUploader.LOGS_PATH = "/api/v1/logs"`（companion），baseUrl/token 复用现有 `BuildConfig.LIVETIMING_BASE_URL/TOKEN`，**无需改 build.gradle**。属 spec drift 而非 design 修订（design Decision 5 本就允许常量）。
+- [x] 3.3 新增测试 `core/network/src/test/.../DiagnosticLogUploaderTest.kt`：MockWebServer 断言请求是 multipart 且含 `file` + 全部必填 meta 字段、200+`{logId}` 解析成功、400/IO 异常 → `Result.failure`。对应 spec『服务端 API 契约』客户端侧 + 『上传状态』失败路径。
 
 ## 4. 上传编排（状态机）
 
-- [ ] 4.1 新建 `diagnostic/DiagnosticUploadOrchestrator.kt`：`sealed class DiagnosticUploadState { Idle / Packing / Uploading(progress) / Success(logId) / Failed(reason) }` + `StateFlow<DiagnosticUploadState>` + `suspend fun start(ticket)`，在 `Dispatchers.IO` 串起 packager→uploader，失败归 `Failed(可区分原因：打包失败/网络失败/服务端<码>)`。done：orchestrator + state（实现 design Decision 8，复用 `livetiming/LapUploadOrchestrator` 模式）
-- [ ] 4.2 新增测试 `DiagnosticUploadOrchestratorTest.kt`：fake packager + fake uploader，`runTest` 断言状态流 Idle→Packing→Uploading→Success(logId)；uploader 抛错 → Failed。对应 spec『上传状态与结果反馈』3 scenarios。
+- [x] 4.1 新建 `diagnostic/DiagnosticUploadOrchestrator.kt`：`sealed class DiagnosticUploadState { Idle / Packing / Uploading(progress) / Success(logId) / Failed(reason) }` + `StateFlow<DiagnosticUploadState>` + `suspend fun start(ticket)`，在 `Dispatchers.IO` 串起 packager→uploader，失败归 `Failed(可区分原因：打包失败/网络失败/服务端<码>)`。done：orchestrator + state（实现 design Decision 8，复用 `livetiming/LapUploadOrchestrator` 模式）
+- [x] 4.2 新增测试 `DiagnosticUploadOrchestratorTest.kt`：fake packager + fake uploader，`runTest` 断言状态流 Idle→Packing→Uploading→Success(logId)；uploader 抛错 → Failed。对应 spec『上传状态与结果反馈』3 scenarios。
 
 ## 5. 暗门入口（SettingsScreen 连点版本号）
 
