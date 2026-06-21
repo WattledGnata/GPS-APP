@@ -1,7 +1,7 @@
 ## 1. 诊断数据打包（DiagnosticPackager）
 
-- [ ] 1.1 新建 `feature/test/src/main/java/com/blazepush/feature/test/diagnostic/DiagnosticPackager.kt`：`fun pack(filesDir: File, databaseDir: File, outDir: File): File`。打包 `filesDir/telemetry/*.bin` + `databaseDir/race_chrono_database`(+存在的 `-wal`/`-shm`) + `filesDir/debug_log.txt`(+存在的 `.txt.1`) 成 `outDir/diag_<ts>.zip`；硬排除 `filesDir/video/`；缺失文件 `continue` 跳过。done：返回 zip File（实现 design Decision 2/3/4）
-- [ ] 1.2 新增测试 `feature/test/src/test/.../diagnostic/DiagnosticPackagerTest.kt`：用 `createTempDir()` 造 fake filesDir（含 telemetry/*.bin、video/*.mp4、db 三件套、debug_log.txt[.1]），断言 zip 条目含 bin+db+log、**不含 video/**、缺 `.txt.1` 仍成功。对应 spec『诊断数据全量打包』3 scenarios。（用临时目录，避开 gradle test working-dir 陷阱）
+- [x] 1.1 新建 `feature/test/src/main/java/com/blazepush/feature/test/diagnostic/DiagnosticPackager.kt`：`fun pack(filesDir: File, databaseDir: File, outDir: File): File`。打包 `filesDir/telemetry/*.bin` + `databaseDir/race_chrono_database`(+存在的 `-wal`/`-shm`) + `filesDir/debug_log.txt`(+存在的 `.txt.1`) 成 `outDir/diag_<ts>.zip`；硬排除 `filesDir/video/`；缺失文件 `continue` 跳过。done：返回 zip File（实现 design Decision 2/3/4）
+- [x] 1.2 新增测试 `feature/test/src/test/.../diagnostic/DiagnosticPackagerTest.kt`：用 `createTempDir()` 造 fake filesDir（含 telemetry/*.bin、video/*.mp4、db 三件套、debug_log.txt[.1]），断言 zip 条目含 bin+db+log、**不含 video/**、缺 `.txt.1` 仍成功。对应 spec『诊断数据全量打包』3 scenarios。（用临时目录，避开 gradle test working-dir 陷阱）
 
 ## 2. 元数据采集
 
@@ -22,7 +22,7 @@
 ## 5. 暗门入口（SettingsScreen 连点版本号）
 
 - [ ] 5.1 新建 `diagnostic/VersionTapCounter.kt`（纯逻辑，可单测）：`fun tap(nowMs): Boolean`（3 秒窗口累计，达 7 返回 true 并重置，超时清零）。改 `feature/test/src/main/.../ui/settings/SettingsScreen.kt`：展示 `versionName (versionCode)`，版本号 `clickable` 调 counter，达阈值回调 `onOpenDiagnostics`。done：连点触发面板（实现 design Decision 1）
-- [ ] 5.2 新增测试 `VersionTapCounterTest.kt`：7 次触发 / 6 次不触发 / 第 4 次后超时再 3 次不累加。对应 spec『诊断上传暗门入口』3 scenarios（含 2 反例）。
+- [x] 5.2 新增测试 `VersionTapCounterTest.kt`：7 次触发 / 6 次不触发 / 第 4 次后超时再 3 次不累加。对应 spec『诊断上传暗门入口』3 scenarios（含 2 反例）。（注：5.1 的 `VersionTapCounter.kt` 逻辑已建+单测绿；5.1 剩 SettingsScreen 接线待 task 6 UI 轮）
 
 ## 6. 诊断面板 UI
 
