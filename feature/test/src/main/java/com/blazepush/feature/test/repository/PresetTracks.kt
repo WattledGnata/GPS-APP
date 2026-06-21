@@ -64,7 +64,11 @@ private val mainPresets: List<Track> = listOf(
                     start = GeoPoint(30.49004451419976, 104.43252709154902),
                     end = GeoPoint(30.48959781913357, 104.43258157511764)
                 ),
-                passDirection = GeoVector(x = -0.00002724178431097556, y = -0.00044669506619011374),
+                // 过线方向修正（fix-tfic-sector-dir）：原值 (-2.72e-5, -4.47e-4) 指向赛车行进
+                // 反方向（西），导致 detector 对正常行驶判 WrongDirection、分段计时失效。取反后
+                // 朝东 ~86°，与官方 track_天府国际赛道.rcz T7前 trap bearing 84° + 2026-06-19
+                // 真机 session 142605bb 实测行进方向一致。
+                passDirection = GeoVector(x = 0.00002724178431097556, y = 0.00044669506619011374),
                 sequenceIndex = 1,
                 minDirectionalSpeedMps = null
             ),
@@ -76,7 +80,10 @@ private val mainPresets: List<Track> = listOf(
                     start = GeoPoint(30.4957579139104, 104.4369620745035),
                     end = GeoPoint(30.495765752756267, 104.43748325882984)
                 ),
-                passDirection = GeoVector(x = -0.0002605921631704301, y = 0.000007838845867048829),
+                // 过线方向修正（fix-tfic-sector-dir）：原值 (-2.61e-4, 7.84e-6) 指向赛车行进
+                // 反方向（南），取反后朝北 ~359°，与官方 .rcz 出S弯/出T13 trap bearing + 2026-06-19
+                // 真机 session 142605bb 实测行进方向一致。
+                passDirection = GeoVector(x = 0.0002605921631704301, y = -0.000007838845867048829),
                 sequenceIndex = 2,
                 minDirectionalSpeedMps = null
             )

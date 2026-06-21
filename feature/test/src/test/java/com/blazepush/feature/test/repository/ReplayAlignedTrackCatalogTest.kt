@@ -97,8 +97,8 @@ class ReplayAlignedTrackCatalogTest {
             startLongitude = 104.43252709154902,
             endLatitude = 30.48959781913357,
             endLongitude = 104.43258157511764,
-            passDirectionX = -0.00002724178431097556,
-            passDirectionY = -0.00044669506619011374
+            passDirectionX = 0.00002724178431097556,
+            passDirectionY = 0.00044669506619011374
         )
         assertGateLine(
             gate = track.sectorGates.first { it.id == "s2" },
@@ -106,8 +106,8 @@ class ReplayAlignedTrackCatalogTest {
             startLongitude = 104.4369620745035,
             endLatitude = 30.495765752756267,
             endLongitude = 104.43748325882984,
-            passDirectionX = -0.0002605921631704301,
-            passDirectionY = 0.000007838845867048829
+            passDirectionX = 0.0002605921631704301,
+            passDirectionY = -0.000007838845867048829
         )
     }
 
@@ -140,8 +140,8 @@ class ReplayAlignedTrackCatalogTest {
             startLongitude = 104.43252709154902,
             endLatitude = 30.48959781913357,
             endLongitude = 104.43258157511764,
-            passDirectionX = -0.00002724178431097556,
-            passDirectionY = -0.00044669506619011374
+            passDirectionX = 0.00002724178431097556,
+            passDirectionY = 0.00044669506619011374
         )
         assertGateLine(
             gate = track.sectorGates.first { it.id == "s2" },
@@ -149,8 +149,8 @@ class ReplayAlignedTrackCatalogTest {
             startLongitude = 104.4369620745035,
             endLatitude = 30.495765752756267,
             endLongitude = 104.43748325882984,
-            passDirectionX = -0.0002605921631704301,
-            passDirectionY = 0.000007838845867048829
+            passDirectionX = 0.0002605921631704301,
+            passDirectionY = -0.000007838845867048829
         )
     }
 
