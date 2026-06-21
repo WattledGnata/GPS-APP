@@ -47,9 +47,14 @@ private val mainPresets: List<Track> = listOf(
             id = "start-finish",
             name = "起点",
             type = TimingGateType.StartFinish,
+            // 起终点对齐官方 MYLAPS 龙门架（align-tfic-start-finish）：原虚拟线在官方计时
+            // 线圈后方约 55m，导致圈速系统性偏快 ~0.14s。沿前进方向(passDirection)前移 55m
+            // 后，2026-06-19 真机 session 142605bb 全 17 个可比圈对官方偏差均值 0.000±0.034s
+            // （σ 最小点）。passDirection / 线宽(50m)不变；referencePath 不动。
+            // 基于单 session 标定，后续多 session 可微调。
             line = GeoLine(
-                start = GeoPoint(30.496167246506413, 104.43343794245452),
-                end = GeoPoint(30.49619075349359, 104.43291739087881)
+                start = GeoPoint(30.495674664699337, 104.4333934545891),
+                end = GeoPoint(30.495698171686513, 104.43287290301339)
             ),
             passDirection = GeoVector(x = -0.0002602757878550089, y = -0.000023506987175358924),
             sequenceIndex = 0,

@@ -84,10 +84,10 @@ class ReplayAlignedTrackCatalogTest {
 
         assertGateLine(
             gate = track.startFinishGate,
-            startLatitude = 30.496167246506413,
-            startLongitude = 104.43343794245452,
-            endLatitude = 30.49619075349359,
-            endLongitude = 104.43291739087881,
+            startLatitude = 30.495674664699337,
+            startLongitude = 104.4333934545891,
+            endLatitude = 30.495698171686513,
+            endLongitude = 104.43287290301339,
             passDirectionX = -0.0002602757878550089,
             passDirectionY = -0.000023506987175358924
         )
@@ -127,10 +127,10 @@ class ReplayAlignedTrackCatalogTest {
 
         assertGateLine(
             gate = track.startFinishGate,
-            startLatitude = 30.496167246506413,
-            startLongitude = 104.43343794245452,
-            endLatitude = 30.49619075349359,
-            endLongitude = 104.43291739087881,
+            startLatitude = 30.495674664699337,
+            startLongitude = 104.4333934545891,
+            endLatitude = 30.495698171686513,
+            endLongitude = 104.43287290301339,
             passDirectionX = -0.0002602757878550089,
             passDirectionY = -0.000023506987175358924
         )
