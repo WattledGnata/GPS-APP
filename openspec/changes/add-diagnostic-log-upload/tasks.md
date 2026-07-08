@@ -21,21 +21,21 @@
 
 ## 5. 暗门入口（SettingsScreen 连点版本号）
 
-- [ ] 5.1 新建 `diagnostic/VersionTapCounter.kt`（纯逻辑，可单测）：`fun tap(nowMs): Boolean`（3 秒窗口累计，达 7 返回 true 并重置，超时清零）。改 `feature/test/src/main/.../ui/settings/SettingsScreen.kt`：展示 `versionName (versionCode)`，版本号 `clickable` 调 counter，达阈值回调 `onOpenDiagnostics`。done：连点触发面板（实现 design Decision 1）
+- [x] 5.1 新建 `diagnostic/VersionTapCounter.kt` + 改 `SettingsScreen.kt`：版本号展示（取 `PackageInfo`，feature:test 库模块无独立 BuildConfig） + `clickable` 调 `VersionTapCounter.tap(nowMs)`，3 秒窗口达 7 次触发 `showDiagnostic=true` 弹出 `DiagnosticUploadSheet` overlay。（VersionTapCounter 逻辑已批 1 完成+单测绿；SettingsScreen 接线本批完成）
 - [x] 5.2 新增测试 `VersionTapCounterTest.kt`：7 次触发 / 6 次不触发 / 第 4 次后超时再 3 次不累加。对应 spec『诊断上传暗门入口』3 scenarios（含 2 反例）。（注：5.1 的 `VersionTapCounter.kt` 逻辑已建+单测绿；5.1 剩 SettingsScreen 接线待 task 6 UI 轮）
 
 ## 6. 诊断面板 UI
 
-- [ ] 6.1 新建诊断面板 Composable（`ui/diagnostic/DiagnosticUploadSheet.kt`）：工单号输入框 + 上传按钮 + 隐私确认 `AlertDialog`（文案"将上传行驶轨迹与诊断数据用于排查"）+ 进度条 + 成功展示 logId + 失败展示原因。订阅 `DiagnosticUploadOrchestrator.state`。隐私分支 MUST 用 if/else 渲染，禁 early return（依 [[feedback_compose_no_early_return_in_scope]]）。done：面板接通 orchestrator + 隐私确认 gate（实现 spec『隐私确认』『上传状态反馈』）
+- [x] 6.1 新建诊断面板 Composable（`ui/diagnostic/DiagnosticUploadSheet.kt`）：工单号输入框 + 上传按钮 + 隐私确认 `AlertDialog`（文案"将上传行驶轨迹与诊断数据用于排查"）+ 进度条 + 成功展示 logId + 失败展示原因。订阅 `DiagnosticUploadOrchestrator.state`。隐私分支 MUST 用 if/else 渲染，禁 early return（依 [[feedback_compose_no_early_return_in_scope]]）。done：面板接通 orchestrator + 隐私确认 gate（实现 spec『隐私确认』『上传状态反馈』）
 - [ ] 6.2 真机视觉验证（无自动化测试）：暗门面板布局/进度/logId 展示。【真机 gate，UI 视觉项】
 
 ## 7. DI 接线
 
-- [ ] 7.1 改 `feature/test/src/main/.../di/AppModule.kt`：注册 `DiagnosticPackager` / `DiagnosticLogUploader` / `DiagnosticUploadOrchestrator`。若有 `DomainModuleKoinTest` 覆盖 DI 图，同步补断言。done：Koin 注册 + DI 测试绿
+- [x] 7.1 改 `feature/test/src/main/.../di/AppModule.kt`：注册 `DiagnosticPackager` / `DiagnosticLogUploader` / `DiagnosticUploadOrchestrator`。若有 `DomainModuleKoinTest` 覆盖 DI 图，同步补断言。done：Koin 注册 + DI 测试绿
 
 ## 8. 服务端 API 契约交付（跨 repo）
 
-- [ ] 8.1 新建 `docs/api/diagnostic-log-upload-contract.md`：`POST /api/v1/logs` 完整契约（multipart 字段表 / 200 响应 / 400·401·413 错误码 / 鉴权复用 livetiming token），与 design Decision 9 一致，供 livetiming-server Go repo 实现。done：契约文档存在且自洽（spec『服务端 API 契约』的实现指引）
+- [x] 8.1 新建 `docs/api/diagnostic-log-upload-contract.md`：`POST /api/v1/logs` 完整契约（multipart 字段表 / 200 响应 / 400·401·413 错误码 / 鉴权复用 livetiming token），与 design Decision 9 一致，供 livetiming-server Go repo 实现。done：契约文档存在且自洽（spec『服务端 API 契约』的实现指引）
 
 ## 9. 编译与验证
 

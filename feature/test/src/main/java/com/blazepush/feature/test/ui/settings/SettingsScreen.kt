@@ -1,8 +1,11 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.ui.settings
 
+import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,12 +27,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.datastore.UserProfileRepository
+import com.blazepush.feature.test.diagnostic.VersionTapCounter
+import com.blazepush.feature.test.ui.diagnostic.DiagnosticUploadSheet
 import com.blazepush.feature.test.ui.tracktech.TrackTechColors
 import com.blazepush.feature.test.ui.tracktech.TrackTechTypography
 import kotlinx.coroutines.launch
@@ -48,11 +54,31 @@ fun SettingsScreen(
     userProfileRepository: UserProfileRepository = koinInject(),
 ) {
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val savedName by userProfileRepository.driverName.collectAsState(initial = "")
     // 本地 draft 驱动 TextField，避免每次 Flow 重发导致光标跳；持久化值加载后同步一次。
     var draft by remember { mutableStateOf("") }
     LaunchedEffect(savedName) {
         if (draft.isEmpty() && savedName.isNotEmpty()) draft = savedName
+    }
+
+    // 暗门连点计数器（design D1）：3 秒窗口 7 次点版本号触发诊断面板
+    val tapCounter = remember { VersionTapCounter() }
+    var showDiagnostic by remember { mutableStateOf(false) }
+
+    // 版本号（取 PackageInfo，feature:test 库模块无独立 BuildConfig versionName）
+    val pkg = remember {
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0) }.getOrNull()
+    }
+    val versionText = remember(pkg) {
+        val vName = pkg?.versionName ?: "?"
+        val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkg?.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            pkg?.versionCode?.toLong()
+        } ?: 0
+        "$vName ($vCode)"
     }
 
     Column(
@@ -148,5 +174,29 @@ fun SettingsScreen(
                 },
             )
         }
+
+        // 版本号（暗门入口：连点 7 次弹出诊断上传面板，design D1）
+        Spacer(Modifier.weight(1f))
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = versionText,
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.TextMuted,
+                modifier = Modifier.clickable {
+                    val now = System.currentTimeMillis()
+                    if (tapCounter.tap(now)) {
+                        showDiagnostic = true
+                    }
+                }
+            )
+        }
+    }
+
+    // 诊断上传面板 overlay（暗门触发后用全屏 Box 遮盖，非独立路由）
+    if (showDiagnostic) {
+        DiagnosticUploadSheet(onDismiss = { showDiagnostic = false })
     }
 }

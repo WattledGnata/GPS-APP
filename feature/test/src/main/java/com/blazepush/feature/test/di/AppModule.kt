@@ -124,6 +124,8 @@ val repositoryModule = module {
     // livetiming-lap-upload round：上报门面（token 走 BuildConfig）+ 出圈上报编排
     single<com.blazepush.core.network.LapUploadApi> { LivetimingUploader.create() }
     single<com.blazepush.feature.test.livetiming.LapUploadTrigger> { LapUploadOrchestrator(get(), get(), get()) }
+    // add-diagnostic-log-upload round：诊断上传门面（token/baseUrl 走 core:network BuildConfig）
+    single<com.blazepush.core.network.DiagnosticLogUploadApi> { com.blazepush.core.network.DiagnosticLogUploader() }
 }
 
 /**
