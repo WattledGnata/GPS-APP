@@ -24,7 +24,7 @@ android {
             "LIVETIMING_TOKEN",
             "\"${localProps.getProperty("LIVETIMING_TOKEN", "PLACEHOLDER_TOKEN")}\"",
         )
-        buildConfigField("String", "LIVETIMING_BASE_URL", "\"http://111.229.149.252:8080/\"")
+        buildConfigField("String", "LIVETIMING_BASE_URL", "\"https://wattled.cn/\"")
     }
 
     buildTypes {
