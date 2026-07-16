@@ -59,6 +59,11 @@ class BluetoothDataSource(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    // 外接 GPS 设备电量百分比（null = 无此服务 / 未读到）
+    @Suppress("PropertyName")
+    private val _batteryPercent = MutableStateFlow<Int?>(null)
+    val batteryPercent: StateFlow<Int?> = _batteryPercent.asStateFlow()
+
     private var bleConnection: BleConnection? = null
 
     /**
@@ -108,6 +113,11 @@ class BluetoothDataSource(
                         launch {
                             bleConnection?.dataStale?.collect { stale ->
                                 _dataFlow.value = _dataFlow.value.copy(isStale = stale)
+                            }
+                        }
+                        launch {
+                            bleConnection?.batteryPercent?.collect { pct ->
+                                _batteryPercent.value = pct
                             }
                         }
                         // drop(1):跳过 BleConnection StateFlow 的 replay 初值(新实例恒 DISCONNECTED,
@@ -178,6 +188,7 @@ class BluetoothDataSource(
             _connectionState.value = ConnectionState.DISCONNECTED
             // isStale 一并清：断开后由 connectionState 主导 UI，陈旧软状态无意义残留会污染重连首帧前的判定
             _dataFlow.value = _dataFlow.value.copy(isConnected = false, isStale = false)
+            _batteryPercent.value = null
         }
     }
 

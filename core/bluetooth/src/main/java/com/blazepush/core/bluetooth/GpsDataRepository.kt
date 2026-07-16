@@ -12,6 +12,7 @@ class GpsDataRepository(
 ) {
     val gpsDataFlow: StateFlow<GpsData> = bluetoothDataSource.dataFlow
     val connectionState: StateFlow<ConnectionState> = bluetoothDataSource.connectionState
+    val batteryPercent: StateFlow<Int?> = bluetoothDataSource.batteryPercent
 
     fun connect(deviceAddress: String) {
         bluetoothDataSource.connect(deviceAddress)

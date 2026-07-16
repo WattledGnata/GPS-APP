@@ -80,6 +80,14 @@ class GpsDataViewModel(
             initialValue = emptyList()
         )
 
+    // 外接 GPS 设备电量百分比（null = 无电量能力 / 未读到）
+    val batteryPercent: StateFlow<Int?> = gpsDataRepository.batteryPercent
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null,
+        )
+
     // 数据统计
     private var lastDataTime = 0L
 

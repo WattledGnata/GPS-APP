@@ -18,6 +18,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Battery1Bar
+import androidx.compose.material.icons.filled.Battery2Bar
+import androidx.compose.material.icons.filled.Battery3Bar
+import androidx.compose.material.icons.filled.Battery4Bar
+import androidx.compose.material.icons.filled.Battery5Bar
+import androidx.compose.material.icons.filled.Battery6Bar
+import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatteryUnknown
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.GpsFixed
@@ -104,6 +113,7 @@ fun DeviceHomeScreen(
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
+    val batteryPercent by gpsViewModel.batteryPercent.collectAsState()
     // ble-device-memory：已保存设备（入口 subtitle + 管理 sheet）
     val savedDevices by gpsViewModel.savedDevices.collectAsState()
 
@@ -211,6 +221,7 @@ fun DeviceHomeScreen(
             onDisconnectClick = {
                 gpsViewModel.disconnect()
             },
+            batteryPercent = batteryPercent,
         )
 
         Column(
@@ -373,6 +384,7 @@ private fun ConnectedDeviceCard(
     deviceName: String,
     onScanClick: () -> Unit,
     onDisconnectClick: () -> Unit,
+    batteryPercent: Int? = null,
 ) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     val statusText = when {
@@ -423,6 +435,11 @@ private fun ConnectedDeviceCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // 电量指示器：仅已连接时显示
+            if (batteryPercent != null || isConnected) {
+                Spacer(Modifier.height(10.dp))
+                BatteryIndicator(batteryPercent = batteryPercent)
+            }
             Spacer(Modifier.height(14.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -471,6 +488,59 @@ private fun ConnectedDeviceCard(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 外接 GPS 设备电量指示器。
+ * - 有值：电池图标（按百分比映射 7 档）+ Mechanical 百分比数字 + "%"
+ * - null 且已连接（设备无电量服务）：灰色 BatteryUnknown + "N/A"
+ *
+ * 图标映射：>=95=BatteryFull, >=80=Battery6Bar, >=60=Battery5Bar,
+ *           >=40=Battery4Bar, >=20=Battery3Bar, >=10=Battery2Bar,
+ *           >=1=Battery1Bar, ==0=BatteryAlert
+ * 颜色：>20% 白色，<=20% TrackTechColors.Red，N/A 灰色
+ */
+@Composable
+private fun BatteryIndicator(batteryPercent: Int?) {
+    val (icon, tint) = when (batteryPercent) {
+        null -> Icons.Filled.BatteryUnknown to TrackTechColors.TextMuted
+        in 95..100 -> Icons.Filled.BatteryFull to TrackTechColors.TextPrimary
+        in 80..94 -> Icons.Filled.Battery6Bar to TrackTechColors.TextPrimary
+        in 60..79 -> Icons.Filled.Battery5Bar to TrackTechColors.TextPrimary
+        in 40..59 -> Icons.Filled.Battery4Bar to TrackTechColors.TextPrimary
+        in 20..39 -> Icons.Filled.Battery3Bar to TrackTechColors.TextPrimary
+        in 10..19 -> Icons.Filled.Battery2Bar to TrackTechColors.Red
+        in 1..9 -> Icons.Filled.Battery1Bar to TrackTechColors.Red
+        0 -> Icons.Filled.BatteryAlert to TrackTechColors.Red
+        else -> Icons.Filled.BatteryUnknown to TrackTechColors.TextMuted
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = if (batteryPercent != null) "Battery $batteryPercent%" else "Battery unknown",
+            tint = tint,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        if (batteryPercent != null) {
+            MetricNumber(
+                value = batteryPercent.toString(),
+                unit = "%",
+                size = MetricSize.Small,
+                kind = MetricKind.Mechanical,
+                valueColor = tint,
+            )
+        } else {
+            Text(
+                text = "N/A",
+                style = TrackTechTypography.ScoreSmall,
+                color = TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
