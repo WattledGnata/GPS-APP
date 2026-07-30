@@ -95,7 +95,6 @@ fun LapDetailScreen(
 
     // lap-detail-triview-panel:视频面板数据(2026-06-05 二轮:改用 LapPlaybackLoader 共享
     // 加载管线——overlay 帧/圈窗口/赛道点与全屏页同源;load 失败(无视频/无覆盖)即不渲染面板)。
-    var videoFilePath by remember { mutableStateOf<String?>(null) }
     var videoPlaybackContext by remember { mutableStateOf<LapPlaybackLoader.LapPlaybackContext?>(null) }
     // round fix-lap-detail-ux-three-touch-issues Bug 2 二轮：sessionHasVideo 三态
     // (null=待判定乐观假设 / true=有视频 / false=无视频)。null/true 阶段 VIDEO panel
@@ -108,9 +107,11 @@ fun LapDetailScreen(
         // 先快查 session.videoFilePath（Room 单表 select，<50ms）判定 sessionHasVideo —
         // 让 VIDEO panel 占位状态尽快稳定（视频 session：保持占位；无视频 session：filter 掉）
         val sessionVideo = withContext(Dispatchers.IO) {
-            telemetryRepository.getSession(sessionId)?.videoFilePath
+            val session = telemetryRepository.getSession(sessionId)
+            val segments = telemetryRepository.getVideoSegments(sessionId)
+            segments.isNotEmpty() || session?.videoFilePath != null
         }
-        sessionHasVideo = sessionVideo != null
+        sessionHasVideo = sessionVideo
         FileLogger.d("LapDetail", "sessionHasVideo=$sessionHasVideo sid=$sessionId")
 
         val result = telemetryRepository.getLapTelemetry(sessionId, lapIndex)
@@ -131,7 +132,6 @@ fun LapDetailScreen(
                 LapPlaybackLoader.load(sessionId, lapIndex, telemetryRepository, trackCatalog)
             }
             if (loaded != null) {
-                videoFilePath = loaded.first.videoFilePath
                 videoPlaybackContext = loaded.second
                 FileLogger.d(
                     "LapDetail",
@@ -139,7 +139,6 @@ fun LapDetailScreen(
                         "videoStart=${loaded.second.videoStartedAtWallClock} frames=${loaded.second.frames.size}",
                 )
             } else {
-                videoFilePath = null
                 videoPlaybackContext = null
                 videoCtxLoadFailed = true
                 FileLogger.e("LapDetail", "video ctx load failed sid=$sessionId idx=$lapIndex")
@@ -208,7 +207,7 @@ fun LapDetailScreen(
             // 三态（null=待判定乐观假设/true=有视频/false=无视频）。null/true 阶段 VIDEO 立即占位到 list[0]；
             // false 阶段 VIDEO 从 visiblePanels filter 掉。videoCtxReady 控制 VIDEO panel 内部三态（占位 vs 真内容）。
             val videoSlotEligible = sessionHasVideo != false
-            val videoCtxReady = videoFilePath != null && videoPlaybackContext != null
+            val videoCtxReady = videoPlaybackContext != null
             // 反馈 3(2026-06-05):视频回写的任意毫秒值吸附到最近样本 absoluteTsMs——
             // 图表游标/地图亮点是精确相等匹配,不吸附永远 miss
             val sampleWallClocks = remember(telemetry) { telemetry.samples.map { it.absoluteTsMs } }
@@ -276,7 +275,6 @@ fun LapDetailScreen(
                             LapDetailPanelId.VIDEO -> ChartCard(title = "VIDEO") {
                                 if (videoCtxReady) {
                                     LapVideoPanel(
-                                        videoFilePath = videoFilePath!!,
                                         playbackContext = videoPlaybackContext!!,
                                         cursorAbsoluteTs = cursorAbsoluteTs,
                                         cursorSource = cursorSource,

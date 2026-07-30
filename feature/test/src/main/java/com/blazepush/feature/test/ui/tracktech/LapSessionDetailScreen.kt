@@ -24,9 +24,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,12 +56,10 @@ import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.SessionVideoStats
 import com.blazepush.feature.test.FileLogger
-import com.blazepush.feature.test.export.VideoExportClip
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
@@ -84,10 +87,7 @@ fun LapSessionDetailScreen(
 ) {
     var session by remember { mutableStateOf<TelemetrySession?>(null) }
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
-    // round move-export-to-playback-and-relax-replay-gate：各圈相对视频的覆盖程度（lapNumber → Coverage）。
-    // 回放入口放宽到 coverage != NONE（完整 or 半圈都可进）；完全无覆盖（NONE）禁入。
-    // 导出入口已移到播放页（详情页不再有导出 section）。
-    var lapCoverageMap by remember { mutableStateOf<Map<Int, VideoExportClip.Coverage>>(emptyMap()) }
+    var videoStats by remember { mutableStateOf(SessionVideoStats(0, 0, 0L)) }
 
     // video-storage-cleanup round：成绩页单删视频（保留成绩）。删后 bump refreshTick 重载 session。
     var refreshTick by remember { mutableStateOf(0) }
@@ -99,38 +99,9 @@ fun LapSessionDetailScreen(
     LaunchedEffect(sessionId, refreshTick) {
         session = telemetryRepository.getSession(sessionId)
         crossings = telemetryRepository.getCrossings(sessionId)
+        videoStats = telemetryRepository.getSessionVideoStats(sessionId)
         // persist-session-summary-fields round 起：topSpeedKmh 直接读 entity.topSpeedKmh，
         // 不再每次进入 detail 屏全扫 binary（endSession 时已派生持久化）
-    }
-
-    // round move-export-to-playback-and-relax-replay-gate：算各圈相对视频的覆盖程度（决定回放入口可达）。
-    // 后台 IO：probe 视频时长 + 逐圈 getLapTelemetry 取 lapStart/lapEnd → VideoExportClip.lapCoverage（三态）。
-    LaunchedEffect(session) {
-        val s = session
-        val videoPath = s?.videoFilePath
-        val videoStart = s?.videoStartedAtWallClock
-        if (videoPath == null || videoStart == null) {
-            lapCoverageMap = emptyMap()
-            return@LaunchedEffect
-        }
-        val map = withContext(Dispatchers.IO) {
-            val durationMs = probeVideoDurationMs(videoPath)
-            val result = mutableMapOf<Int, VideoExportClip.Coverage>()
-            var i = 0
-            while (i <= 1000) {
-                val lap = telemetryRepository.getLapTelemetry(sessionId, i) ?: break
-                result[i + 1] = VideoExportClip.lapCoverage(
-                    lap.lapStartWallClock, lap.lapEndWallClock, videoStart, durationMs,
-                ) // lapNumber = lapIndex + 1
-                i++
-            }
-            FileLogger.d(
-                "VideoExport",
-                "lap coverage sid=$sessionId durationMs=$durationMs map=$result",
-            )
-            result
-        }
-        lapCoverageMap = map
     }
 
     val derived = remember(crossings) { deriveDetailMetrics(crossings) }
@@ -178,8 +149,14 @@ fun LapSessionDetailScreen(
     if (showDeleteVideoDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteVideoDialog = false },
-            title = { Text("删除本场视频?") },
-            text = { Text("仅删除录像文件，圈速成绩与分段数据保留。") },
+            title = { Text("删除本场全部录像?") },
+            text = {
+                Text(
+                    "将删除本场全部 ${videoStats.segmentCount} 段录像，" +
+                        "释放约 ${formatFileSize(videoStats.totalBytes)}。\n\n" +
+                        "圈速、遥测、分段成绩和 Session 记录都会保留。",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteVideoDialog = false
@@ -204,6 +181,8 @@ fun LapSessionDetailScreen(
         DetailHeader(
             title = "Session",
             onBack = { navController.popBackStack() },
+            showVideoActions = videoStats.hasVideo,
+            onDeleteAllVideo = { showDeleteVideoDialog = true },
         )
         // ui-redo-lap-sector-table round：撤掉过大的 TheoreticalBestPanel，改用
         // RaceChrono/AiM 风格的 "带 sector 列的表"。table 非 null（有 sector 门）时圈列表区
@@ -232,12 +211,6 @@ fun LapSessionDetailScreen(
             }
         }
 
-        // round move-export-to-playback-and-relax-replay-gate（真机反馈）：把视频回放入口整合进
-        // 圈成绩单（sector 表 / fallback 圈列表）每一行末尾的小相机图标。回放可达条件放宽：
-        // - session 有视频 + VALID/BEST + 该圈 coverage != NONE（完整 or 半圈都可进）→ 显示图标可点。
-        // - 完全无视频覆盖（coverage == NONE，纯黑无可叠真实画面）→ 不显示图标（禁入）。
-        // - 加载期（lapCoverageMap 还没该圈条目）→ null != NONE → 默认允许进（避免图标闪烁）；算完后纯黑圈隐藏。
-        val hasVideo = session?.videoFilePath != null // 删除视频按钮(video-storage-cleanup)仍消费
         // lap-detail-triview-panel(2026-06-05)入口收敛:行尾播放图标退役——视频内嵌进单圈详情
         // (LapDetailScreen 视频面板,全屏从面板按钮进 lap_video),圈行统一只进 lap_detail。
         // 原 onVideoClickFactory 已删;LapRecordRow/LapSectorTableBlock 的 onVideoClick 参数
@@ -275,23 +248,6 @@ fun LapSessionDetailScreen(
                         navController.navigate("lap_comparison/$sessionId")
                     },
                 )
-            }
-            // video-storage-cleanup round：有视频时给"删本场视频(留成绩)"入口（成绩页存储治理）
-            if (hasVideo) {
-                item {
-                    TextButton(
-                        onClick = { showDeleteVideoDialog = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = "删除本场视频（保留成绩）",
-                            style = TrackTechTypography.UiTextBody,
-                            color = TrackTechColors.Red,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
             }
             if (table != null) {
                 // sector 表路径：表头 + THEORETICAL + valid/best 圈行（横向滚动同步），
@@ -348,7 +304,10 @@ fun LapSessionDetailScreen(
 private fun DetailHeader(
     title: String,
     onBack: () -> Unit,
+    showVideoActions: Boolean,
+    onDeleteAllVideo: () -> Unit,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -376,7 +335,53 @@ private fun DetailHeader(
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
         )
+        if (showVideoActions) {
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "更多操作",
+                        tint = TrackTechColors.TextPrimary,
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "删除本场全部录像",
+                                color = TrackTechColors.Red,
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.DeleteOutline,
+                                contentDescription = null,
+                                tint = TrackTechColors.Red,
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onDeleteAllVideo()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024.0) {
+        "${"%.1f".format(Locale.US, mb / 1024.0)} GB"
+    } else {
+        "${"%.0f".format(Locale.US, mb)} MB"
     }
 }
 
@@ -760,27 +765,6 @@ private fun formatDuration(ms: Long): String {
 private fun formatDateTime(epochMs: Long): String {
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
     return formatter.format(Date(epochMs))
-}
-
-// ────────────────────────────────────────────────────────────────
-// round move-export-to-playback-and-relax-replay-gate：导出入口 + 进度对话框 + 分享已移到
-// 播放页 LapVideoPlaybackScreen（ExportButton + VideoExportProgressOverlay）。本屏仅保留
-// 视频时长探测（用于算各圈覆盖程度 → 回放入口可达条件）。
-// ────────────────────────────────────────────────────────────────
-
-/** 用 MediaMetadataRetriever 探测源视频时长（ms）；失败返回 0（→ 圈视为无覆盖，回放入口禁入）。 */
-private fun probeVideoDurationMs(path: String): Long {
-    val retriever = android.media.MediaMetadataRetriever()
-    return try {
-        retriever.setDataSource(path)
-        retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-            ?.toLongOrNull() ?: 0L
-    } catch (t: Throwable) {
-        FileLogger.e("VideoExport", "probe duration failed path=$path", t)
-        0L
-    } finally {
-        runCatching { retriever.release() }
-    }
 }
 
 // unify-lap-count-pairing-semantics round：private → internal，使 deriveDetailMetrics 纯函数

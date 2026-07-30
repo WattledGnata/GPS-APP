@@ -56,6 +56,8 @@ object LapPlaybackLoader {
         val trackPoints: List<GeoPoint>,
         // ②c：按圈窗口选中的视频段（segmentIndex 升序，回放 playlist / 导出输入的数据源）
         val segments: List<VideoSegment>,
+        // 统一分段时间轴：播放、覆盖 gate 与导出必须共同消费，禁止再以首段 duration 代替整圈覆盖。
+        val timelinePlan: VideoTimelinePlan,
         // 双写兼容字段 = 选中首段 startWallClock（②c 起单段消费方的渐进兼容路径）
         val videoStartedAtWallClock: Long,
         val lapStartWallClock: Long,
@@ -112,6 +114,28 @@ object LapPlaybackLoader {
         )
         if (selected.isEmpty()) return null // 该圈无录像（语义同改造前 guard）
         val videoStartedAt = selected.first().startWallClock
+        val durationMsBySegmentId = selected.associate { segment ->
+            segment.id to resolveDurationMs(segment)
+        }
+        val timelinePlan = VideoTimelinePlan.build(
+            lapStartWallClock = targetLap.lapStartWallClock,
+            lapEndWallClock = targetLap.lapEndWallClock,
+            segments = selected,
+            durationMsBySegmentId = durationMsBySegmentId,
+        )
+        if (timelinePlan.slices.isEmpty()) {
+            FileLogger.e(
+                TAG,
+                "loader no playable timeline slices sid=$sessionId lap=$lapIndex " +
+                    "segments=${selected.map { it.segmentIndex }}",
+            )
+            return null
+        }
+        FileLogger.d(
+            TAG,
+            "timeline coverage=${timelinePlan.coverage} slices=${timelinePlan.slices.size} " +
+                "gaps=${timelinePlan.gaps.map { it.durationMs }} output=${timelinePlan.outputDurationMs}ms",
+        )
 
         // 逐圈拼接整 session 样本（升序 absoluteTsMs）+ 各圈窗口（overlay 仍需全 session 上下文）
         val allSamples = mutableListOf<LapTelemetrySample>()
@@ -153,12 +177,39 @@ object LapPlaybackLoader {
             bestReference = bestReference,
             trackPoints = trackPoints,
             segments = selected,
+            timelinePlan = timelinePlan,
             videoStartedAtWallClock = videoStartedAt,
             lapStartWallClock = targetLap.lapStartWallClock,
             lapEndWallClock = targetLap.lapEndWallClock,
             lapNumber = lapIndex + 1,
             topSpeedKmh = topSpeedKmh,
         )
+    }
+
+    /**
+     * 优先使用录制落库的 duration；ERROR 救援段没有 duration 时再探测容器。
+     * loader 本来要求在 IO dispatcher 调用，因此这里不会阻塞主线程。
+     */
+    private fun resolveDurationMs(segment: VideoSegment): Long {
+        segment.durationMs?.takeIf { it > 0L }?.let { return it }
+        segment.endWallClock
+            ?.minus(segment.startWallClock)
+            ?.takeIf { it > 0L }
+            ?.let { return it }
+
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(segment.filePath)
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.takeIf { it > 0L }
+                ?: 0L
+        } catch (t: Throwable) {
+            FileLogger.e(TAG, "probe segment duration failed path=${segment.filePath}", t)
+            0L
+        } finally {
+            runCatching { retriever.release() }
+        }
     }
 
     /** 定位 bestLapMs 对应的圈并构建 ReferenceLapIndex；无 best / 样本不足 → null。 */

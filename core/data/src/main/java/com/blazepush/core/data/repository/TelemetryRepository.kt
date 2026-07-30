@@ -20,6 +20,7 @@ import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.SessionVideoStats
 import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.model.VideoSegment
 import kotlinx.coroutines.Dispatchers
@@ -354,6 +355,27 @@ class TelemetryRepository(
         Log.d(
             "VideoSegment",
             "deleteSessionVideo: removed ${segments.size} segments, lap data kept: sessionId=$sessionId",
+        )
+    }
+
+    /**
+     * Session 级录像统计。分段表是事实源；表为空时才使用旧 videoFilePath 兼容存量数据。
+     * 文件大小读取失败按 0 处理，不影响删除入口可达。
+     */
+    suspend fun getSessionVideoStats(sessionId: String): SessionVideoStats {
+        val entity = sessionDao.queryBySessionId(sessionId)
+            ?: return SessionVideoStats(segmentCount = 0, existingFileCount = 0, totalBytes = 0L)
+        val segments = videoSegmentDao.queryBySessionId(sessionId)
+        val paths = if (segments.isNotEmpty()) {
+            segments.map { it.filePath }.distinct()
+        } else {
+            listOfNotNull(entity.videoFilePath)
+        }
+        val files = paths.map(::File).filter { it.exists() && it.isFile }
+        return SessionVideoStats(
+            segmentCount = if (segments.isNotEmpty()) segments.size else paths.size,
+            existingFileCount = files.size,
+            totalBytes = files.sumOf { runCatching { it.length() }.getOrDefault(0L) },
         )
     }
 

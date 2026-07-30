@@ -83,6 +83,35 @@ class VideoSegmentAttachCascadeTest {
         assertEquals("旧字段=最新段", normal.absolutePath, fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
     }
 
+    @Test
+    fun `video stats use segment table and sum existing files`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val first = newVideoFile("stats-a.mp4")
+        val second = newVideoFile("stats-b.mp4")
+        repo.attachVideoToSession(sessionId, first.absolutePath, 1000L, true, 1000L)
+        repo.attachVideoToSession(sessionId, second.absolutePath, 2000L, true, 1000L)
+
+        val stats = repo.getSessionVideoStats(sessionId)
+
+        assertTrue(stats.hasVideo)
+        assertEquals(2, stats.segmentCount)
+        assertEquals(2, stats.existingFileCount)
+        assertEquals(first.length() + second.length(), stats.totalBytes)
+    }
+
+    @Test
+    fun `video stats fall back to legacy path when segment table is empty`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val legacy = newVideoFile("legacy-only.mp4")
+        fakeSessionDao.updateVideoMetadata(sessionId, legacy.absolutePath, 1000L)
+
+        val stats = repo.getSessionVideoStats(sessionId)
+
+        assertEquals(1, stats.segmentCount)
+        assertEquals(1, stats.existingFileCount)
+        assertEquals(legacy.length(), stats.totalBytes)
+    }
+
     /** case B（spec Req2 Scenario 2）：首段 index 0 + endWallClock 推算。 */
     @Test
     fun `case B - first segment index zero with computed endWallClock`() = runTest {
@@ -156,6 +185,7 @@ class VideoSegmentAttachCascadeTest {
         val entity = fakeSessionDao.queryBySessionId(sessionId)
         assertNotNull("session 行保留", entity)
         assertNull("旧字段置空", entity?.videoFilePath)
+        assertFalse("删除后录像统计清零", repo.getSessionVideoStats(sessionId).hasVideo)
     }
 
     /** case G（spec Req3 Scenario 3 反例）：白名单外段文件不删，行照删。 */

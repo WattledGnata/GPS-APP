@@ -1,0 +1,19 @@
+name: simple
+version: 1
+description: 轻量变更工作流：简明提案后直接进入任务拆解
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 简明说明变更动机、范围、验收口径与影响
+    template: proposal.md
+    requires: []
+  - id: tasks
+    generates: tasks.md
+    description: 可跟踪的实施与验证清单
+    template: tasks.md
+    requires:
+      - proposal
+apply:
+  requires:
+    - tasks
+  tracks: tasks.md

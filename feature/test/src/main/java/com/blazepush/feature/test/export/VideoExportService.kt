@@ -51,6 +51,8 @@ class VideoExportService : Service(), KoinComponent {
 
     @Volatile
     private var pipeline: VideoExportPipeline? = null
+    @Volatile
+    private var multiSegmentPipeline: MultiSegmentVideoExportPipeline? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,6 +60,7 @@ class VideoExportService : Service(), KoinComponent {
         if (intent?.action == ACTION_CANCEL) {
             FileLogger.d(tag, "onStartCommand ACTION_CANCEL")
             pipeline?.cancel()
+            multiSegmentPipeline?.cancel()
             return START_NOT_STICKY
         }
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
@@ -86,61 +89,56 @@ class VideoExportService : Service(), KoinComponent {
                 fail("无法导出该圈（无视频/无样本）", sessionId, lapNumber)
                 return
             }
-            val (session, ctx) = loaded
-            // ②c（spec Req3）：导出输入从选段取——单段主路径直接用；跨段圈明确拒绝
-            //（降级某段必然不完整覆盖、会被下方 isLapFullyCovered gate 拦截，不可达降级不如诚实拒绝；
-            // 完整拼裁 follow-up video-export-cross-segment-concat）。
-            if (ctx.segments.size > 1) {
-                FileLogger.e(
-                    tag,
-                    "cross-segment lap export rejected: n=${ctx.segments.size} " +
-                        "idx=${ctx.segments.map { it.segmentIndex }} sid=$sessionId lap=$lapNumber",
-                )
-                fail("该圈横跨多段录像，导出暂不支持", sessionId, lapNumber)
-                return
-            }
-            // loader 保证选段非空（空选段已 return null → loaded==null 走上方 fail）；
-            // ctx.videoStartedAtWallClock 已=该段 startWallClock（loader ②c 设置），下游 clip 计算直接正确。
-            val sourcePath = ctx.segments.first().filePath
-
-            // 视频时长：从源 mp4 metadata 取（与回放 ExoPlayer duration 同源不可得 → 用 extractor 时长）
-            val videoDurationMs = probeVideoDurationMs(sourcePath)
-            FileLogger.d(tag, "probe videoDurationMs=$videoDurationMs sid=$sessionId lap=$lapNumber")
-
-            if (!VideoExportClip.isLapFullyCovered(
-                    ctx.lapStartWallClock, ctx.lapEndWallClock,
-                    ctx.videoStartedAtWallClock, videoDurationMs,
-                )
-            ) {
-                fail("该圈未被视频完整覆盖，无法导出", sessionId, lapNumber)
-                return
-            }
-
-            val clip = try {
-                VideoExportClip.computeClipRange(
-                    ctx.lapStartWallClock, ctx.lapEndWallClock,
-                    ctx.videoStartedAtWallClock, videoDurationMs,
-                )
-            } catch (e: VideoExportClip.EmptyClipException) {
-                FileLogger.e(tag, "empty clip sid=$sessionId lap=$lapNumber", e)
-                fail("该圈无视频画面", sessionId, lapNumber)
+            val (_, ctx) = loaded
+            val timeline = ctx.timelinePlan
+            if (timeline.coverage != VideoExportClip.Coverage.FULL) {
+                val longGap = timeline.gaps.firstOrNull {
+                    !it.isShortTechnicalGap &&
+                        it.wallClockEnd > ctx.lapStartWallClock &&
+                        it.wallClockStart < ctx.lapEndWallClock
+                }
+                val reason = if (longGap != null) {
+                    "圈内缺少 ${"%.1f".format(longGap.durationMs / 1000f)} 秒录像，无法导出"
+                } else {
+                    "该圈头部或尾部缺少录像，无法导出"
+                }
+                fail(reason, sessionId, lapNumber)
                 return
             }
 
             val displayName = buildFileName(sessionId, lapNumber)
             target = writer.prepare(displayName)
-
-            val pipe = VideoExportPipeline(sourcePath, ctx, clip)
-            pipeline = pipe
             VideoExportProgressBus.setRunning(sessionId, lapNumber, 0)
 
-            val completed = pipe.run(target.muxer) { processed, total ->
+            val progressCallback: (Int, Int) -> Unit = { processed, total ->
                 val pct = ((processed.toFloat() / total.toFloat()) * 100f).toInt().coerceIn(0, 99)
                 if (pct % 5 == 0) {
                     FileLogger.d(tag, "progress $pct% ($processed/$total) sid=$sessionId lap=$lapNumber")
                 }
                 VideoExportProgressBus.setRunning(sessionId, lapNumber, pct)
                 updateNotification(lapNumber, pct)
+            }
+            val completed = if (timeline.isCrossSegment) {
+                FileLogger.d(
+                    tag,
+                    "cross-segment export slices=${timeline.slices.size} " +
+                        "idx=${timeline.slices.map { it.segment.segmentIndex }}",
+                )
+                val pipe = MultiSegmentVideoExportPipeline(ctx)
+                multiSegmentPipeline = pipe
+                pipe.run(target.muxer, progressCallback)
+            } else {
+                val slice = timeline.slices.single()
+                val clip = VideoExportClip.ClipRange(
+                    startPositionMs = slice.sourceStartMs,
+                    endPositionMs = slice.sourceEndMs,
+                )
+                val singleSegmentContext = ctx.copy(
+                    videoStartedAtWallClock = slice.segment.startWallClock,
+                )
+                val pipe = VideoExportPipeline(slice.segment.filePath, singleSegmentContext, clip)
+                pipeline = pipe
+                pipe.run(target.muxer, progressCallback)
             }
 
             if (completed) {
@@ -158,6 +156,7 @@ class VideoExportService : Service(), KoinComponent {
             VideoExportProgressBus.setFailed("导出失败：${t.message ?: "未知错误"}")
         } finally {
             pipeline = null
+            multiSegmentPipeline = null
             stopForegroundCompat()
             stopSelf()
         }
@@ -166,21 +165,6 @@ class VideoExportService : Service(), KoinComponent {
     private fun fail(message: String, sessionId: String, lapNumber: Int) {
         FileLogger.e(tag, "$message sid=$sessionId lap=$lapNumber")
         VideoExportProgressBus.setFailed(message)
-    }
-
-    /** 用 MediaMetadataRetriever 探测源视频时长（ms）。 */
-    private fun probeVideoDurationMs(path: String): Long {
-        val retriever = android.media.MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(path)
-            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull() ?: 0L
-        } catch (t: Throwable) {
-            FileLogger.e(tag, "probe duration failed path=$path", t)
-            0L
-        } finally {
-            runCatching { retriever.release() }
-        }
     }
 
     private fun buildFileName(sessionId: String, lapNumber: Int): String {

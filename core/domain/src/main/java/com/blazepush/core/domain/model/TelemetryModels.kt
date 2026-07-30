@@ -75,6 +75,15 @@ data class VideoSegment(
     val playable: Boolean? = null,
 )
 
+/** Session 级录像存储摘要，供菜单展示和删除确认使用。 */
+data class SessionVideoStats(
+    val segmentCount: Int,
+    val existingFileCount: Int,
+    val totalBytes: Long,
+) {
+    val hasVideo: Boolean get() = segmentCount > 0 || existingFileCount > 0
+}
+
 /**
  * 圈速过线事件领域模型（对应 Room CrossingEventEntity）。
  * 是计时精度真相源，accepted=false 时 reason 字段说明丢弃原因。

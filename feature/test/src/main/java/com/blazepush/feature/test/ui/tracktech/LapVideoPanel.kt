@@ -1,6 +1,7 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.ui.tracktech
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
@@ -16,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,6 +41,7 @@ import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.export.LapPlaybackLoader
 import com.blazepush.feature.test.usecase.VideoOverlayTelemetry
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 
 /** 三视图游标来源(design Decision 1 回环抑制):仅 CHART 来源触发视频 seekTo。 */
 enum class TriviewCursorSource { CHART, VIDEO }
@@ -57,7 +62,6 @@ enum class TriviewCursorSource { CHART, VIDEO }
  */
 @Composable
 internal fun LapVideoPanel(
-    videoFilePath: String,
     playbackContext: LapPlaybackLoader.LapPlaybackContext,
     cursorAbsoluteTs: Long?,
     cursorSource: TriviewCursorSource,
@@ -66,10 +70,13 @@ internal fun LapVideoPanel(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val videoStart = playbackContext.videoStartedAtWallClock
+    val timeline = playbackContext.timelinePlan
+    val slices = timeline.slices
+    val lapStart = playbackContext.lapStartWallClock
+    val lapEnd = playbackContext.lapEndWallClock.coerceAtLeast(lapStart + 1L)
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().also {
-            FileLogger.d("LapVideoPanel", "ExoPlayer created path=$videoFilePath")
+            FileLogger.d("LapVideoPanel", "ExoPlayer created slices=${slices.size}")
         }
     }
     DisposableEffect(exoPlayer) {
@@ -79,70 +86,83 @@ internal fun LapVideoPanel(
         }
     }
 
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var positionMs by remember { mutableLongStateOf(0L) }
+    var positionWallClock by remember { mutableLongStateOf(lapStart) }
     var isPlaying by remember { mutableStateOf(false) }
 
-    // 圈窗口 ∩ 视频覆盖(视频位置域;duration 未知时先用圈窗口,READY 后收紧)
-    val clipStartPos = (playbackContext.lapStartWallClock - videoStart).coerceAtLeast(0L)
-    val clipEndPos = if (durationMs > 0L) {
-        (playbackContext.lapEndWallClock - videoStart).coerceIn(clipStartPos, durationMs)
-    } else {
-        (playbackContext.lapEndWallClock - videoStart).coerceAtLeast(clipStartPos + 1L)
+    fun seekToWallClock(wallClock: Long) {
+        val clamped = wallClock.coerceIn(lapStart, lapEnd)
+        positionWallClock = clamped
+        val slice = timeline.sliceAtWallClock(clamped)
+        val index = slices.indexOf(slice)
+        if (slice != null && index >= 0) {
+            val sourcePosition = (clamped - slice.segment.startWallClock)
+                .coerceIn(slice.sourceStartMs, slice.sourceEndMs)
+            exoPlayer.seekTo(index, sourcePosition)
+        } else {
+            exoPlayer.pause()
+        }
     }
 
-    LaunchedEffect(videoFilePath) {
-        exoPlayer.setMediaItem(MediaItem.fromUri(videoFilePath))
+    LaunchedEffect(slices) {
+        exoPlayer.setMediaItems(slices.map { MediaItem.fromUri(it.segment.filePath) })
+        exoPlayer.pauseAtEndOfMediaItems = true
         exoPlayer.prepare()
         exoPlayer.playWhenReady = false
-    }
-    DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY && durationMs <= 0L) {
-                    durationMs = exoPlayer.duration.coerceAtLeast(0L)
-                    // 反馈 1:进面板定位到圈起点,不从视频文件 0 点(磨叽段)开始
-                    val start = (playbackContext.lapStartWallClock - videoStart).coerceIn(0L, durationMs)
-                    exoPlayer.seekTo(start)
-                    positionMs = start
-                    FileLogger.d(
-                        "LapVideoPanel",
-                        "READY duration=${durationMs}ms clip=[${start}ms..${(playbackContext.lapEndWallClock - videoStart).coerceAtMost(durationMs)}ms]",
-                    )
-                }
-            }
-
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-            }
-        }
-        exoPlayer.addListener(listener)
-        onDispose { exoPlayer.removeListener(listener) }
+        seekToWallClock(lapStart)
+        FileLogger.d(
+            "LapVideoPanel",
+            "playlist ready segments=${slices.map { it.segment.segmentIndex }} lap=[$lapStart,$lapEnd]",
+        )
     }
 
     // 图表 → 视频(回环抑制:仅 CHART 来源 seek;clamp 圈窗口)
-    LaunchedEffect(cursorAbsoluteTs, cursorSource, durationMs) {
-        if (cursorSource == TriviewCursorSource.CHART && cursorAbsoluteTs != null && durationMs > 0L) {
-            val pos = (cursorAbsoluteTs - videoStart).coerceIn(clipStartPos, clipEndPos)
-            exoPlayer.seekTo(pos)
-            positionMs = pos
-            FileLogger.vSampled("LapVideoPanel", "triview-seek") { "chart→video seekTo=${pos}ms" }
+    LaunchedEffect(cursorAbsoluteTs, cursorSource) {
+        if (cursorSource == TriviewCursorSource.CHART && cursorAbsoluteTs != null) {
+            seekToWallClock(cursorAbsoluteTs)
+            FileLogger.vSampled("LapVideoPanel", "triview-seek") {
+                "chart→video seek wallClock=$positionWallClock"
+            }
         }
     }
 
-    // 视频 → 图表(播放中 10Hz 回写)+ 圈终点自动暂停(反馈 1)
-    LaunchedEffect(isPlaying) {
+    // 多段视频 → 图表（10Hz）。短切段 gap 立即跨越；真实缺失 gap 按时间轴推进并明确遮罩。
+    LaunchedEffect(isPlaying, slices) {
         while (isPlaying) {
-            val pos = exoPlayer.currentPosition
-            positionMs = pos
-            if (pos >= clipEndPos) {
+            val slice = timeline.sliceAtWallClock(positionWallClock)
+            if (slice != null) {
+                val index = slices.indexOf(slice)
+                val expectedPosition = positionWallClock - slice.segment.startWallClock
+                if (exoPlayer.currentMediaItemIndex != index ||
+                    exoPlayer.playbackState == Player.STATE_ENDED ||
+                    abs(exoPlayer.currentPosition - expectedPosition) > 750L
+                ) {
+                    exoPlayer.seekTo(index, expectedPosition.coerceIn(slice.sourceStartMs, slice.sourceEndMs))
+                }
+                if (exoPlayer.playbackState == Player.STATE_READY && !exoPlayer.isPlaying) {
+                    exoPlayer.play()
+                }
+                val playerWallClock = slice.segment.startWallClock + exoPlayer.currentPosition
+                positionWallClock = playerWallClock.coerceIn(slice.wallClockStart, slice.wallClockEnd)
+                if (positionWallClock >= slice.wallClockEnd) {
+                    exoPlayer.pause()
+                    positionWallClock = slice.wallClockEnd
+                }
+            } else {
                 exoPlayer.pause()
-                exoPlayer.seekTo(clipEndPos)
-                positionMs = clipEndPos
-                FileLogger.d("LapVideoPanel", "圈终点自动暂停 pos=${pos}ms clipEnd=${clipEndPos}ms")
-                break
+                val gap = timeline.gapAtWallClock(positionWallClock)
+                positionWallClock = when {
+                    gap == null -> positionWallClock + 100L
+                    gap.isShortTechnicalGap -> gap.wallClockEnd
+                    else -> minOf(gap.wallClockEnd, positionWallClock + 100L)
+                }
             }
-            onCursorChangeFromVideo(videoStart + pos)
+            if (positionWallClock >= lapEnd) {
+                positionWallClock = lapEnd
+                exoPlayer.pause()
+                isPlaying = false
+                FileLogger.d("LapVideoPanel", "圈终点自动暂停 wallClock=$positionWallClock")
+            }
+            onCursorChangeFromVideo(positionWallClock)
             delay(100)
         }
     }
@@ -151,10 +171,10 @@ internal fun LapVideoPanel(
     var overlayFrame by remember { mutableStateOf<VideoOverlayTelemetry.OverlayFrame?>(null) }
     var overlayLap by remember { mutableStateOf<VideoOverlayTelemetry.LapResolution?>(null) }
     var overlayDeltaMs by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(positionMs) {
+    LaunchedEffect(positionWallClock) {
         updateOverlay(
             ctx = playbackContext,
-            playheadWallClock = videoStart + positionMs,
+            playheadWallClock = positionWallClock,
             onFrame = { overlayFrame = it },
             onLap = { overlayLap = it },
             onDelta = { overlayDeltaMs = it },
@@ -176,6 +196,22 @@ internal fun LapVideoPanel(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+            val gap = timeline.gapAtWallClock(positionWallClock)
+            if (gap != null && !gap.isShortTechnicalGap) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.82f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "录像中断 ${"%.1f".format(gap.durationMs / 1000f)} 秒",
+                        style = TrackTechTypography.UiTextBody,
+                        color = TrackTechColors.TextMuted,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            }
             OverlayHud(
                 frame = overlayFrame,
                 lap = overlayLap,
@@ -189,15 +225,15 @@ internal fun LapVideoPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = {
-                if (exoPlayer.isPlaying) {
+                if (isPlaying) {
+                    isPlaying = false
                     exoPlayer.pause()
                 } else {
                     // 停在圈终点再点播放 → 回到圈起点重播
-                    if (positionMs >= clipEndPos) {
-                        exoPlayer.seekTo(clipStartPos)
-                        positionMs = clipStartPos
+                    if (positionWallClock >= lapEnd) {
+                        seekToWallClock(lapStart)
                     }
-                    exoPlayer.play()
+                    isPlaying = true
                 }
             }) {
                 Icon(
@@ -208,14 +244,12 @@ internal fun LapVideoPanel(
             }
             // 反馈 1:Slider 以圈窗口为值域——0% = 开圈,100% = 收圈
             Slider(
-                value = positionMs.toFloat().coerceIn(clipStartPos.toFloat(), clipEndPos.toFloat()),
+                value = positionWallClock.toFloat().coerceIn(lapStart.toFloat(), lapEnd.toFloat()),
                 onValueChange = { v ->
-                    val pos = v.toLong().coerceIn(clipStartPos, clipEndPos)
-                    positionMs = pos
-                    exoPlayer.seekTo(pos)
-                    onCursorChangeFromVideo(videoStart + pos)
+                    seekToWallClock(v.toLong())
+                    onCursorChangeFromVideo(positionWallClock)
                 },
-                valueRange = clipStartPos.toFloat()..clipEndPos.toFloat(),
+                valueRange = lapStart.toFloat()..lapEnd.toFloat(),
                 modifier = Modifier.weight(1f),
                 colors = SliderDefaults.colors(
                     thumbColor = TrackTechColors.Cyan,
@@ -223,7 +257,7 @@ internal fun LapVideoPanel(
                     inactiveTrackColor = TrackTechColors.Border,
                 ),
             )
-            IconButton(onClick = { onFullscreen(videoStart + positionMs) }) {
+            IconButton(onClick = { onFullscreen(positionWallClock) }) {
                 Icon(
                     imageVector = Icons.Filled.Fullscreen,
                     contentDescription = "Fullscreen",
