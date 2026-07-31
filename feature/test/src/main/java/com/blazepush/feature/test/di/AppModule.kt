@@ -23,6 +23,9 @@ import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.core.domain.usecase.SmartTestLauncher
 import com.blazepush.core.network.LivetimingUploader
+import com.blazepush.feature.test.diagnostic.DiagnosticMetadataCollector
+import com.blazepush.feature.test.diagnostic.DiagnosticPackager
+import com.blazepush.feature.test.diagnostic.DiagnosticUploadOrchestrator
 import com.blazepush.feature.test.livetiming.LapUploadOrchestrator
 import com.blazepush.feature.test.repository.AssetReplayTrackSource
 import com.blazepush.feature.test.repository.PresetTrackCatalog
@@ -125,7 +128,22 @@ val repositoryModule = module {
     single<com.blazepush.core.network.LapUploadApi> { LivetimingUploader.create() }
     single<com.blazepush.feature.test.livetiming.LapUploadTrigger> { LapUploadOrchestrator(get(), get(), get()) }
     // add-diagnostic-log-upload round：诊断上传门面（token/baseUrl 走 core:network BuildConfig）
-    single<com.blazepush.core.network.DiagnosticLogUploadApi> { com.blazepush.core.network.DiagnosticLogUploader() }
+    single<com.blazepush.core.network.DiagnosticLogUploadApi> {
+        com.blazepush.core.network.DiagnosticLogUploader.create()
+    }
+    single { DiagnosticPackager }
+    factory {
+        val context = androidContext()
+        DiagnosticUploadOrchestrator(
+            filesDir = context.filesDir,
+            databaseDir = context.getDatabasePath("race_chrono_database").parentFile!!,
+            cacheDir = context.cacheDir,
+            uploader = get(),
+            metaProvider = { ticket ->
+                DiagnosticMetadataCollector.collect(context, ticket, System.currentTimeMillis())
+            },
+        )
+    }
 }
 
 /**

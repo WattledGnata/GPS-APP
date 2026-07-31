@@ -47,7 +47,7 @@ interface DiagnosticLogUploadApi {
  * 复用 livetiming baseUrl/token；`file`(zip) + meta 表单字段；带写入进度回调；
  * 成功解析响应 JSON `logId`。LOGS_PATH 用代码常量（端点固定，无需 BuildConfig 注入）。
  */
-class DiagnosticLogUploader(
+class DiagnosticLogUploader internal constructor(
     private val baseUrl: String = BuildConfig.LIVETIMING_BASE_URL,
     token: String = BuildConfig.LIVETIMING_TOKEN,
     private val client: OkHttpClient = defaultClient(token),
@@ -105,7 +105,10 @@ class DiagnosticLogUploader(
     companion object {
         const val LOGS_PATH = "/api/v1/logs"
 
-        fun defaultClient(token: String): OkHttpClient =
+        /** 生产构造不向消费者模块泄漏 OkHttp 类型。 */
+        fun create(): DiagnosticLogUploadApi = DiagnosticLogUploader()
+
+        internal fun defaultClient(token: String): OkHttpClient =
             OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     val authed = chain.request().newBuilder()

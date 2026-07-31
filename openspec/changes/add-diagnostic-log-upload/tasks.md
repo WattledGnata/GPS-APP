@@ -27,7 +27,7 @@
 ## 6. 诊断面板 UI
 
 - [x] 6.1 新建诊断面板 Composable（`ui/diagnostic/DiagnosticUploadSheet.kt`）：工单号输入框 + 上传按钮 + 隐私确认 `AlertDialog`（文案"将上传行驶轨迹与诊断数据用于排查"）+ 进度条 + 成功展示 logId + 失败展示原因。订阅 `DiagnosticUploadOrchestrator.state`。隐私分支 MUST 用 if/else 渲染，禁 early return（依 [[feedback_compose_no_early_return_in_scope]]）。done：面板接通 orchestrator + 隐私确认 gate（实现 spec『隐私确认』『上传状态反馈』）
-- [ ] 6.2 真机视觉验证（无自动化测试）：暗门面板布局/进度/logId 展示。【真机 gate，UI 视觉项】
+- [ ] 6.2 真机视觉验证（无自动化测试）：暗门面板布局/进度/logId 展示。【2026-07-31：USB 真机已验证首次车手名引导、7 连点暗门、面板布局及隐私确认/取消；未发送真实诊断数据，进度和 logId 成功态仍待验证】
 
 ## 7. DI 接线
 
@@ -39,7 +39,7 @@
 
 ## 9. 编译与验证
 
-- [ ] 9.1 `gradle :feature:test:testDebugUnitTest :core:network:testDebugUnitTest --offline` 全绿（gradle 8.9）。done：单测通过
+- [x] 9.1 `gradle :feature:test:testDebugUnitTest :core:network:testDebugUnitTest --offline` 全绿（gradle 8.9）。done：2026-07-31 连同 `:core:data:testDebugUnitTest :app:assembleDebug` 全部通过
 - [ ] 9.2 `assembleRelease` 出 release apk，真机验证：连点版本号 7 次出面板 + 隐私确认 + 上传（服务端就绪或 MockWebServer 桩）。【真机 gate，需 user 授权 install】
 - [ ] 9.3 **【高风险·需用户单独确认】** push feature 分支到远端（远端 kt-format hook 逐条验证 push 历史）。MUST 当次显式确认，不得复用既往授权。
 

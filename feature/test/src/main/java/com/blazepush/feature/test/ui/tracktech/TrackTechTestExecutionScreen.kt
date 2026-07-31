@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,6 +46,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
@@ -479,7 +482,7 @@ private fun PhaseBanner(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(90.dp)
+            .heightIn(min = 90.dp)
             .background(
                 Brush.horizontalGradient(
                     colors = listOf(
@@ -536,17 +539,23 @@ private fun PhaseBanner(
 
 @Composable
 private fun BigSpeedDisplay(speed: Double) {
-    Box(
+    BoxWithConstraints(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
+        // 192sp 保留普通手机上的既有视觉；窄屏或系统显示放大导致可用宽度下降时，
+        // 仅缩放仪表数字本身，避免撑破布局，不全局覆盖用户的 fontScale。
+        val speedStyle = if (maxWidth >= 360.dp) {
+            TrackTechTypography.MechanicalGiant
+        } else {
+            val scale = (maxWidth / 360.dp).coerceIn(0.5f, 1.0f)
+            TrackTechTypography.MechanicalGiant.copy(fontSize = (192f * scale).sp)
+        }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.Bottom) {
-                // 路测反馈#7：96sp 行车看不清 → MechanicalGiant 192sp；同时去小数
-                // （GPS 速度小数位本是噪声,且 192sp 下 5 字符超 vivo 小屏宽度）
                 Text(
                     text = "%.0f".format(speed),
-                    style = TrackTechTypography.MechanicalGiant,
+                    style = speedStyle,
                     color = TrackTechColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

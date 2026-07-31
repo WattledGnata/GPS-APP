@@ -15,6 +15,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -142,12 +145,33 @@ class LapUploadOrchestratorTest {
         assertEquals("同圈不重复堆积（clientLapId 唯一）", 1, dao.store.size)
     }
 
+    @Test
+    fun concurrentFlush_uploadsPendingLapOnlyOnce() = runTest {
+        userProfile.setDriverName("老王")
+        api.result = UploadResult.NetworkError(null)
+        val o = orchestrator()
+        o.onLapCompleted(record())
+        api.calls.clear()
+
+        api.result = UploadResult.Success
+        api.delayMs = 10L
+        coroutineScope {
+            launch { o.flush() }
+            launch { o.flush() }
+        }
+
+        assertEquals("启动与网络回调并发时同一待传圈只能上传一次", 1, api.calls.size)
+        assertEquals(0, dao.store.size)
+    }
+
     // ---- fakes ----
 
     private class FakeUploadApi(var result: UploadResult = UploadResult.Success) : LapUploadApi {
         val calls = mutableListOf<LapUploadDto>()
+        var delayMs: Long = 0L
         override suspend fun upload(dto: LapUploadDto): UploadResult {
             calls.add(dto)
+            if (delayMs > 0) delay(delayMs)
             return result
         }
     }

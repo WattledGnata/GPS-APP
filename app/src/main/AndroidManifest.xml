@@ -18,6 +18,7 @@
 
     <!-- livetiming 圈速上报 (livetiming-lap-upload · 首个网络栈) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- 视频录制 (Phase 2 · camera-module-and-permission · L0-2 录音频) -->
     <uses-permission android:name="android.permission.CAMERA" />

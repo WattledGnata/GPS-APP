@@ -26,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,39 +35,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.pm.PackageInfoCompat
-import com.blazepush.core.network.DiagnosticLogUploader
-import com.blazepush.feature.test.diagnostic.DiagnosticMetadataCollector
 import com.blazepush.feature.test.diagnostic.DiagnosticUploadOrchestrator
 import com.blazepush.feature.test.diagnostic.DiagnosticUploadState
 import com.blazepush.feature.test.ui.tracktech.TrackTechColors
 import com.blazepush.feature.test.ui.tracktech.TrackTechTypography
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 /**
  * 诊断上传面板（add-diagnostic-log-upload, task 6.1）。
  *
  * 工单号输入 + 上传按钮 + 隐私确认弹窗 + 进度条 + 成功展示 logId + 失败展示原因。
- * [DiagnosticUploadOrchestrator] 在本 Composable 内创建（依赖 Context paths，非 Koin 注册），
- * 上传跑 `Dispatchers.IO`。隐私分支用 if/else 禁 early return（依 Compose 禁 early return 规则）。
+ * [DiagnosticUploadOrchestrator] 由 Koin factory 提供，上传跑 `Dispatchers.IO`。
+ * 隐私分支用 if/else 禁 early return（依 Compose 禁 early return 规则）。
  * 成功态展示 logId 并允许点按复制到剪贴板。
  */
 @Composable
-fun DiagnosticUploadSheet(onDismiss: () -> Unit) {
+fun DiagnosticUploadSheet(
+    onDismiss: () -> Unit,
+    orchestrator: DiagnosticUploadOrchestrator = koinInject(),
+) {
     val ctx = LocalContext.current
-    val scope = remember { CoroutineScope(Dispatchers.Main) }
-    val uploader = remember { DiagnosticLogUploader() }
-    val orchestrator = remember {
-        DiagnosticUploadOrchestrator(
-            filesDir = ctx.filesDir,
-            databaseDir = ctx.getDatabasePath("race_chrono_database").parentFile!!,
-            cacheDir = ctx.cacheDir,
-            uploader = uploader,
-            metaProvider = { ticket -> DiagnosticMetadataCollector.collect(ctx, ticket, System.currentTimeMillis()) },
-        )
-    }
+    val scope = rememberCoroutineScope()
     val state by orchestrator.state.collectAsState()
     var ticket by remember { mutableStateOf("") }
     var showPrivacyDialog by remember { mutableStateOf(false) }

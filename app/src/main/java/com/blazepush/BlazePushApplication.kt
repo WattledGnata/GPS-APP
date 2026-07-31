@@ -1,6 +1,9 @@
 package com.blazepush
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.feature.test.di.bluetoothModule
 import com.blazepush.feature.test.di.databaseModule
@@ -10,9 +13,11 @@ import com.blazepush.feature.test.di.repositoryModule
 import com.blazepush.feature.test.di.utilsModule
 import com.blazepush.feature.test.di.viewModelModule
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.livetiming.LapUploadTrigger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -24,6 +29,14 @@ class BlazePushApplication : Application() {
 
     // Application 级后台任务 scope（进程生命周期，无需取消）
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallbackRegistered = false
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            flushPendingLaps("network available")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -56,5 +69,41 @@ class BlazePushApplication : Application() {
                 FileLogger.e("PerftestCascade", "startup sweep failed", t)
             }
         }
+
+        // Livetiming 待传队列不能依赖“下一次出圈”才恢复。进程启动立即尝试一次；
+        // 默认网络重新可用时再触发一次。LapUploadOrchestrator 内部互斥保证并发信号不会重复上传。
+        flushPendingLaps("app startup")
+        registerLivetimingNetworkRecovery()
+    }
+
+    private fun registerLivetimingNetworkRecovery() {
+        try {
+            val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            manager.registerDefaultNetworkCallback(networkCallback)
+            connectivityManager = manager
+            networkCallbackRegistered = true
+        } catch (t: Throwable) {
+            FileLogger.e("Livetiming", "register network recovery failed", t)
+        }
+    }
+
+    private fun flushPendingLaps(reason: String) {
+        appScope.launch {
+            try {
+                GlobalContext.get().get<LapUploadTrigger>().flush()
+                FileLogger.d("Livetiming", "pending flush completed reason=$reason")
+            } catch (t: Throwable) {
+                // 启动和网络回调都是旁路恢复信号；失败必须保留队列且不得影响 App。
+                FileLogger.e("Livetiming", "pending flush failed reason=$reason", t)
+            }
+        }
+    }
+
+    override fun onTerminate() {
+        if (networkCallbackRegistered) {
+            runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
+        }
+        appScope.cancel()
+        super.onTerminate()
     }
 }

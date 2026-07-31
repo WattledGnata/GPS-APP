@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * livetiming 上报编排（livetiming-lap-upload round）。
@@ -30,6 +32,7 @@ class LapUploadOrchestrator(
     private val nowMs: () -> Long = { System.currentTimeMillis() },
 ) : LapUploadTrigger {
     private val _needDriverNameHint = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val flushMutex = Mutex()
 
     /** 开关开但无车手名时发一次,UI 收到弹"请先设车手名"一次性提示（spec R1）。 */
     val needDriverNameHint: Flow<Unit> = _needDriverNameHint.asSharedFlow()
@@ -73,7 +76,7 @@ class LapUploadOrchestrator(
     }
 
     /** 队列补传:出圈后 + app 启动调。串行重试,复用各条持久化的 clientLapId。 */
-    override suspend fun flush() {
+    override suspend fun flush() = flushMutex.withLock {
         val pending = dao.all()
         for (p in pending) {
             val dto = p.toDto() // 复用持久化 clientLapId,不 new
