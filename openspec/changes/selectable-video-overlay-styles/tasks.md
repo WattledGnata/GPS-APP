@@ -27,3 +27,7 @@
 - [x] 5.1 运行 `:feature:test:testDebugUnitTest`、`:feature:test:connectedDebugAndroidTest`（有设备时）及 `:app:assembleDebug`。
 - [x] 5.2 `openspec validate selectable-video-overlay-styles --strict` 通过，真机或渲染宿主产出三套实际样式截图。
 - [x] 5.3 提交本变更实现；push 与 Release 发布属于高风险外部动作，需用户当次明确要求后执行。
+
+## 6. 真机反馈修正
+
+- [x] 6.1 为 `MECHANICAL` 速度表补充随速度扫动的指针、刻度、尾针和中心轴帽；新增角度映射单元测试并构建 Debug APK，不占用用户设备执行测试。

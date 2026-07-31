@@ -98,3 +98,9 @@ data class OverlayHudLayout(
         }
     }
 }
+
+internal fun mechanicalSpeedNeedleAngle(speedKmh: Double?, maxSpeedKmh: Double): Float {
+    val fraction = ((speedKmh ?: 0.0) / maxSpeedKmh.coerceAtLeast(1.0))
+        .coerceIn(0.0, 1.0)
+    return 145f + 250f * fraction.toFloat()
+}

@@ -13,6 +13,7 @@
 5. **G 值离线重算**：binary 无加速度字段时，MUST 由 speed/bearing/时间差离线计算纵向/横向 G 并平滑。
 6. **圈速 + delta**：当前圈 elapsed 与最佳圈 delta MUST 沿用既有 wall-clock、圈窗口和 `RealtimeDeltaCalculator` 口径；无有效值时显示占位。
 7. **样式**：MUST 支持 `FLAT`（默认简洁平铺）、`RAIL`（统一底栏）、`MECHANICAL`（合并机械仪表簇）三套样式；三套均 MUST 显示相同五类遥测信息，并按画布尺寸等比缩放。
+   `MECHANICAL` 的速度仪表 MUST 具有随速度扫动的清晰指针、刻度与中心轴帽，不得只用进度弧和数字模拟机械表。
 8. **共享绘制**：全屏回放和内嵌回放 MUST 通过 `OverlayCanvasPainter` 的整帧 HUD 入口绘制，MUST NOT 各自复制布局。
 9. **控制层隔离**：HUD 样式选择器、播放按钮、Slider 与导出进度 MUST 位于共享 HUD Canvas 外，MUST NOT 被视为视频 overlay 图层。
 10. **生命周期**：离开播放屏时 MUST `player.release()`，更新协程 MUST 随 Composable 取消。
@@ -32,6 +33,13 @@
 - **WHEN** 同一 session 分别出现在全屏回放和详情页内嵌回放
 - **THEN** 两处 MUST 都使用 `RAIL`
 - **AND** 布局 MUST 由同一共享 Canvas HUD 入口按各自画布尺寸计算
+
+#### Scenario: 机械速度表指针随速度扫动
+
+- **GIVEN** 当前选择 `MECHANICAL`
+- **WHEN** 速度从零增加到仪表上限
+- **THEN** 速度指针 MUST 从量程起始角连续扫到终止角
+- **AND** 指针、刻度与中心轴帽 MUST 在视频画面上保持清晰可辨
 
 #### Scenario: seek 与暂停后 HUD 同步跟随
 

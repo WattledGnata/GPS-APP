@@ -9,7 +9,9 @@ import android.graphics.Typeface
 import androidx.compose.ui.graphics.toArgb
 import com.blazepush.feature.test.ui.tracktech.TrackTechColors
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 internal object VideoOverlayHudPainter {
@@ -160,20 +162,117 @@ internal object VideoOverlayHudPainter {
     }
 
     private fun drawMechanicalSpeed(canvas: Canvas, rect: HudRect, frame: OverlayHudFrame) {
-        val radius = min(rect.width, rect.height) * 0.46f
-        val arcRect = RectF(rect.left + rect.width * 0.04f, rect.top + rect.height * 0.08f, rect.left + rect.width * 0.04f + radius * 2f, rect.top + rect.height * 0.08f + radius * 2f)
+        val radius = min(rect.width, rect.height) * 0.41f
+        val arcRect = RectF(
+            rect.left + rect.width * 0.07f,
+            rect.top + rect.height * 0.03f,
+            rect.left + rect.width * 0.07f + radius * 2f,
+            rect.top + rect.height * 0.03f + radius * 2f,
+        )
         val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = TrackTechColors.BorderAlpha60.toArgb()
             style = Paint.Style.STROKE
-            strokeWidth = rect.height * 0.055f
+            strokeWidth = rect.height * 0.040f
             strokeCap = Paint.Cap.BUTT
         }
         canvas.drawArc(arcRect, 145f, 250f, false, base)
         val fraction = ((frame.speedKmh ?: 0.0) / frame.maxSpeedKmh.coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
-        base.color = TrackTechColors.Cyan.toArgb()
+        val needleColor = if (fraction >= 0.78) {
+            TrackTechColors.Red.toArgb()
+        } else {
+            TrackTechColors.Cyan.toArgb()
+        }
+        base.color = needleColor
         canvas.drawArc(arcRect, 145f, (250f * fraction).toFloat(), false, base)
-        drawCenteredText(canvas, speedText(frame.speedKmh), arcRect.centerX(), rect.top + rect.height * 0.68f, rect.height * 0.36f, TrackTechColors.TextPrimary.toArgb(), medium)
-        drawCenteredText(canvas, "KM/H", arcRect.centerX(), rect.bottom - rect.height * 0.10f, rect.height * 0.11f, TrackTechColors.TextMuted.toArgb(), regular)
+
+        val cx = arcRect.centerX()
+        val cy = arcRect.centerY()
+        val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = TrackTechColors.TextSecondary.toArgb()
+            strokeCap = Paint.Cap.ROUND
+        }
+        repeat(11) { index ->
+            val tickAngle = Math.toRadians((145f + index * 25f).toDouble())
+            val major = index % 2 == 0
+            val outerRadius = radius * 0.90f
+            val innerRadius = radius * if (major) 0.74f else 0.79f
+            tickPaint.strokeWidth = rect.height * if (major) 0.014f else 0.008f
+            canvas.drawLine(
+                cx + cos(tickAngle).toFloat() * innerRadius,
+                cy + sin(tickAngle).toFloat() * innerRadius,
+                cx + cos(tickAngle).toFloat() * outerRadius,
+                cy + sin(tickAngle).toFloat() * outerRadius,
+                tickPaint,
+            )
+        }
+
+        drawCenteredText(
+            canvas,
+            speedText(frame.speedKmh),
+            cx,
+            rect.top + rect.height * 0.75f,
+            rect.height * 0.31f,
+            TrackTechColors.TextPrimary.toArgb(),
+            medium,
+        )
+        drawCenteredText(
+            canvas,
+            "KM/H",
+            cx,
+            rect.bottom - rect.height * 0.07f,
+            rect.height * 0.10f,
+            TrackTechColors.TextMuted.toArgb(),
+            regular,
+        )
+
+        val needleAngle = Math.toRadians(
+            mechanicalSpeedNeedleAngle(frame.speedKmh, frame.maxSpeedKmh).toDouble(),
+        )
+        val ux = cos(needleAngle).toFloat()
+        val uy = sin(needleAngle).toFloat()
+        val px = -uy
+        val py = ux
+        val tipX = cx + ux * radius * 0.72f
+        val tipY = cy + uy * radius * 0.72f
+        val tailX = cx - ux * radius * 0.18f
+        val tailY = cy - uy * radius * 0.18f
+        val halfWidth = rect.height * 0.018f
+
+        val needleShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = withAlpha(android.graphics.Color.BLACK, 0.72f)
+            style = Paint.Style.STROKE
+            strokeWidth = rect.height * 0.040f
+            strokeCap = Paint.Cap.ROUND
+        }
+        canvas.drawLine(tailX, tailY, tipX, tipY, needleShadow)
+
+        val needle = Path().apply {
+            moveTo(tipX, tipY)
+            lineTo(cx + px * halfWidth, cy + py * halfWidth)
+            lineTo(tailX, tailY)
+            lineTo(cx - px * halfWidth, cy - py * halfWidth)
+            close()
+        }
+        canvas.drawPath(
+            needle,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = needleColor
+                style = Paint.Style.FILL
+                setShadowLayer(rect.height * 0.015f, 0f, rect.height * 0.008f, android.graphics.Color.BLACK)
+            },
+        )
+        canvas.drawCircle(
+            cx,
+            cy,
+            rect.height * 0.046f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = TrackTechColors.TextPrimary.toArgb() },
+        )
+        canvas.drawCircle(
+            cx,
+            cy,
+            rect.height * 0.025f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = needleColor },
+        )
     }
 
     private fun drawMap(canvas: Canvas, rect: HudRect, frame: OverlayHudFrame, panel: Boolean) {
