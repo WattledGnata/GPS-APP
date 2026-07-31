@@ -56,6 +56,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -139,12 +142,32 @@ fun LapVideoPlaybackScreen(
     val overlayStyle by overlayStylePreferences.style.collectAsState(initial = VideoOverlayStyle.FLAT)
     var showStylePicker by remember { mutableStateOf(false) }
 
-    // 横屏锁 + 常亮（复用 LapLiveScreen 范式）
+    // 横屏锁 + 常亮 + 单圈回放沉浸式（只作用于全屏回放，离开时恢复系统栏）。
     DisposableEffect(Unit) {
         val activity = context.findPlaybackActivity()
+        val window = activity?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, view) }
+        val previousStatusBarColor = window?.statusBarColor
+        val previousNavigationBarColor = window?.navigationBarColor
+        val previousLightStatusBars = insetsController?.isAppearanceLightStatusBars
+        val previousLightNavigationBars = insetsController?.isAppearanceLightNavigationBars
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         view.keepScreenOn = true
+        if (window != null && insetsController != null) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            insetsController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        }
         onDispose {
+            if (window != null && insetsController != null) {
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                previousStatusBarColor?.let { window.statusBarColor = it }
+                previousNavigationBarColor?.let { window.navigationBarColor = it }
+                previousLightStatusBars?.let { insetsController.isAppearanceLightStatusBars = it }
+                previousLightNavigationBars?.let { insetsController.isAppearanceLightNavigationBars = it }
+            }
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             view.keepScreenOn = false
         }

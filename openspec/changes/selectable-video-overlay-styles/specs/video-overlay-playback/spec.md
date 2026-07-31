@@ -17,7 +17,8 @@
 8. **共享绘制**：全屏回放和内嵌回放 MUST 通过 `OverlayCanvasPainter` 的整帧 HUD 入口绘制，MUST NOT 各自复制布局。
 9. **控制层隔离**：HUD 样式选择器、播放按钮、Slider 与导出进度 MUST 位于共享 HUD Canvas 外，MUST NOT 被视为视频 overlay 图层。
 10. **生命周期**：离开播放屏时 MUST `player.release()`，更新协程 MUST 随 Composable 取消。
-11. **公共协议边界**：MUST NOT 改 GPS 接收链路、binary 格式、crossing、`LapTimingEngine` 或 Room schema。
+11. **全屏系统栏**：进入 `LapVideoPlaybackScreen` MUST 隐藏状态栏和导航栏，并允许用户滑动临时唤出；离开播放屏 MUST 恢复进入前的系统栏可见性、颜色和图标明暗设置。普通页面 MUST NOT 被该沉浸式策略影响。
+12. **公共协议边界**：MUST NOT 改 GPS 接收链路、binary 格式、crossing、`LapTimingEngine` 或 Room schema。
 
 #### Scenario: 三种样式随选择即时切换且数据不变
 
@@ -61,3 +62,12 @@
 - **WHEN** 用户离开页面
 - **THEN** MUST 调用 `player.release()`
 - **AND** HUD 更新协程 MUST 停止
+
+#### Scenario: 全屏回放隐藏系统栏且离开后恢复
+
+- **GIVEN** 用户进入单圈全屏回放
+- **WHEN** 回放页完成进入或离开
+- **THEN** 回放期间状态栏和导航栏 MUST 隐藏
+- **AND** 用户滑动时系统栏可临时显示
+- **AND** 离开后 MUST 恢复进入前的系统栏状态
+- **AND** 首页、设置页和录入页 MUST 保持原有系统栏行为
