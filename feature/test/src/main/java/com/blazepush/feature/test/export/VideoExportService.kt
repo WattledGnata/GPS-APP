@@ -12,6 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.overlay.VideoOverlayStyle
 import com.blazepush.feature.test.repository.TrackCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,21 +66,26 @@ class VideoExportService : Service(), KoinComponent {
         }
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
         val lapIndex = intent?.getIntExtra(EXTRA_LAP_INDEX, -1) ?: -1
+        val overlayStyle = parseOverlayStyle(intent?.getStringExtra(EXTRA_OVERLAY_STYLE))
         if (sessionId == null || lapIndex < 0) {
             FileLogger.e(tag, "onStartCommand bad args sid=$sessionId lapIndex=$lapIndex -> stopSelf")
             stopSelf()
             return START_NOT_STICKY
         }
-        FileLogger.d(tag, "onStartCommand start export sid=$sessionId lapIndex=$lapIndex")
+        FileLogger.d(tag, "onStartCommand start export sid=$sessionId lapIndex=$lapIndex style=$overlayStyle")
         startForegroundWithProgress(lapIndex + 1, 0)
 
         exportJob = scope.launch {
-            runExport(sessionId, lapIndex)
+            runExport(sessionId, lapIndex, overlayStyle)
         }
         return START_NOT_STICKY
     }
 
-    private suspend fun runExport(sessionId: String, lapIndex: Int) {
+    private suspend fun runExport(
+        sessionId: String,
+        lapIndex: Int,
+        overlayStyle: VideoOverlayStyle,
+    ) {
         val lapNumber = lapIndex + 1
         var target: VideoExportMediaStoreWriter.ExportTarget? = null
         val writer = VideoExportMediaStoreWriter(applicationContext)
@@ -124,7 +130,7 @@ class VideoExportService : Service(), KoinComponent {
                     "cross-segment export slices=${timeline.slices.size} " +
                         "idx=${timeline.slices.map { it.segment.segmentIndex }}",
                 )
-                val pipe = MultiSegmentVideoExportPipeline(ctx)
+                val pipe = MultiSegmentVideoExportPipeline(ctx, overlayStyle)
                 multiSegmentPipeline = pipe
                 pipe.run(target.muxer, progressCallback)
             } else {
@@ -136,7 +142,12 @@ class VideoExportService : Service(), KoinComponent {
                 val singleSegmentContext = ctx.copy(
                     videoStartedAtWallClock = slice.segment.startWallClock,
                 )
-                val pipe = VideoExportPipeline(slice.segment.filePath, singleSegmentContext, clip)
+                val pipe = VideoExportPipeline(
+                    slice.segment.filePath,
+                    singleSegmentContext,
+                    clip,
+                    overlayStyle,
+                )
                 pipeline = pipe
                 pipe.run(target.muxer, progressCallback)
             }
@@ -235,6 +246,7 @@ class VideoExportService : Service(), KoinComponent {
     companion object {
         const val EXTRA_SESSION_ID = "extra_session_id"
         const val EXTRA_LAP_INDEX = "extra_lap_index"
+        const val EXTRA_OVERLAY_STYLE = "extra_overlay_style"
         const val ACTION_CANCEL = "com.blazepush.action.EXPORT_CANCEL"
 
         private const val CHANNEL_ID = "video_export"
@@ -246,13 +258,22 @@ class VideoExportService : Service(), KoinComponent {
         private const val FGS_TYPE_DATA_SYNC = 1
 
         /** 启动导出 Service。 */
-        fun start(context: Context, sessionId: String, lapIndex: Int) {
+        fun start(
+            context: Context,
+            sessionId: String,
+            lapIndex: Int,
+            overlayStyle: VideoOverlayStyle = VideoOverlayStyle.FLAT,
+        ) {
             val intent = Intent(context, VideoExportService::class.java).apply {
                 putExtra(EXTRA_SESSION_ID, sessionId)
                 putExtra(EXTRA_LAP_INDEX, lapIndex)
+                putExtra(EXTRA_OVERLAY_STYLE, overlayStyle.name)
             }
             androidx.core.content.ContextCompat.startForegroundService(context, intent)
         }
+
+        internal fun parseOverlayStyle(value: String?): VideoOverlayStyle =
+            VideoOverlayStyle.fromStored(value)
 
         /** 取消正在跑的导出。 */
         fun cancel(context: Context) {

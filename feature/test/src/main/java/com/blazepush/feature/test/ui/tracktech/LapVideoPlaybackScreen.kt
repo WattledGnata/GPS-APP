@@ -14,6 +14,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -45,6 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,12 +65,16 @@ import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.datastore.VideoOverlayStylePreferences
 import com.blazepush.feature.test.export.LapPlaybackLoader
 import com.blazepush.feature.test.export.VideoExportClip
 import com.blazepush.feature.test.export.VideoExportProgressBus
 import com.blazepush.feature.test.export.VideoExportService
 import com.blazepush.feature.test.export.VideoTimelinePlan
 import com.blazepush.feature.test.model.track.GeoPoint
+import com.blazepush.feature.test.overlay.OverlayCanvasPainter
+import com.blazepush.feature.test.overlay.OverlayHudFrame
+import com.blazepush.feature.test.overlay.VideoOverlayStyle
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.GaugeMath
@@ -123,9 +132,12 @@ fun LapVideoPlaybackScreen(
     initialPlayheadWallClock: Long = -1L,
     telemetryRepository: TelemetryRepository = koinInject(),
     trackCatalog: TrackCatalog = koinInject(),
+    overlayStylePreferences: VideoOverlayStylePreferences = koinInject(),
 ) {
     val context = LocalContext.current
     val view = LocalView.current
+    val overlayStyle by overlayStylePreferences.style.collectAsState(initial = VideoOverlayStyle.FLAT)
+    var showStylePicker by remember { mutableStateOf(false) }
 
     // 横屏锁 + 常亮（复用 LapLiveScreen 范式）
     DisposableEffect(Unit) {
@@ -272,7 +284,7 @@ fun LapVideoPlaybackScreen(
         val ctx = playbackContext
         if (ctx != null) {
             FileLogger.d(TAG, "start export sid=$sessionId lapIndex=$lapIndex lapNumber=${ctx.lapNumber}")
-            VideoExportService.start(context, sessionId, lapIndex)
+            VideoExportService.start(context, sessionId, lapIndex, overlayStyle)
         }
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -541,6 +553,21 @@ fun LapVideoPlaybackScreen(
                 deltaMs = overlayDeltaMs,
                 trackPoints = ctx.trackPoints,
                 gaugeMaxKmh = gaugeMaxKmh,
+                style = overlayStyle,
+                // 底部控制坞是交互层，不属于 HUD；预留空间避免底栏/圈时被控件覆盖。
+                modifier = Modifier.padding(bottom = 78.dp),
+            )
+            HudStyleSelector(
+                selected = overlayStyle,
+                expanded = showStylePicker,
+                onToggle = { showStylePicker = !showStylePicker },
+                onSelect = { selected ->
+                    showStylePicker = false
+                    playableScope.launch { overlayStylePreferences.setStyle(selected) }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp),
             )
             // 统一底部控制坞：显式播放/暂停 + 分段时间轴 + 导出状态。
             val rangeUi = playheadRangeUi
@@ -835,43 +862,105 @@ internal fun OverlayHud(
     deltaMs: Long?,
     trackPoints: List<GeoPoint>,
     gaugeMaxKmh: Double = GaugeMath.SPEEDO_MAX_KMH,
-    // lap-detail-triview-panel 二轮(2026-06-05 真机反馈):全屏件原尺寸塞小面板挤爆视频——
-    // 面板传 ~0.5f 整体缩放四角(仪表直径/地图/圈时字号/padding);全屏默认 1f 零变化
-    scale: Float = 1f,
+    style: VideoOverlayStyle,
+    modifier: Modifier = Modifier,
 ) {
-    // round video-export-burned-overlay Round A：回放端四角已经共享绘制层 OverlayCanvasPainter
-    // （speedo/gball/minimap 经 nativeCanvas，laptime 暂保留 Compose Text）。首次组装打一条锚点。
-    LaunchedEffect(Unit) {
-        FileLogger.d(TAG, "shared painter wired: speedo/gball/minimap via OverlayCanvasPainter; laptime Compose")
-    }
-    Box(modifier = Modifier.fillMaxSize().padding(12.dp * scale)) {
-        SpeedCorner(
-            speedKmh = frame?.speedKmh,
-            maxSpeedKmh = gaugeMaxKmh,
-            diameter = 120.dp * scale,
-            modifier = Modifier.align(Alignment.TopStart),
-        )
-        GForceCorner(
-            latG = frame?.latG,
-            lonG = frame?.lonG,
-            diameter = 120.dp * scale,
-            modifier = Modifier.align(Alignment.TopEnd),
-        )
-        LapTimeCorner(
-            lapNumber = lap?.lapNumber,
-            elapsedMs = lap?.currentLapElapsedMs,
-            deltaMs = deltaMs,
-            compact = scale < 1f,
-            modifier = Modifier.align(Alignment.BottomStart),
-        )
-        if (trackPoints.size >= 2) {
-            MiniMapCorner(
-                trackPoints = trackPoints,
-                currentLat = frame?.lat,
-                currentLon = frame?.lon,
-                mapSize = 96.dp * scale,
-                modifier = Modifier.align(Alignment.BottomEnd),
+    Canvas(modifier = modifier.fillMaxSize()) {
+        drawIntoCanvas { composeCanvas ->
+            OverlayCanvasPainter.drawHud(
+                canvas = composeCanvas.nativeCanvas,
+                width = size.width,
+                height = size.height,
+                style = style,
+                frame = OverlayHudFrame(
+                    speedKmh = frame?.speedKmh,
+                    latG = frame?.latG,
+                    lonG = frame?.lonG,
+                    lapNumber = lap?.lapNumber,
+                    elapsedMs = lap?.currentLapElapsedMs,
+                    deltaMs = deltaMs,
+                    trackPoints = trackPoints,
+                    currentLat = frame?.lat,
+                    currentLon = frame?.lon,
+                    maxSpeedKmh = gaugeMaxKmh,
+                ),
             )
+        }
+    }
+}
+
+@Composable
+private fun HudStyleSelector(
+    selected: VideoOverlayStyle,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onSelect: (VideoOverlayStyle) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        TextButton(
+            onClick = onToggle,
+            modifier = Modifier
+                .background(
+                    TrackTechColors.Surface.copy(alpha = 0.76f),
+                    RoundedCornerShape(8.dp),
+                )
+                .border(1.dp, TrackTechColors.BorderAlpha60, RoundedCornerShape(8.dp)),
+        ) {
+            Text(
+                text = "HUD · ${selected.displayName}",
+                style = TrackTechTypography.UiTextBody,
+                color = TrackTechColors.TextPrimary,
+            )
+        }
+        if (expanded) {
+            Row(
+                modifier = Modifier
+                    .background(
+                        TrackTechColors.Surface.copy(alpha = 0.90f),
+                        RoundedCornerShape(10.dp),
+                    )
+                    .border(1.dp, TrackTechColors.Border, RoundedCornerShape(10.dp))
+                    .padding(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                VideoOverlayStyle.entries.forEach { style ->
+                    val isSelected = style == selected
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(
+                                if (isSelected) {
+                                    TrackTechColors.Cyan.copy(alpha = 0.18f)
+                                } else {
+                                    Color.Transparent
+                                },
+                            )
+                            .border(
+                                1.dp,
+                                if (isSelected) TrackTechColors.Cyan else TrackTechColors.BorderAlpha60,
+                                RoundedCornerShape(7.dp),
+                            )
+                            .clickable { onSelect(style) }
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                    ) {
+                        Text(
+                            text = style.displayName,
+                            style = TrackTechTypography.UiTextBody,
+                            color = if (isSelected) TrackTechColors.Cyan else TrackTechColors.TextPrimary,
+                        )
+                        Text(
+                            text = style.description,
+                            style = TrackTechTypography.UiTextSmall,
+                            color = TrackTechColors.TextMuted,
+                        )
+                    }
+                }
+            }
         }
     }
 }

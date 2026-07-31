@@ -10,6 +10,7 @@ import android.view.Surface
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.export.gl.OverlayEglCore
 import com.blazepush.feature.test.export.gl.OverlayGlRenderer
+import com.blazepush.feature.test.overlay.VideoOverlayStyle
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,6 +41,7 @@ internal class VideoExportPipeline(
     private val sourceVideoPath: String,
     private val ctx: LapPlaybackLoader.LapPlaybackContext,
     private val clip: VideoExportClip.ClipRange,
+    private val overlayStyle: VideoOverlayStyle,
 ) {
     private val tag = "ExportPipe"
 
@@ -121,7 +123,7 @@ internal class VideoExportPipeline(
         decoder.configure(srcFormat, decoderOutputSurface, null, 0)
         FileLogger.d(tag, "decoder ${decoder.name} configured")
 
-        val overlayRenderer = ExportOverlayRenderer(ctx, srcWidth, srcHeight)
+        val overlayRenderer = ExportOverlayRenderer(ctx, srcWidth, srcHeight, overlayStyle)
 
         encoder.start()
         decoder.start()

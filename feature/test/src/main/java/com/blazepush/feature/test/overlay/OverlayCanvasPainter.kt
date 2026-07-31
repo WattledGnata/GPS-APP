@@ -41,6 +41,21 @@ import kotlin.math.sqrt
  * @date 2026-05-31
  */
 object OverlayCanvasPainter {
+    /**
+     * 回放、内嵌面板和导出共同使用的整帧 HUD 入口。
+     *
+     * 选择器等交互控件不属于此画布，因此不会被烧录进导出视频。
+     */
+    fun drawHud(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        style: VideoOverlayStyle,
+        frame: OverlayHudFrame,
+    ) {
+        VideoOverlayHudPainter.draw(canvas, width, height, style, frame)
+    }
+
 
     // ── 速度表绘制参数（与 SpeedometerGauge.kt 原 DrawScope 块 1:1 一致） ───────────
     private const val SPEEDO_MAJOR_STEP_KMH = 20.0

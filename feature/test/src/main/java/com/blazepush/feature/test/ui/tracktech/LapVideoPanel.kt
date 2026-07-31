@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,9 +39,12 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.datastore.VideoOverlayStylePreferences
 import com.blazepush.feature.test.export.LapPlaybackLoader
+import com.blazepush.feature.test.overlay.VideoOverlayStyle
 import com.blazepush.feature.test.usecase.VideoOverlayTelemetry
 import kotlinx.coroutines.delay
+import org.koin.compose.koinInject
 import kotlin.math.abs
 
 /** 三视图游标来源(design Decision 1 回环抑制):仅 CHART 来源触发视频 seekTo。 */
@@ -68,8 +72,10 @@ internal fun LapVideoPanel(
     onCursorChangeFromVideo: (Long) -> Unit,
     onFullscreen: (currentWallClock: Long) -> Unit,
     modifier: Modifier = Modifier,
+    overlayStylePreferences: VideoOverlayStylePreferences = koinInject(),
 ) {
     val context = LocalContext.current
+    val overlayStyle by overlayStylePreferences.style.collectAsState(initial = VideoOverlayStyle.FLAT)
     val timeline = playbackContext.timelinePlan
     val slices = timeline.slices
     val lapStart = playbackContext.lapStartWallClock
@@ -217,7 +223,7 @@ internal fun LapVideoPanel(
                 lap = overlayLap,
                 deltaMs = overlayDeltaMs,
                 trackPoints = playbackContext.trackPoints,
-                scale = 0.5f, // 小面板紧凑缩放(全屏页保持 1f 原尺寸)
+                style = overlayStyle,
             )
         }
         Row(

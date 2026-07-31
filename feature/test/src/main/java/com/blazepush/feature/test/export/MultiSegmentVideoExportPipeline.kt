@@ -10,6 +10,7 @@ import android.view.Surface
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.export.gl.OverlayEglCore
 import com.blazepush.feature.test.export.gl.OverlayGlRenderer
+import com.blazepush.feature.test.overlay.VideoOverlayStyle
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class MultiSegmentVideoExportPipeline(
     private val ctx: LapPlaybackLoader.LapPlaybackContext,
+    private val overlayStyle: VideoOverlayStyle,
 ) {
     private val tag = "MultiExportPipe"
     private val cancelled = AtomicBoolean(false)
@@ -83,7 +85,7 @@ internal class MultiSegmentVideoExportPipeline(
         val decoderSurfaceTexture = glRenderer.prepareSurfaceTexture()
         val frameAvailable = FrameAvailableGate(decoderSurfaceTexture)
         val decoderOutputSurface = Surface(decoderSurfaceTexture)
-        val overlayRenderer = ExportOverlayRenderer(ctx, width, height)
+        val overlayRenderer = ExportOverlayRenderer(ctx, width, height, overlayStyle)
 
         var muxerVideoTrack = -1
         var muxerAudioTrack = -1
