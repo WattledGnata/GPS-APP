@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -63,6 +65,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
@@ -547,6 +550,10 @@ fun LapVideoPlaybackScreen(
                     PlayerView(ctxView).apply {
                         player = exoPlayer
                         useController = false // 按圈回放由圈时间轴主导，不暴露 ExoPlayer 控制条
+                        // The HUD is positioned against the full playback frame.  Zooming
+                        // the video into that same frame avoids letterbox bands that make
+                        // an edge-anchored gauge appear to sit halfway inside the picture.
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     }
                 },
             )
@@ -577,8 +584,10 @@ fun LapVideoPlaybackScreen(
                 trackPoints = ctx.trackPoints,
                 gaugeMaxKmh = gaugeMaxKmh,
                 style = overlayStyle,
-                // 底部控制坞是交互层，不属于 HUD；预留空间避免底栏/圈时被控件覆盖。
-                modifier = Modifier.padding(bottom = 78.dp),
+                // 这里的 Canvas 是 px 尺寸，而 78.dp 在学习机上约等于 230px；
+                // 结果就是仪表整体被抬到屏幕中段。控制坞本身是浮层，不再把
+                // 它的高度从 HUD 坐标系里扣掉，仪表按视频画面底边贴齐。
+                modifier = Modifier.padding(bottom = 10.dp),
             )
             HudStyleSelector(
                 selected = overlayStyle,
@@ -589,8 +598,9 @@ fun LapVideoPlaybackScreen(
                     playableScope.launch { overlayStylePreferences.setStyle(selected) }
                 },
                 modifier = Modifier
+                    // 右上角是 G 仪表的固定锚点；选择器放回上方中线，避免盖住仪表。
                     .align(Alignment.TopCenter)
-                    .padding(top = 12.dp),
+                    .padding(top = 16.dp),
             )
             // 统一底部控制坞：显式播放/暂停 + 分段时间轴 + 导出状态。
             val rangeUi = playheadRangeUi
@@ -615,6 +625,13 @@ fun LapVideoPlaybackScreen(
                         FileLogger.d(TAG, "userPaused -> $userPaused via controlDock")
                     },
                     onSeek = { seekRequestWallClock = it },
+                    onSeekRelative = { deltaMs ->
+                        seekRequestWallClock = seekBy(
+                            range = rangeUi,
+                            current = playheadUi,
+                            deltaMs = deltaMs,
+                        )
+                    },
                     onExport = onExportClick,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -637,6 +654,7 @@ private fun PlaybackControlDock(
     exportBlockReason: String?,
     onTogglePlayback: () -> Unit,
     onSeek: (Long) -> Unit,
+    onSeekRelative: (Long) -> Unit,
     onExport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -659,11 +677,25 @@ private fun PlaybackControlDock(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                IconButton(onClick = { onSeekRelative(-5_000L) }) {
+                    Icon(
+                        imageVector = Icons.Filled.FastRewind,
+                        contentDescription = "后退 5 秒",
+                        tint = TrackTechColors.TextSecondary,
+                    )
+                }
                 IconButton(onClick = onTogglePlayback) {
                     Icon(
                         imageVector = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                         contentDescription = if (isPaused) "播放" else "暂停",
                         tint = TrackTechColors.Cyan,
+                    )
+                }
+                IconButton(onClick = { onSeekRelative(5_000L) }) {
+                    Icon(
+                        imageVector = Icons.Filled.FastForward,
+                        contentDescription = "前进 5 秒",
+                        tint = TrackTechColors.TextSecondary,
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
@@ -684,6 +716,14 @@ private fun PlaybackControlDock(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                val elapsed = (playheadWallClock - range.first).coerceAtLeast(0L)
+                val total = (range.last - range.first).coerceAtLeast(0L)
+                Text(
+                    text = "${formatPlaybackPosition(elapsed)} / ${formatPlaybackPosition(total)}",
+                    style = TrackTechTypography.UiTextSmall,
+                    color = TrackTechColors.TextSecondary,
+                    maxLines = 1,
+                )
                 TextButton(
                     enabled = coverage == VideoExportClip.Coverage.FULL,
                     onClick = onExport,
@@ -1136,6 +1176,15 @@ private fun formatDelta(ms: Long?): String {
     val sign = if (ms >= 0) "+" else "-"
     return "%s%.2f".format(sign, abs(ms) / 1000.0)
 }
+
+/** 回放控制坞使用紧凑的 mm:ss 时间标记。 */
+private fun formatPlaybackPosition(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
+    return "%02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
+}
+
+internal fun seekBy(range: LongRange, current: Long, deltaMs: Long): Long =
+    (current + deltaMs).coerceIn(range.first, range.last)
 
 private tailrec fun Context.findPlaybackActivity(): Activity? = when (this) {
     is Activity -> this

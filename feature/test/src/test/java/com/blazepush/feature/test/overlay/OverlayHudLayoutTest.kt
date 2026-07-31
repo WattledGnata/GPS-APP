@@ -31,4 +31,22 @@ class OverlayHudLayoutTest {
         assertTrue(rail.speed.top > flat.speed.top)
         assertTrue(mechanical.speed.top > flat.speed.top)
     }
+
+    @Test
+    fun wideFrame_anchorsHudToTheEdges() {
+        val width = 2800f
+        val height = 1260f
+        VideoOverlayStyle.entries.forEach { style ->
+            val layout = OverlayHudLayout.calculate(style, width, height)
+            if (style == VideoOverlayStyle.FLAT) {
+                assertTrue("$style top-left", layout.speed.left <= 25f && layout.speed.top <= 25f)
+                assertTrue("$style bottom-right", layout.map.right >= width - 25f && layout.map.bottom >= height - 25f)
+            } else {
+                val container = layout.container ?: error("$style must have an edge container")
+                assertTrue("$style left edge", container.left <= 25f)
+                assertTrue("$style right edge", container.right >= width - 25f)
+                assertTrue("$style bottom edge", container.bottom >= height - 25f)
+            }
+        }
+    }
 }
