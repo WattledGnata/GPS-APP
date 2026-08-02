@@ -7,8 +7,9 @@ import com.blazepush.feature.test.recording.VideoTelemetrySync
  * 单圈视频的统一时间轴计划。
  *
  * 播放、导出和 UI 都消费同一份 wall-clock 覆盖事实，避免继续用“首段起点 + 单文件时长”
- * 推断多段录像。相邻段之间不超过 [SHORT_GAP_TOLERANCE_MS] 的录制轮换间隙视作技术
- * gap：播放时立即跨越，导出时压缩；更长 gap 仍保留为真实缺失画面并使圈覆盖降为 PARTIAL。
+ * 推断多段录像。相邻段之间不超过 [SHORT_GAP_TOLERANCE_MS] 的录制轮换间隙视作无感技术
+ * gap；不超过 [EXPORT_BRIDGE_GAP_TOLERANCE_MS] 的相邻段 gap 虽仍使 coverage 为 PARTIAL，
+ * 但可在明确提示后由导出管线压缩。只有单侧画面或更长 gap 才阻止导出。
  */
 internal data class VideoTimelinePlan(
     val windowStartWallClock: Long,
@@ -35,12 +36,28 @@ internal data class VideoTimelinePlan(
         val wallClockStart: Long,
         val wallClockEnd: Long,
         val isShortTechnicalGap: Boolean,
+        /** true 仅表示 gap 左右各有一段有效 slice；窗口头尾缺画面必须为 false。 */
+        val isBetweenSegments: Boolean,
+        /** 历史库无 rotation reason，只对有界的相邻段 gap 做可逆导出桥接。 */
+        val isExportBridgeable: Boolean,
     ) {
         val durationMs: Long get() = wallClockEnd - wallClockStart
     }
 
     val outputDurationMs: Long get() = slices.lastOrNull()?.outputEndMs ?: 0L
     val isCrossSegment: Boolean get() = slices.map { it.segment.id }.distinct().size > 1
+    val lapGaps: List<Gap>
+        get() = gaps.filter { it.wallClockEnd > lapStartWallClock && it.wallClockStart < lapEndWallClock }
+    val bridgeableLapGaps: List<Gap> get() = lapGaps.filter { it.isExportBridgeable }
+    val blockingLapGaps: List<Gap> get() = lapGaps.filterNot { it.isExportBridgeable }
+    val hasLapPicture: Boolean
+        get() = slices.any { it.wallClockEnd > lapStartWallClock && it.wallClockStart < lapEndWallClock }
+
+    /**
+     * 导出能力与 coverage 分离：可桥接 chapter 仍是 PARTIAL，但已有管线可诚实压缩缺口。
+     * 无画面、窗口头尾单侧缺失、或超过上限的圈内 gap 继续 fail closed。
+     */
+    val isExportable: Boolean get() = hasLapPicture && blockingLapGaps.isEmpty()
 
     fun sliceAtWallClock(wallClock: Long): Slice? =
         slices.firstOrNull { wallClock >= it.wallClockStart && wallClock < it.wallClockEnd }
@@ -64,6 +81,9 @@ internal data class VideoTimelinePlan(
         /** CameraX 按圈轮换时允许被无感压缩的短暂切段间隙。 */
         const val SHORT_GAP_TOLERANCE_MS = 500L
 
+        /** 历史自动轮换没有 reason 字段；仅桥接足够短且两侧都有相邻段的缺口。 */
+        const val EXPORT_BRIDGE_GAP_TOLERANCE_MS = 5_000L
+
         fun build(
             lapStartWallClock: Long,
             lapEndWallClock: Long,
@@ -72,6 +92,7 @@ internal data class VideoTimelinePlan(
             leadInMs: Long = VideoTelemetrySync.LAP_LEAD_IN_MS,
             leadOutMs: Long = VideoTelemetrySync.LAP_LEAD_OUT_MS,
             shortGapToleranceMs: Long = SHORT_GAP_TOLERANCE_MS,
+            exportBridgeGapToleranceMs: Long = EXPORT_BRIDGE_GAP_TOLERANCE_MS,
         ): VideoTimelinePlan {
             val range = VideoTelemetrySync.lapPlayheadRange(
                 lapStartWallClock = lapStartWallClock,
@@ -114,16 +135,29 @@ internal data class VideoTimelinePlan(
 
             val gaps = mutableListOf<Gap>()
             var cursor = windowStart
-            normalized.forEach { slice ->
+            normalized.forEachIndexed { index, slice ->
                 if (slice.start > cursor) {
                     val duration = slice.start - cursor
-                    gaps += Gap(cursor, slice.start, duration <= shortGapToleranceMs)
+                    val isBetweenSegments = index > 0
+                    gaps += Gap(
+                        wallClockStart = cursor,
+                        wallClockEnd = slice.start,
+                        isShortTechnicalGap = duration <= shortGapToleranceMs,
+                        isBetweenSegments = isBetweenSegments,
+                        isExportBridgeable = isBetweenSegments && duration <= exportBridgeGapToleranceMs,
+                    )
                 }
                 cursor = maxOf(cursor, slice.end)
             }
             if (cursor < windowEnd) {
                 val duration = windowEnd - cursor
-                gaps += Gap(cursor, windowEnd, duration <= shortGapToleranceMs)
+                gaps += Gap(
+                    wallClockStart = cursor,
+                    wallClockEnd = windowEnd,
+                    isShortTechnicalGap = duration <= shortGapToleranceMs,
+                    isBetweenSegments = false,
+                    isExportBridgeable = false,
+                )
             }
 
             var outputCursor = 0L
@@ -144,10 +178,8 @@ internal data class VideoTimelinePlan(
             val lapSlices = slices.filter {
                 it.wallClockEnd > lapStartWallClock && it.wallClockStart < lapEndWallClock
             }
-            val lapGaps = gaps.mapNotNull { gap ->
-                val start = maxOf(gap.wallClockStart, lapStartWallClock)
-                val end = minOf(gap.wallClockEnd, lapEndWallClock)
-                if (end > start) Gap(start, end, end - start <= shortGapToleranceMs) else null
+            val lapGaps = gaps.filter {
+                it.wallClockEnd > lapStartWallClock && it.wallClockStart < lapEndWallClock
             }
             val hasLapPicture = lapSlices.isNotEmpty()
             val leadingMissing = lapSlices.minOfOrNull { it.wallClockStart }?.let { it > lapStartWallClock } ?: true

@@ -37,6 +37,7 @@ class VideoTimelinePlanTest {
         assertEquals(2_000L, plan.slices.single().sourceStartMs)
         assertEquals(18_000L, plan.slices.single().sourceEndMs)
         assertFalse(plan.isCrossSegment)
+        assertTrue(plan.isExportable)
     }
 
     @Test
@@ -97,6 +98,8 @@ class VideoTimelinePlanTest {
 
         assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
         assertTrue(plan.gaps.any { it.durationMs == 2_000L && !it.isShortTechnicalGap })
+        assertTrue("两侧都有相邻段的 2 秒 chapter gap 应可桥接", plan.isExportable)
+        assertEquals(2_000L, plan.bridgeableLapGaps.single().durationMs)
     }
 
     @Test
@@ -108,6 +111,7 @@ class VideoTimelinePlanTest {
         )
 
         assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
+        assertFalse("只有后半圈画面不是 chapter gap", plan.isExportable)
     }
 
     @Test
@@ -119,6 +123,7 @@ class VideoTimelinePlanTest {
         )
 
         assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
+        assertFalse("只有前半圈画面不是 chapter gap", plan.isExportable)
     }
 
     @Test
@@ -131,6 +136,7 @@ class VideoTimelinePlanTest {
 
         assertEquals(VideoExportClip.Coverage.NONE, plan.coverage)
         assertTrue(plan.slices.isEmpty())
+        assertFalse(plan.isExportable)
     }
 
     @Test
@@ -148,5 +154,61 @@ class VideoTimelinePlanTest {
 
         assertEquals(VideoExportClip.Coverage.FULL, plan.coverage)
         assertEquals(1, plan.slices.size)
+        assertTrue(plan.isExportable)
     }
+
+    @Test
+    fun `三圈轮换后第四圈圈头 1200ms gap - PARTIAL 但可桥接导出`() {
+        val plan = VideoTimelinePlan.build(
+            lapStartWallClock = 10_000,
+            lapEndWallClock = 20_000,
+            segments = listOf(
+                // 前段在第四圈起点结束；仍落入 lead-in 窗口，证明 gap 左侧有真实 chapter。
+                segment(1, 0, 5_000, 5_000),
+                segment(2, 1, 11_200, 12_000),
+            ),
+        )
+
+        assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
+        assertTrue(plan.isCrossSegment)
+        assertTrue(plan.isExportable)
+        val bridge = plan.bridgeableLapGaps.single()
+        assertEquals(1_200L, bridge.durationMs)
+        assertTrue(bridge.isBetweenSegments)
+        assertTrue(bridge.isExportBridgeable)
+    }
+
+    @Test
+    fun `圈头晚开 2 秒且无前段 - 不可伪装为 chapter`() {
+        val plan = VideoTimelinePlan.build(
+            lapStartWallClock = 10_000,
+            lapEndWallClock = 20_000,
+            segments = listOf(segment(1, 0, 12_000, 12_000)),
+        )
+
+        assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
+        assertFalse(plan.isExportable)
+        assertTrue(plan.bridgeableLapGaps.isEmpty())
+        assertFalse(plan.blockingLapGaps.single().isBetweenSegments)
+    }
+
+    @Test
+    fun `相邻段 5001ms gap 超过桥接上限 - 不可导出`() {
+        val plan = VideoTimelinePlan.build(
+            lapStartWallClock = 10_000,
+            lapEndWallClock = 25_000,
+            segments = listOf(
+                segment(1, 0, 5_000, 8_000),
+                segment(2, 1, 18_001, 10_000),
+            ),
+        )
+
+        assertEquals(VideoExportClip.Coverage.PARTIAL, plan.coverage)
+        assertFalse(plan.isExportable)
+        val gap = plan.blockingLapGaps.single()
+        assertEquals(5_001L, gap.durationMs)
+        assertTrue(gap.isBetweenSegments)
+        assertFalse(gap.isExportBridgeable)
+    }
+
 }

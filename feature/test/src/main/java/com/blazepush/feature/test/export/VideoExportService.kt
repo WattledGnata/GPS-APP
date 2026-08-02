@@ -97,12 +97,8 @@ class VideoExportService : Service(), KoinComponent {
             }
             val (_, ctx) = loaded
             val timeline = ctx.timelinePlan
-            if (timeline.coverage != VideoExportClip.Coverage.FULL) {
-                val longGap = timeline.gaps.firstOrNull {
-                    !it.isShortTechnicalGap &&
-                        it.wallClockEnd > ctx.lapStartWallClock &&
-                        it.wallClockStart < ctx.lapEndWallClock
-                }
+            if (!timeline.isExportable) {
+                val longGap = timeline.blockingLapGaps.firstOrNull()
                 val reason = if (longGap != null) {
                     "圈内缺少 ${"%.1f".format(longGap.durationMs / 1000f)} 秒录像，无法导出"
                 } else {
@@ -110,6 +106,13 @@ class VideoExportService : Service(), KoinComponent {
                 }
                 fail(reason, sessionId, lapNumber)
                 return
+            }
+            if (timeline.bridgeableLapGaps.isNotEmpty()) {
+                FileLogger.d(
+                    tag,
+                    "chapter-bridge export gaps=${timeline.bridgeableLapGaps.map { it.durationMs }} " +
+                        "sid=$sessionId lap=$lapNumber coverage=${timeline.coverage}",
+                )
             }
 
             val displayName = buildFileName(sessionId, lapNumber)

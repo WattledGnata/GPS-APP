@@ -283,17 +283,17 @@ fun LapVideoPlaybackScreen(
     var userPaused by remember { mutableStateOf(false) }
     // 覆盖 gate 与回放/导出共同消费统一多段时间轴，不再读取当前 playlist item 的单文件 duration。
     val coverage = playbackContext?.timelinePlan?.coverage ?: VideoExportClip.Coverage.NONE
+    val isExportable = playbackContext?.timelinePlan?.isExportable == true
     val exportBlockReason = playbackContext?.let { ctx ->
         when (coverage) {
             VideoExportClip.Coverage.FULL -> null
             VideoExportClip.Coverage.NONE -> "本圈没有可用录像"
             VideoExportClip.Coverage.PARTIAL -> {
-                val gap = ctx.timelinePlan.gaps.firstOrNull {
-                    !it.isShortTechnicalGap &&
-                        it.wallClockEnd > ctx.lapStartWallClock &&
-                        it.wallClockStart < ctx.lapEndWallClock
-                }
-                if (gap != null) {
+                val bridgedMs = ctx.timelinePlan.bridgeableLapGaps.sumOf { it.durationMs }
+                val gap = ctx.timelinePlan.blockingLapGaps.firstOrNull()
+                if (isExportable && bridgedMs > 0L) {
+                    "分段衔接 ${"%.1f".format(bridgedMs / 1000f)} 秒 · 可导出"
+                } else if (gap != null) {
                     "圈内缺少 ${"%.1f".format(gap.durationMs / 1000f)} 秒录像"
                 } else {
                     "圈头或圈尾缺少录像"
@@ -327,7 +327,7 @@ fun LapVideoPlaybackScreen(
     }
     // 点导出：13+ 未授予通知权限 → 先请求（回调里再 startExport）；否则直接导。
     val onExportClick: () -> Unit = {
-        if (coverage != VideoExportClip.Coverage.FULL) {
+        if (!isExportable) {
             Toast.makeText(context, exportBlockReason ?: "当前录像不可导出", Toast.LENGTH_SHORT).show()
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -612,6 +612,7 @@ fun LapVideoPlaybackScreen(
                     range = rangeUi,
                     timeline = ctx.timelinePlan,
                     coverage = coverage,
+                    isExportable = isExportable,
                     exportBlockReason = exportBlockReason,
                     onTogglePlayback = {
                         if (userPaused) {
@@ -651,6 +652,7 @@ private fun PlaybackControlDock(
     range: LongRange,
     timeline: VideoTimelinePlan,
     coverage: VideoExportClip.Coverage,
+    isExportable: Boolean,
     exportBlockReason: String?,
     onTogglePlayback: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -707,7 +709,7 @@ private fun PlaybackControlDock(
                     Text(
                         text = status,
                         style = TrackTechTypography.UiTextBody,
-                        color = if (coverage == VideoExportClip.Coverage.FULL) {
+                        color = if (isExportable) {
                             TrackTechColors.Cyan
                         } else {
                             TrackTechColors.TextMuted
@@ -725,7 +727,7 @@ private fun PlaybackControlDock(
                     maxLines = 1,
                 )
                 TextButton(
-                    enabled = coverage == VideoExportClip.Coverage.FULL,
+                    enabled = isExportable,
                     onClick = onExport,
                 ) {
                     Text("导出")
