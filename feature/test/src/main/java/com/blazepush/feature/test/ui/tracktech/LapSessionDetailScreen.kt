@@ -235,6 +235,7 @@ fun LapSessionDetailScreen(
                     durationMs = durationMs,
                     topSpeedKmh = topSpeed,
                     distanceKm = distanceKm,
+                    videoStats = videoStats,
                 )
             }
             // M3 COMPARE 入口（lap-comparison-screen-with-cursor）：仅在 ≥2 个 VALID/BEST 圈时
@@ -398,6 +399,7 @@ private fun OverviewSection(
     durationMs: Long?,
     topSpeedKmh: Double?,
     distanceKm: Double?,
+    videoStats: SessionVideoStats,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val fontScale = LocalDensity.current.fontScale
@@ -515,6 +517,14 @@ private fun OverviewSection(
             OverviewRow(
                 label = "Distance",
                 value = distanceKm?.let { "%.2f km".format(it) } ?: "--",
+            )
+            OverviewRow(
+                label = "Video",
+                value = if (videoStats.hasVideo) {
+                    "${videoStats.segmentCount} segments · ${formatFileSize(videoStats.totalBytes)}"
+                } else {
+                    "Not attached"
+                },
             )
             }
         }

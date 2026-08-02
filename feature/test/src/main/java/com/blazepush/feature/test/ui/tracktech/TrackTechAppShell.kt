@@ -83,7 +83,11 @@ fun TrackTechAppShell() {
         LaunchedEffect(Unit) {
             LapSessionSaveBus.events.collect { result ->
                 val snackResult = snackbarHostState.showSnackbar(
-                    message = "Lap session saved · ${result.lapCount} laps",
+                    message = if (result.isDebugCapture) {
+                        "自由采集 Session 已保存"
+                    } else {
+                        "Lap session saved · ${result.lapCount} laps"
+                    },
                     actionLabel = "View Record",
                     duration = SnackbarDuration.Long,
                 )

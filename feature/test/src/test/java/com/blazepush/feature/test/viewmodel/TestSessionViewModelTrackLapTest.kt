@@ -135,6 +135,40 @@ class TestSessionViewModelTrackLapTest {
         }
     }
 
+    @Test
+    fun `free capture eagerly creates untracked session and closes as debug result`() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = mockTelemetryRepositoryWithEmptyFlows()
+            doReturn("debug-session").`when`(repository).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                null,
+                "DEBUG 自由采集",
+            )
+            val viewModel = createViewModel(telemetryRepository = repository)
+
+            viewModel.startDebugCaptureMode()
+
+            assertEquals(TestMode.DebugCapture, viewModel.currentMode.value)
+            assertEquals("debug-session", viewModel.getActiveLapSessionId())
+            assertEquals("debug-session", viewModel.debugCaptureStats.value.sessionId)
+
+            val result = viewModel.finishActiveLapSession()
+            assertEquals("debug-session", result?.sessionId)
+            assertEquals(0, result?.lapCount)
+            assertTrue(result?.isDebugCapture == true)
+            assertFalse(viewModel.debugCaptureStats.value.isActive)
+            verify(repository, times(1)).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                null,
+                "DEBUG 自由采集",
+            )
+            verify(repository, times(1)).endSession("debug-session")
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     /**
      * TFIC 预设 trackId 进入 lap debug 选择流程后 ViewModel 状态正确。
      */

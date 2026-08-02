@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
@@ -161,6 +162,18 @@ fun LapsHomeScreen(
                 accentColor = TrackTechColors.Cyan,
                 onClick = { showSelectTrackSheet = true },
             )
+            if (isDebugCaptureAvailable()) {
+                SecondaryActionPanel(
+                    title = "FREE CAPTURE",
+                    subtitle = "任意地点采集 GPS 与视频",
+                    leadingIcon = Icons.Filled.BugReport,
+                    accentColor = TrackTechColors.Purple,
+                    onClick = {
+                        testSessionViewModel.startDebugCaptureMode()
+                        navController.navigate("lap_live")
+                    },
+                )
+            }
         }
 
         Column(

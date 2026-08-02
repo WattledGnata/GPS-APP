@@ -74,7 +74,30 @@ import java.util.UUID
 enum class TestMode {
     Acceleration,
     Braking,
-    LapDebug
+    LapDebug,
+    DebugCapture,
+}
+
+data class DebugCaptureStats(
+    val isActive: Boolean = false,
+    val sessionId: String? = null,
+    val startedAtWallClock: Long? = null,
+    val mainFrameCount: Long = 0L,
+    val reliableFrameCount: Long = 0L,
+    val noFixFrameCount: Long = 0L,
+)
+
+internal fun debugCaptureFlags(gpsData: GpsData): Int {
+    var flags = 0
+    if (gpsData.fixQuality > 0) flags = flags or 0x01
+    if (gpsData.isTimeSynced) flags = flags or 0x02
+    if (gpsData.isStale) flags = flags or 0x04
+    if (gpsData.isUsableForTiming()) flags = flags or 0x08
+    if (gpsData.satelliteCount >= 6) flags = flags or 0x10
+    if (gpsData.hdop > 0.0 && gpsData.hdop < 2.0) flags = flags or 0x20
+    if (gpsData.isConnected) flags = flags or 0x40
+    if (gpsData.hasMainFrame) flags = flags or 0x80
+    return flags
 }
 
 /**
@@ -89,6 +112,7 @@ data class LapSessionSaveResult(
     val lapCount: Int,
     val bestLapMs: Long?,
     val totalDurationMs: Long,
+    val isDebugCapture: Boolean = false,
 )
 
 /**
@@ -166,6 +190,9 @@ class TestSessionViewModel(
 
     private val _currentMode = MutableStateFlow(TestMode.Acceleration)
     val currentMode: StateFlow<TestMode> = _currentMode.asStateFlow()
+
+    private val _debugCaptureStats = MutableStateFlow(DebugCaptureStats())
+    val debugCaptureStats: StateFlow<DebugCaptureStats> = _debugCaptureStats.asStateFlow()
 
     // A37 change fix-gps-stats-and-lazy-catalog-hot-start：
     // 构造期给空列表避免同步读 catalog 阻塞 Main；viewModelScope.launch 内异步加载（见 init block）。
@@ -337,21 +364,32 @@ class TestSessionViewModel(
      */
     suspend fun prepareActiveLapSessionForRecording(): String? = lapSessionMutex.withLock {
         activeLapSessionId?.let { return@withLock it }
-        if (_currentMode.value != TestMode.LapDebug || !isLapRecording || activeLapStartSystemTs == null) {
+        val mode = _currentMode.value
+        if (mode !in setOf(TestMode.LapDebug, TestMode.DebugCapture) ||
+            !isLapRecording || activeLapStartSystemTs == null
+        ) {
             return@withLock null
         }
-        val config = _lapRunConfig.value ?: return@withLock null
         val generation = lapSessionGeneration
+        val config = _lapRunConfig.value
+        if (mode == TestMode.LapDebug && config == null) return@withLock null
         val created = telemetryRepository.startSession(
             type = TelemetrySessionType.LAP_SESSION,
-            trackId = config.trackId,
-            trackNameSnapshot = trackCatalog.getTrack(config.trackId)?.name?.zh,
+            trackId = config?.trackId,
+            trackNameSnapshot = if (mode == TestMode.DebugCapture) {
+                "DEBUG 自由采集"
+            } else {
+                config?.trackId?.let { trackCatalog.getTrack(it)?.name?.zh }
+            },
         )
         if (generation != lapSessionGeneration || !isLapRecording) {
             telemetryRepository.endSession(created)
             return@withLock null
         }
         activeLapSessionId = created
+        if (mode == TestMode.DebugCapture) {
+            _debugCaptureStats.value = _debugCaptureStats.value.copy(sessionId = created)
+        }
         FileLogger.d(TAG, "lap session persisted before consumer start: sessionId=$created generation=$generation")
         created
     }
@@ -456,6 +494,12 @@ class TestSessionViewModel(
                     lastMainFrameSilenceTimeoutMs = gpsData.mainFrameSilenceTimeoutMs
                 }
                 updateLaunchStatus(gpsData)
+
+                if (_currentMode.value == TestMode.DebugCapture) {
+                    if (isNewMainFrame) captureDebugMainFrame(gpsData)
+                    // 自由采集只落原始 Main 帧，不进滤波、圈门、秒差或计时引擎。
+                    return@collect
+                }
 
                 if (!gpsData.isUsableForTiming()) {
                     resetGpsContinuity()
@@ -634,6 +678,52 @@ class TestSessionViewModel(
         FileLogger.d(TAG, "lapDebugTrackSummary: ${buildTrackDebugSummary(track)}")
     }
 
+    fun startDebugCaptureMode() {
+        _currentMode.value = TestMode.DebugCapture
+        _lapRunConfig.value = null
+        _lapSession.value = null
+        _latestLapRecords.value = emptyList()
+        resetGpsContinuity()
+        isLapRecording = true
+        lastWrittenCrossingCount = 0
+        activeLapStartSystemTs = System.currentTimeMillis()
+        activeLapSessionId = null
+        lapSessionGeneration++
+        _debugCaptureStats.value = DebugCaptureStats(
+            isActive = true,
+            startedAtWallClock = activeLapStartSystemTs,
+        )
+        lapSessionStartJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            prepareActiveLapSessionForRecording()
+        }
+        FileLogger.d(TAG, "debug free capture started generation=$lapSessionGeneration")
+    }
+
+    private suspend fun captureDebugMainFrame(gpsData: GpsData) {
+        val sessionId = prepareActiveLapSessionForRecording() ?: return
+        if (!isActiveLapSession(sessionId)) return
+        val sessionStartTs = telemetryRepository.activeSessionStartTs ?: return
+        telemetryRepository.writeSample(
+            TelemetrySample(
+                tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
+                lat = gpsData.latitude,
+                lon = gpsData.longitude,
+                speedKmh = gpsData.speed,
+                bearingDeg = gpsData.bearing,
+                flags = debugCaptureFlags(gpsData),
+            ),
+        )
+        val current = _debugCaptureStats.value
+        _debugCaptureStats.value = current.copy(
+            sessionId = sessionId,
+            mainFrameCount = current.mainFrameCount + 1,
+            reliableFrameCount = current.reliableFrameCount +
+                if (gpsData.isUsableForTiming()) 1 else 0,
+            noFixFrameCount = current.noFixFrameCount +
+                if (gpsData.fixQuality <= 0 || gpsData.satelliteCount <= 0) 1 else 0,
+        )
+    }
+
     fun stopLapDebugSession() {
         isLapRecording = false
         _lapSession.value = _lapSession.value?.copy(status = LapSessionStatus.Finished)
@@ -648,6 +738,7 @@ class TestSessionViewModel(
         _lapRunConfig.value = null
         _lapSession.value = null
         _currentMode.value = TestMode.Acceleration
+        _debugCaptureStats.value = DebugCaptureStats()
         endActiveLapSession()
     }
 
@@ -705,6 +796,7 @@ class TestSessionViewModel(
         // 快进快出也必须先完成“进页即建 Session”，再收尾为 0s/几秒记录。
         lapSessionStartJob?.join()
         val sessionSnapshot = _lapSession.value
+        val wasDebugCapture = _currentMode.value == TestMode.DebugCapture
         val startTs = activeLapStartSystemTs
         // D12 契约：lapCount / bestLapMs 仅基于 qualityFlags 全空的 valid 圈，
         // 排除 IncompleteSectors / ProtocolDesyncGap / SuspectedJitter 等带 quality flag 的作废圈
@@ -734,12 +826,16 @@ class TestSessionViewModel(
         )
 
         _lapSession.value = sessionSnapshot?.copy(status = LapSessionStatus.Finished)
+        if (_currentMode.value == TestMode.DebugCapture) {
+            _debugCaptureStats.value = _debugCaptureStats.value.copy(isActive = false)
+        }
 
         return LapSessionSaveResult(
             sessionId = sessionId,
             lapCount = lapCount,
             bestLapMs = bestLapMs,
             totalDurationMs = totalDurationMs,
+            isDebugCapture = wasDebugCapture,
         )
     }
 

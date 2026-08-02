@@ -69,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.blazepush.core.camera.CameraAvailability
+import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
@@ -81,6 +83,9 @@ import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import com.blazepush.feature.test.viewmodel.DebugCaptureStats
+import com.blazepush.feature.test.viewmodel.GpsDataViewModel
+import com.blazepush.feature.test.viewmodel.TestMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.sample
@@ -131,6 +136,12 @@ fun LapLiveScreen(
         )
     }
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
+    val currentMode by sessionViewModel.currentMode.collectAsState()
+    val debugCaptureStats by sessionViewModel.debugCaptureStats.collectAsState()
+    val gpsDataViewModel = koinInject<GpsDataViewModel>()
+    val gpsData by gpsDataViewModel.gpsData.collectAsState()
+    val connectionState by gpsDataViewModel.connectionState.collectAsState()
+    val isDebugCapture = currentMode == TestMode.DebugCapture
 
     // 路测修复(2026-06-04 #2 播报无效真因)：V1→V2 改版时语音链路未迁移,V2 圈速屏出圈
     // 无人调 announceLapTime。照搬旧 ui/screen/TestExecutionScreen 的接法:监听 completedLaps
@@ -173,7 +184,7 @@ fun LapLiveScreen(
     var savingVideo by remember { mutableStateOf(false) }
     // REC 先 await Session Room 持久化。END 必须先 join 这个短任务，避免“结束后才启动 CameraX”。
     var recordingStartJob by remember { mutableStateOf<Job?>(null) }
-    val trackName = track?.name?.zh ?: "—"
+    val trackName = if (isDebugCapture) "DEBUG 自由采集" else track?.name?.zh ?: "—"
 
     // camera-preview-in-laplivescreen round v2（横滑独立预览页返工）：
     // 页 0 = 纯 HUD（驾驶页，绝不开相机），页 1 = 相机取景页（仅在该页 current 时才绑相机 = 省电省热）。
@@ -355,6 +366,10 @@ fun LapLiveScreen(
             LapHudPage(
                 trackName = trackName,
                 lapLiveState = lapLiveState,
+                isDebugCapture = isDebugCapture,
+                debugCaptureStats = debugCaptureStats,
+                gpsData = gpsData,
+                connectionState = connectionState,
                 onConfirmEnd = onConfirmEnd,
                 hasCamera = hasCamera,
                 recordingState = recordingState,
@@ -424,6 +439,10 @@ fun LapLiveScreen(
 private fun LapHudPage(
     trackName: String,
     lapLiveState: LapLiveState,
+    isDebugCapture: Boolean,
+    debugCaptureStats: DebugCaptureStats,
+    gpsData: GpsData,
+    connectionState: ConnectionState,
     onConfirmEnd: () -> Unit,
     hasCamera: Boolean,
     recordingState: RecordingState,
@@ -442,7 +461,12 @@ private fun LapHudPage(
             LapLiveTopStrip(
                 trackName = trackName,
                 lapNumber = lapLiveState.currentLapNumber,
-                isReady = lapLiveState.abnormalState == null,
+                isReady = if (isDebugCapture) {
+                    connectionState == ConnectionState.CONNECTED && !gpsData.isStale
+                } else {
+                    lapLiveState.abnormalState == null
+                },
+                isDebugCapture = isDebugCapture,
             )
 
             val abnormal = lapLiveState.abnormalState
@@ -450,9 +474,19 @@ private fun LapHudPage(
             // 硬打断（BLE 断开 / 圈失效）继续用大 banner 盖住仪表盘强提醒；
             // 软提示（GPS 信号丢失 / 等待定位）不盖计时，仅在仪表盘顶部叠加柔和小条，
             // 行驶中 GPS 短暂丢点（已由 deriver 静默 30s 内）即便超时也不抢走计时画面。
-            val isHardInterrupt = abnormal == AbnormalState.BLE_DISCONNECTED ||
+            val isHardInterrupt = !isDebugCapture && (abnormal == AbnormalState.BLE_DISCONNECTED ||
                 abnormal == AbnormalState.LAP_INVALIDATED
-            if (isHardInterrupt) {
+            )
+            if (isDebugCapture) {
+                DebugCaptureDashboard(
+                    stats = debugCaptureStats,
+                    gpsData = gpsData,
+                    connectionState = connectionState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else if (isHardInterrupt) {
                 AbnormalBanner(
                     state = abnormal!!,
                     modifier = Modifier
@@ -796,13 +830,14 @@ private fun LapLiveTopStrip(
     trackName: String,
     lapNumber: Int,
     isReady: Boolean,
+    isDebugCapture: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "LAPS",
+            text = if (isDebugCapture) "CAPTURE" else "LAPS",
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
             maxLines = 1,
@@ -818,18 +853,116 @@ private fun LapLiveTopStrip(
             modifier = Modifier.weight(1f, fill = false),
         )
         Spacer(Modifier.width(12.dp))
-        Text(
-            text = "LAP $lapNumber",
-            style = TrackTechTypography.UiTextLabel,
-            color = TrackTechColors.Purple,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (!isDebugCapture) {
+            Text(
+                text = "LAP $lapNumber",
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.Purple,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Spacer(Modifier.weight(1f))
         Text(
             text = if (isReady) "Ready" else "—",
             style = TrackTechTypography.UiTextSmall,
             color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun DebugCaptureDashboard(
+    stats: DebugCaptureStats,
+    gpsData: GpsData,
+    connectionState: ConnectionState,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MetricTile(
+                label = "MAIN FRAMES",
+                value = stats.mainFrameCount.toString(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                accentColor = TrackTechColors.Cyan,
+                valueSize = MetricSize.Medium,
+            )
+            MetricTile(
+                label = "RELIABLE",
+                value = stats.reliableFrameCount.toString(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                accentColor = TrackTechColors.Green,
+                valueSize = MetricSize.Medium,
+            )
+            MetricTile(
+                label = "NO FIX",
+                value = stats.noFixFrameCount.toString(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                accentColor = TrackTechColors.Red,
+                valueSize = MetricSize.Medium,
+            )
+        }
+        CutCornerPanel(
+            modifier = Modifier.fillMaxWidth(),
+            cutSize = 8.dp,
+            cutCorners = cutCornersAll,
+            contentPadding = 12.dp,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                DebugStatusRow("BLE", connectionState.name)
+                DebugStatusRow(
+                    "MAIN",
+                    when {
+                        gpsData.isStale -> "静默 / STALE"
+                        gpsData.hasMainFrame -> "实时 · #${gpsData.mainFrameSequence}"
+                        else -> "尚未收到"
+                    },
+                )
+                DebugStatusRow(
+                    "FIX",
+                    "Q${gpsData.fixQuality} · SAT ${gpsData.satelliteCount} · HDOP ${"%.2f".format(gpsData.hdop)}",
+                )
+                DebugStatusRow(
+                    "TIME",
+                    if (gpsData.isTimeSynced) "SYNCED" else "UNSYNCED",
+                )
+                DebugStatusRow(
+                    "FRESHNESS",
+                    "GEN ${gpsData.connectionGeneration} · ${gpsData.mainFrameSilenceTimeoutMs}ms",
+                )
+                DebugStatusRow(
+                    "SESSION",
+                    stats.sessionId?.take(8) ?: "CREATING",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DebugStatusRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = TrackTechTypography.UiTextSmall,
+            color = TrackTechColors.TextSecondary,
+            modifier = Modifier.width(92.dp),
+            maxLines = 1,
+        )
+        Text(
+            text = value,
+            style = TrackTechTypography.UiTextBody,
+            color = TrackTechColors.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
