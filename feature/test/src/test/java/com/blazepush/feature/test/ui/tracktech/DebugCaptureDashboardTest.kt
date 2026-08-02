@@ -42,4 +42,31 @@ class DebugCaptureDashboardTest {
 
         assertEquals(0L, debugFrameAgeMs(gpsData, nowElapsedRealtimeMs = 2_000L))
     }
+
+    @Test
+    fun `GPS protocol clock is projected from monotonic Main receive time`() {
+        val gpsData = GpsData.Empty.copy(
+            timestamp = 1_700_000_000_000L,
+            isTimeSynced = true,
+            hasMainFrame = true,
+            mainFrameReceivedAtElapsedRealtimeMs = 10_000L,
+        )
+
+        assertEquals(
+            1_700_000_000_250L,
+            debugProjectedGpsTimeMs(gpsData, nowElapsedRealtimeMs = 10_250L),
+        )
+    }
+
+    @Test
+    fun `unsynced GPS protocol clock is never replaced by phone time`() {
+        val gpsData = GpsData.Empty.copy(
+            timestamp = Long.MIN_VALUE,
+            isTimeSynced = false,
+            hasMainFrame = true,
+            mainFrameReceivedAtElapsedRealtimeMs = 10_000L,
+        )
+
+        assertNull(debugProjectedGpsTimeMs(gpsData, nowElapsedRealtimeMs = 10_250L))
+    }
 }

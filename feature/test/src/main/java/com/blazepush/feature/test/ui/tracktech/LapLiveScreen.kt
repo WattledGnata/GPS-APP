@@ -954,8 +954,20 @@ private fun DebugCaptureDashboard(
         frameAgeMs >= gpsData.mainFrameSilenceTimeoutMs -> TrackTechColors.Red
         else -> TrackTechColors.Green
     }
-    val timeText = remember(nowWallClockMs) {
-        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(nowWallClockMs))
+    val projectedGpsTimeMs = debugProjectedGpsTimeMs(gpsData, nowElapsedRealtimeMs)
+        ?.takeIf { hasFreshMain }
+    val phoneTimeText = remember(nowWallClockMs) {
+        formatDebugClock(nowWallClockMs)
+    }
+    val gpsTimeText = remember(projectedGpsTimeMs) {
+        projectedGpsTimeMs?.let(::formatDebugClock) ?: "--"
+    }
+    val gpsMinusPhoneMs = projectedGpsTimeMs?.minus(nowWallClockMs)
+    val timeDeltaText = gpsMinusPhoneMs?.let(::formatSignedMillis) ?: "--"
+    val timeDeltaAccent = when {
+        gpsMinusPhoneMs == null -> TrackTechColors.Red
+        kotlin.math.abs(gpsMinusPhoneMs) <= 200L -> TrackTechColors.Green
+        else -> TrackTechColors.Purple
     }
 
     Column(
@@ -1013,23 +1025,31 @@ private fun DebugCaptureDashboard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "CURRENT TIME",
-                value = timeText,
-                status = if (gpsData.isTimeSynced) "PHONE CLOCK · GPS SYNCED" else "PHONE CLOCK",
+                label = "PHONE TIME",
+                value = phoneTimeText,
+                status = "系统时钟",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 accentColor = TrackTechColors.Cyan,
-                valueSize = MetricSize.Medium,
+                valueSize = MetricSize.Small,
                 maxValueFontScale = 1.10f,
             )
             MetricTile(
-                label = "RX AGE",
-                value = ageText,
-                unit = if (frameAgeMs != null) "ms" else null,
-                status = "距最新 Main 帧",
+                label = "GPS TIME",
+                value = gpsTimeText,
+                status = if (projectedGpsTimeMs != null) "设备协议时间" else "UNSYNCED",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                accentColor = ageAccent,
-                valueColor = ageAccent,
-                valueSize = MetricSize.Medium,
+                accentColor = if (projectedGpsTimeMs != null) TrackTechColors.Green else TrackTechColors.Red,
+                valueSize = MetricSize.Small,
+                maxValueFontScale = 1.10f,
+            )
+            MetricTile(
+                label = "GPS − PHONE",
+                value = timeDeltaText,
+                status = "时钟偏差",
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                accentColor = timeDeltaAccent,
+                valueColor = timeDeltaAccent,
+                valueSize = MetricSize.Small,
                 maxValueFontScale = 1.15f,
             )
             MetricTile(
@@ -1047,6 +1067,17 @@ private fun DebugCaptureDashboard(
                     TrackTechColors.Red
                 },
                 valueSize = MetricSize.Medium,
+                maxValueFontScale = 1.15f,
+            )
+            MetricTile(
+                label = "RX AGE",
+                value = ageText,
+                unit = if (frameAgeMs != null) "ms" else null,
+                status = "距最新 Main 帧",
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                accentColor = ageAccent,
+                valueColor = ageAccent,
+                valueSize = MetricSize.Small,
                 maxValueFontScale = 1.15f,
             )
         }
@@ -1081,6 +1112,25 @@ private fun DebugCaptureDashboard(
 internal fun debugFrameAgeMs(gpsData: GpsData, nowElapsedRealtimeMs: Long): Long? {
     if (!gpsData.hasMainFrame || gpsData.mainFrameReceivedAtElapsedRealtimeMs <= 0L) return null
     return (nowElapsedRealtimeMs - gpsData.mainFrameReceivedAtElapsedRealtimeMs).coerceAtLeast(0L)
+}
+
+internal fun debugProjectedGpsTimeMs(gpsData: GpsData, nowElapsedRealtimeMs: Long): Long? {
+    if (!gpsData.isTimeSynced || gpsData.timestamp == Long.MIN_VALUE ||
+        !gpsData.hasMainFrame || gpsData.mainFrameReceivedAtElapsedRealtimeMs <= 0L
+    ) {
+        return null
+    }
+    val elapsedSinceFrame = (nowElapsedRealtimeMs - gpsData.mainFrameReceivedAtElapsedRealtimeMs)
+        .coerceAtLeast(0L)
+    return gpsData.timestamp + elapsedSinceFrame
+}
+
+private fun formatDebugClock(timestampMs: Long): String =
+    SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(timestampMs))
+
+private fun formatSignedMillis(valueMs: Long): String = when {
+    valueMs > 0L -> "+${valueMs}ms"
+    else -> "${valueMs}ms"
 }
 
 @Composable

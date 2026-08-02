@@ -703,6 +703,17 @@ class TestSessionViewModel(
         val sessionId = prepareActiveLapSessionForRecording() ?: return
         if (!isActiveLapSession(sessionId)) return
         val sessionStartTs = telemetryRepository.activeSessionStartTs ?: return
+        val phoneMinusGpsAtReceiveMs = gpsData.timestamp
+            .takeIf { gpsData.isTimeSynced && it != Long.MIN_VALUE }
+            ?.let { System.currentTimeMillis() - it }
+        FileLogger.vSampled(TAG, "debug-capture-$sessionId") {
+            "debugCapture sid=$sessionId gen=${gpsData.connectionGeneration} " +
+                "seq=${gpsData.mainFrameSequence} rxElapsed=${gpsData.mainFrameReceivedAtElapsedRealtimeMs} " +
+                "deadline=${gpsData.mainFrameSilenceTimeoutMs}ms rate=${gpsData.frequency}Hz " +
+                "fix=${gpsData.fixQuality} sats=${gpsData.satelliteCount} hdop=${gpsData.hdop} " +
+                "timeSynced=${gpsData.isTimeSynced} gpsTs=${gpsData.timestamp} " +
+                "phoneMinusGpsAtRx=${phoneMinusGpsAtReceiveMs ?: "NA"}ms stale=${gpsData.isStale}"
+        }
         telemetryRepository.writeSample(
             TelemetrySample(
                 tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
