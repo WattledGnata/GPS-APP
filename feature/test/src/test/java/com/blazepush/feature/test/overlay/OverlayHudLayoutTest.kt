@@ -40,7 +40,9 @@ class OverlayHudLayoutTest {
         VideoOverlayStyle.entries.forEach { style ->
             val layout = OverlayHudLayout.calculate(style, width, height)
             if (style == VideoOverlayStyle.FLAT) {
-                assertTrue("$style top-left", layout.speed.left <= 25f && layout.speed.top <= 25f)
+                assertTrue("$style left edge", layout.speed.left <= 25f)
+                assertTrue("$style speed has top breathing room", layout.speed.top >= height * 0.04f)
+                assertTrue("$style speed remains near top", layout.speed.top <= height * 0.08f)
                 assertTrue("$style right edge", layout.map.right >= width - 25f)
                 assertTrue("$style player safe bottom", layout.map.bottom <= minimumSafeBottom)
             } else {

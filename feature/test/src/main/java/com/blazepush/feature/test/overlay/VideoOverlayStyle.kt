@@ -60,12 +60,20 @@ data class OverlayHudLayout(
                 VideoOverlayStyle.FLAT -> {
                     val speedWidth = short * 0.25f
                     val speedHeight = short * 0.20f
+                    // 速度是左上角最重的视觉元素，不能像装饰线一样贴住画面顶边。
+                    // 在通用 edge margin 之外再留 4.5% 短边，使其避开播放器/刘海视觉压迫。
+                    val speedTop = margin + short * 0.045f
                     val timingWidth = short * 0.38f
                     val timingHeight = short * 0.21f
                     val gSize = short * 0.15f
                     val mapSize = short * 0.21f
                     OverlayHudLayout(
-                        speed = HudRect(margin, margin, margin + speedWidth, margin + speedHeight),
+                        speed = HudRect(
+                            margin,
+                            speedTop,
+                            margin + speedWidth,
+                            speedTop + speedHeight,
+                        ),
                         timing = HudRect(margin, safeBottom - timingHeight, margin + timingWidth, safeBottom),
                         gForce = HudRect(width - margin - gSize, margin, width - margin, margin + gSize),
                         map = HudRect(width - margin - mapSize, safeBottom - mapSize, width - margin, safeBottom),
