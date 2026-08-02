@@ -67,6 +67,20 @@ interface TelemetrySessionDao {
     @Query("SELECT * FROM telemetry_sessions ORDER BY startTs DESC")
     suspend fun queryAll(): List<TelemetrySessionEntity>
 
+    /**
+     * 冷启动恢复候选：只处理本进程启动前已存在、仍保持 startSession 占位值的圈速 session。
+     *
+     * 使用默认实现复用 [queryAll]，让既有 Fake DAO 自动继承同一过滤语义；数据量是本机圈速
+     * session 量级，不引入新 schema/index。`createdBeforeMs` 是进程启动 cutoff，防异步恢复任务
+     * 误收尾本次进程刚创建的 session。
+     */
+    suspend fun queryIncompleteLapSessions(createdBeforeMs: Long): List<TelemetrySessionEntity> =
+        queryAll().filter { entity ->
+            entity.sessionType == "LAP_SESSION" &&
+                entity.endTs <= entity.startTs &&
+                entity.startTs < createdBeforeMs
+        }
+
     // round wire-real-data-to-records-and-laps-tabs §1.2：按 trackId 聚合查询。
     // 关键 schema 口径：
     // - 列名 sessionType（不是 type），值 'LAP_SESSION'（与 TelemetrySessionType.LAP_SESSION.name 一致）

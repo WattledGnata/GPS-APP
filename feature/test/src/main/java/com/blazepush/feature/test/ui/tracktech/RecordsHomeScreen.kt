@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,9 +54,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
+import com.blazepush.core.data.repository.IncompleteLapSessionRecoveryCoordinator
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.feature.test.model.track.Track
+import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.ui.tracktech.components.DeleteCandidate
 import com.blazepush.feature.test.ui.tracktech.components.DeleteHistoryDialog
 import com.blazepush.feature.test.ui.tracktech.format.formatDate
@@ -63,16 +66,36 @@ import com.blazepush.feature.test.ui.tracktech.format.formatLapMs
 import com.blazepush.feature.test.ui.tracktech.format.formatRunTimestamp
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 
 @Composable
 fun RecordsHomeScreen(
     navController: NavController,
     @Suppress("UNUSED_PARAMETER") onTabSelected: (Int) -> Unit = {},
+    isActive: Boolean = true,
+    recoveryCoordinator: IncompleteLapSessionRecoveryCoordinator = koinInject(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     // rememberSaveable：进入 detail 屏后返回，sub-tab 选中态保持。
     var selectedSegment by rememberSaveable { mutableStateOf("PERFORMANCE") }
+
+    // Pager 会预组合 Records；仅当页面真正停稳且 LAPS 被选中时检查。
+    // isActive false -> true 或 PERFORMANCE -> LAPS 都会重新触发。
+    LaunchedEffect(isActive, selectedSegment) {
+        if (!isActive || selectedSegment != "LAPS") return@LaunchedEffect
+        runCatching { recoveryCoordinator.recover() }
+            .onSuccess { report ->
+                FileLogger.d(
+                    "LapRecovery",
+                    "laps tab recovery candidates=${report.candidates} " +
+                        "recovered=${report.recovered.size} failed=${report.failed.size}",
+                )
+            }
+            .onFailure { error ->
+                FileLogger.e("LapRecovery", "laps tab recovery failed", error)
+            }
+    }
 
     Column(
         modifier = modifier

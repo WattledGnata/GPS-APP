@@ -140,6 +140,7 @@ fun TrackTechAppShell() {
                             TabIndex.Records -> RecordsHomeScreen(
                                 navController = navController,
                                 onTabSelected = onTabSelected,
+                                isActive = pagerState.settledPage == TabIndex.Records,
                             )
                             TabIndex.Device -> DeviceHomeScreen(
                                 navController = navController,

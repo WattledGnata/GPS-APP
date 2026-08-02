@@ -45,6 +45,33 @@ class TelemetryRepository(
     // video-segment-schema round ②a：视频段一对多 DAO（attach append + 全段 cascade）
     private val videoSegmentDao: VideoSegmentDao,
 ) {
+    data class RecoveredLapSession(
+        val sessionId: String,
+        val lapCount: Int,
+        val bestLapMs: Long?,
+        val endTs: Long,
+        val videoSegmentCount: Int,
+    )
+
+    data class FailedLapSessionRecovery(
+        val sessionId: String,
+        val errorType: String,
+    )
+
+    data class LapSessionRecoveryReport(
+        val candidates: Int,
+        val recovered: List<RecoveredLapSession>,
+        val failed: List<FailedLapSessionRecovery>,
+    )
+
+    private data class PersistedLapEvidence(
+        val lapCount: Int,
+        val bestLapMs: Long?,
+        val topSpeedKmh: Double?,
+        val lastCrossingWallClock: Long?,
+        val lastSampleDeltaMs: Long?,
+    )
+
     private var activeWriter: BinaryTelemetryWriter? = null
     private var activeSessionId: String? = null
     private var activeSessionType: TelemetrySessionType = TelemetrySessionType.PERFORMANCE_TEST
@@ -164,37 +191,139 @@ class TelemetryRepository(
         activeSessionStartTs = null
         val endTs = System.currentTimeMillis()
 
-        // 用 IO 调度跑扫 binary + 查 crossings 派生（避免阻塞 caller 主线程）
-        val (topSpeedKmh, lapCount, bestLapMs) = withContext(Dispatchers.IO) {
-            val topSpeed = if (filePath != null) {
-                runCatching { PerformanceTestTelemetryReader.read(filePath) }
-                    .getOrDefault(emptyList())
-                    .maxOfOrNull { it.speedKmh }
-                    ?.takeIf { it > 0.0 }
-            } else {
-                null
-            }
-            val crossings = crossingDao.queryBySessionId(sessionId)
-            val acceptedSF = crossings
-                .filter { it.gateType.equals("StartFinish", ignoreCase = true) && it.accepted }
-                .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
-            val durations = acceptedSF.zipWithNext { a, b -> a to b }
-                .mapNotNull { (a, b) ->
-                    val sa = a.crossingWallClockTimestampMs
-                    val sb = b.crossingWallClockTimestampMs
-                    if (sa != null && sb != null) sb - sa else null
-                }
-            Triple(topSpeed, durations.size, durations.minOrNull())
-        }
+        // 正常结束与冷启动恢复共享 persisted evidence 口径，防两个入口的圈数/最佳圈漂移。
+        val evidence = derivePersistedLapEvidence(sessionId, filePath)
 
         sessionDao.updateSummary(
             sessionId = sessionId,
             endTs = endTs,
-            lapCount = lapCount,
-            bestLapMs = bestLapMs,
-            topSpeedKmh = topSpeedKmh,
+            lapCount = evidence.lapCount,
+            bestLapMs = evidence.bestLapMs,
+            topSpeedKmh = evidence.topSpeedKmh,
         )
     }
+
+    /**
+     * 冷启动恢复上个进程未正常结束的圈速 session。
+     *
+     * 仅修复本地 summary；不接触 Livetiming、pending upload、crossing、binary 或视频文件。
+     * 每条候选独立失败，成功写回后因 endTs > startTs 天然幂等。
+     */
+    suspend fun recoverIncompleteLapSessions(
+        processStartedAtMs: Long,
+        recoveryNowMs: Long = System.currentTimeMillis(),
+    ): LapSessionRecoveryReport = withContext(Dispatchers.IO) {
+        val candidates = sessionDao.queryIncompleteLapSessions(processStartedAtMs)
+        val recovered = mutableListOf<RecoveredLapSession>()
+        val failed = mutableListOf<FailedLapSessionRecovery>()
+
+        for (candidate in candidates) {
+            runCatching {
+                val current = sessionDao.queryBySessionId(candidate.sessionId)
+                    ?: error("session disappeared")
+                // 查询候选后可能被其他正常收尾路径闭环；写前二次确认保证幂等。
+                if (current.endTs > current.startTs) return@runCatching null
+
+                val evidence = derivePersistedLapEvidence(
+                    sessionId = current.sessionId,
+                    filePath = current.binaryFilePath,
+                )
+                val segments = videoSegmentDao.queryBySessionId(current.sessionId)
+                val endTs = deriveRecoveredEndTs(
+                    session = current,
+                    evidence = evidence,
+                    segments = segments,
+                    recoveryNowMs = recoveryNowMs,
+                )
+
+                val latest = sessionDao.queryBySessionId(current.sessionId)
+                    ?: error("session disappeared before summary update")
+                if (latest.endTs > latest.startTs) return@runCatching null
+
+                sessionDao.updateSummary(
+                    sessionId = current.sessionId,
+                    endTs = endTs,
+                    lapCount = evidence.lapCount,
+                    bestLapMs = evidence.bestLapMs,
+                    topSpeedKmh = evidence.topSpeedKmh,
+                )
+                RecoveredLapSession(
+                    sessionId = current.sessionId,
+                    lapCount = evidence.lapCount,
+                    bestLapMs = evidence.bestLapMs,
+                    endTs = endTs,
+                    videoSegmentCount = segments.size,
+                )
+            }.onSuccess { result ->
+                if (result != null) recovered += result
+            }.onFailure { error ->
+                failed += FailedLapSessionRecovery(
+                    sessionId = candidate.sessionId,
+                    errorType = error::class.simpleName ?: "UnknownError",
+                )
+            }
+        }
+
+        LapSessionRecoveryReport(
+            candidates = candidates.size,
+            recovered = recovered,
+            failed = failed,
+        )
+    }
+
+    private suspend fun derivePersistedLapEvidence(
+        sessionId: String,
+        filePath: String?,
+    ): PersistedLapEvidence = withContext(Dispatchers.IO) {
+        val samples = filePath
+            ?.let { runCatching { PerformanceTestTelemetryReader.read(it) }.getOrDefault(emptyList()) }
+            .orEmpty()
+        val crossings = crossingDao.queryBySessionId(sessionId)
+        val acceptedStartFinish = crossings
+            .filter { it.gateType.equals("StartFinish", ignoreCase = true) && it.accepted }
+            .sortedBy { it.crossingWallClockTimestampMs ?: Long.MAX_VALUE }
+        val durations = acceptedStartFinish.zipWithNext { a, b -> a to b }
+            .mapNotNull { (a, b) ->
+                val start = a.crossingWallClockTimestampMs
+                val end = b.crossingWallClockTimestampMs
+                if (start != null && end != null) end - start else null
+            }
+
+        PersistedLapEvidence(
+            lapCount = durations.size,
+            bestLapMs = durations.minOrNull(),
+            topSpeedKmh = samples.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 },
+            lastCrossingWallClock = crossings.mapNotNull { it.crossingWallClockTimestampMs }.maxOrNull(),
+            lastSampleDeltaMs = samples.maxOfOrNull { it.tsDeltaMs },
+        )
+    }
+
+    private fun deriveRecoveredEndTs(
+        session: TelemetrySessionEntity,
+        evidence: PersistedLapEvidence,
+        segments: List<VideoSegmentEntity>,
+        recoveryNowMs: Long,
+    ): Long {
+        val videoEndCandidates = segments.mapNotNull { segment ->
+            segment.endWallClock
+                ?: segment.durationMs?.let { duration -> safeAdd(segment.startWallClock, duration) }
+                ?: segment.startWallClock
+        }
+        val sampleEnd = evidence.lastSampleDeltaMs
+            ?.takeIf { it >= 0L }
+            ?.let { safeAdd(session.startTs, it) }
+        val latestEvidence = buildList {
+            evidence.lastCrossingWallClock?.let(::add)
+            sampleEnd?.let(::add)
+            addAll(videoEndCandidates)
+        }.filter { it > session.startTs && it <= recoveryNowMs }
+            .maxOrNull()
+
+        return latestEvidence ?: safeAdd(session.startTs, 1L) ?: session.startTs
+    }
+
+    private fun safeAdd(left: Long, right: Long): Long? =
+        runCatching { Math.addExact(left, right) }.getOrNull()
 
     /**
      * 拉 session metadata 转换成 domain model；未找到返回 null。
