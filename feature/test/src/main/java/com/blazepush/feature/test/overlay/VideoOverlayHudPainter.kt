@@ -43,10 +43,10 @@ internal object VideoOverlayHudPainter {
             layout.speed.left,
             layout.speed.top,
             layout.speed.left,
-            layout.speed.bottom * 0.92f,
+            layout.speed.top + layout.speed.height * 0.92f,
             accent,
         )
-        drawText(canvas, speedText(frame.speedKmh), layout.speed.left + unit * 0.10f, layout.speed.top + unit * 0.62f, unit * 0.50f, white, medium)
+        drawText(canvas, speedText(frame.speedKmh), layout.speed.left + unit * 0.10f, layout.speed.top + unit * 0.62f, unit * 0.44f, white, medium)
         drawText(canvas, "KM/H", layout.speed.left + unit * 0.12f, layout.speed.bottom, unit * 0.13f, muted, regular)
         drawTiming(canvas, layout.timing, frame, compact = false)
         drawGForce(canvas, layout.gForce, frame, panel = false)

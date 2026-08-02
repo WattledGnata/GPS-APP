@@ -33,20 +33,33 @@ class OverlayHudLayoutTest {
     }
 
     @Test
-    fun wideFrame_anchorsHudToTheEdges() {
+    fun wideFrame_anchorsTopHudAndReservesPlayerSafeBottom() {
         val width = 2800f
         val height = 1260f
+        val minimumSafeBottom = height - height * 0.10f
         VideoOverlayStyle.entries.forEach { style ->
             val layout = OverlayHudLayout.calculate(style, width, height)
             if (style == VideoOverlayStyle.FLAT) {
                 assertTrue("$style top-left", layout.speed.left <= 25f && layout.speed.top <= 25f)
-                assertTrue("$style bottom-right", layout.map.right >= width - 25f && layout.map.bottom >= height - 25f)
+                assertTrue("$style right edge", layout.map.right >= width - 25f)
+                assertTrue("$style player safe bottom", layout.map.bottom <= minimumSafeBottom)
             } else {
                 val container = layout.container ?: error("$style must have an edge container")
                 assertTrue("$style left edge", container.left <= 25f)
                 assertTrue("$style right edge", container.right >= width - 25f)
-                assertTrue("$style bottom edge", container.bottom >= height - 25f)
+                assertTrue("$style player safe bottom", container.bottom <= minimumSafeBottom)
             }
         }
+    }
+
+    @Test
+    fun flatHud_usesCompactGeometryInsteadOfScreenPercentCards() {
+        val width = 1920f
+        val height = 1080f
+        val layout = OverlayHudLayout.calculate(VideoOverlayStyle.FLAT, width, height)
+
+        assertTrue(layout.speed.width <= height * 0.25f + 1f)
+        assertTrue(layout.speed.height <= height * 0.20f + 1f)
+        assertTrue(layout.map.width <= height * 0.21f + 1f)
     }
 }

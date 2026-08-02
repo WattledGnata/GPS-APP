@@ -51,27 +51,30 @@ data class OverlayHudLayout(
         fun calculate(style: VideoOverlayStyle, width: Float, height: Float): OverlayHudLayout {
             require(width > 0f && height > 0f)
             val short = min(width, height)
-            // HUD is an edge overlay, not a centered card.  The previous 4% inset
-            // was very visible on the wide landscape device (over 100 px), which
-            // made every gauge look like it floated in the middle of the frame.
-            val margin = min(short * 0.016f, 24f)
+            val margin = min(short * 0.02f, 24f)
+            // 导出视频会被系统相册和第三方播放器再次覆盖控制条。统一保留底部 12%
+            // 短边安全区，使预览和烧录结果都不把圈时/地图压在进度条下面。
+            val bottomSafeInset = short * 0.12f
+            val safeBottom = height - margin - bottomSafeInset
             return when (style) {
                 VideoOverlayStyle.FLAT -> {
-                    val gSize = short * 0.20f
-                    val mapSize = short * 0.28f
+                    val speedWidth = short * 0.25f
+                    val speedHeight = short * 0.20f
+                    val timingWidth = short * 0.38f
+                    val timingHeight = short * 0.21f
+                    val gSize = short * 0.15f
+                    val mapSize = short * 0.21f
                     OverlayHudLayout(
-                        speed = HudRect(margin, margin, width * 0.27f, height * 0.32f),
-                        timing = HudRect(margin, height - margin - short * 0.30f, width * 0.34f, height - margin),
+                        speed = HudRect(margin, margin, margin + speedWidth, margin + speedHeight),
+                        timing = HudRect(margin, safeBottom - timingHeight, margin + timingWidth, safeBottom),
                         gForce = HudRect(width - margin - gSize, margin, width - margin, margin + gSize),
-                        map = HudRect(width - margin - mapSize, height - margin - mapSize, width - margin, height - margin),
+                        map = HudRect(width - margin - mapSize, safeBottom - mapSize, width - margin, safeBottom),
                         container = null,
                     )
                 }
                 VideoOverlayStyle.RAIL -> {
-                    // 回放画面通常很宽；25% 高度会把信息压成底部一条细带，留下过大的空黑区。
-                    // 提高到 30% 仍避开画面中心，同时让圈时/地图具备可读尺寸。
-                    val railH = short * 0.30f
-                    val rail = HudRect(margin, height - margin - railH, width - margin, height - margin)
+                    val railH = short * 0.22f
+                    val rail = HudRect(margin, safeBottom - railH, width - margin, safeBottom)
                     val contentW = rail.width
                     OverlayHudLayout(
                         speed = HudRect(rail.left, rail.top, rail.left + contentW * 0.22f, rail.bottom),
@@ -82,15 +85,14 @@ data class OverlayHudLayout(
                     )
                 }
                 VideoOverlayStyle.MECHANICAL -> {
-                    // 与 RAIL 保持同一视觉重量，避免切换风格时 HUD 突然缩成底部小条。
-                    val clusterH = short * 0.33f
+                    val clusterH = short * 0.25f
                     val cluster = HudRect(
                         margin,
-                        height - margin - clusterH,
-                        width * 0.58f,
-                        height - margin,
+                        safeBottom - clusterH,
+                        width * 0.50f,
+                        safeBottom,
                     )
-                    val mapW = width * 0.30f
+                    val mapW = width * 0.23f
                     val map = HudRect(width - margin - mapW, cluster.top, width - margin, cluster.bottom)
                     OverlayHudLayout(
                         speed = HudRect(cluster.left, cluster.top, cluster.left + cluster.width * 0.43f, cluster.bottom),

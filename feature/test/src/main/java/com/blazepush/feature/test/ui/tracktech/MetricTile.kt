@@ -31,6 +31,8 @@ fun MetricTile(
     // round add-realtime-lap-delta：DELTA tile 需要数字本身按正/负染色（绿/红）。
     // 默认 null 表示沿用 baseline 的 TextPrimary（白色），现有调用方零改动。
     valueColor: Color? = null,
+    // 遥测数字优先完整显示；仅调用方显式设置时限制数字字号的系统放大上限。
+    maxValueFontScale: Float? = null,
 ) {
     CutCornerPanel(
         modifier = modifier.fillMaxWidth(),
@@ -54,6 +56,7 @@ fun MetricTile(
                 kind = valueKind,
                 valueColor = valueColor ?: TrackTechColors.TextPrimary,
                 unitColor = TrackTechColors.TextSecondary,
+                maxValueFontScale = maxValueFontScale,
             )
             if (!status.isNullOrEmpty()) {
                 Spacer(Modifier.height(4.dp))

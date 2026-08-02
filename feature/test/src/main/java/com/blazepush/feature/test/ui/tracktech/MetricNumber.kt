@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,7 @@ fun MetricNumber(
     kind: MetricKind = MetricKind.Score,
     valueColor: Color = TrackTechColors.TextPrimary,
     unitColor: Color = TrackTechColors.TextSecondary,
+    maxValueFontScale: Float? = null,
 ) {
     val numberStyle: TextStyle = when (kind) {
         MetricKind.Mechanical -> when (size) {
@@ -41,6 +43,14 @@ fun MetricNumber(
             MetricSize.Small -> TrackTechTypography.ScoreSmall
         }
     }
+    val fontScale = LocalDensity.current.fontScale
+    val valueScaleCorrection = maxValueFontScale
+        ?.takeIf { fontScale > it }
+        ?.let { it / fontScale }
+        ?: 1f
+    val fittedNumberStyle = numberStyle.copy(
+        fontSize = numberStyle.fontSize * valueScaleCorrection,
+    )
     val unitStyle: TextStyle = when (size) {
         MetricSize.Hero -> TrackTechTypography.UiTextBody
         MetricSize.Large -> TrackTechTypography.UiTextBody
@@ -53,7 +63,7 @@ fun MetricNumber(
     ) {
         Text(
             text = value,
-            style = numberStyle,
+            style = fittedNumberStyle,
             color = valueColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

@@ -550,10 +550,9 @@ fun LapVideoPlaybackScreen(
                     PlayerView(ctxView).apply {
                         player = exoPlayer
                         useController = false // 按圈回放由圈时间轴主导，不暴露 ExoPlayer 控制条
-                        // The HUD is positioned against the full playback frame.  Zooming
-                        // the video into that same frame avoids letterbox bands that make
-                        // an edge-anchored gauge appear to sit halfway inside the picture.
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        // 完整画面优先；ZOOM 会裁掉边缘赛道信息，并放大“四角 HUD 很挤”的观感。
+                        // HUD 自身已有统一的播放器安全区，预览和导出采用同一套相对尺寸。
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
                 },
             )
@@ -584,10 +583,8 @@ fun LapVideoPlaybackScreen(
                 trackPoints = ctx.trackPoints,
                 gaugeMaxKmh = gaugeMaxKmh,
                 style = overlayStyle,
-                // 这里的 Canvas 是 px 尺寸，而 78.dp 在学习机上约等于 230px；
-                // 结果就是仪表整体被抬到屏幕中段。控制坞本身是浮层，不再把
-                // 它的高度从 HUD 坐标系里扣掉，仪表按视频画面底边贴齐。
-                modifier = Modifier.padding(bottom = 10.dp),
+                // OverlayHudLayout 内部统一保留底部安全区；这里不再叠加设备密度相关 padding。
+                modifier = Modifier,
             )
             HudStyleSelector(
                 selected = overlayStyle,

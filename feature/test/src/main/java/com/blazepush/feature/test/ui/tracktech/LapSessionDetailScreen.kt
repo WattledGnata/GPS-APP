@@ -9,6 +9,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -397,57 +399,97 @@ private fun OverviewSection(
     topSpeedKmh: Double?,
     distanceKm: Double?,
 ) {
-    CutCornerPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cutSize = 8.dp,
-        cutCorners = cutCornersAll,
-        contentPadding = 16.dp,
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val fontScale = LocalDensity.current.fontScale
+        val stackMetrics = shouldStackOverviewMetrics(maxWidth.value, fontScale)
+        CutCornerPanel(
+            modifier = Modifier.fillMaxWidth(),
+            cutSize = 8.dp,
+            cutCorners = cutCornersAll,
+            contentPadding = 16.dp,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OverviewRow(label = "Track", value = trackName)
             OverviewRow(label = "Session", value = sessionDate)
 
             Spacer(Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            if (stackMetrics) {
                 MetricTile(
                     label = "BEST LAP",
                     value = formatLapTime(bestLapMs),
-                    modifier = Modifier.weight(1f),
                     accentColor = TrackTechColors.Purple,
                     valueSize = MetricSize.Medium,
                     valueKind = MetricKind.Score,
+                    maxValueFontScale = 1.15f,
                 )
                 MetricTile(
                     label = "TOTAL LAPS",
                     value = totalLaps.toString(),
-                    modifier = Modifier.weight(1f),
                     accentColor = TrackTechColors.Cyan,
                     valueSize = MetricSize.Medium,
                     valueKind = MetricKind.Score,
+                    maxValueFontScale = 1.15f,
                 )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
                 MetricTile(
                     label = "VALID LAPS",
                     value = validLaps.toString(),
-                    modifier = Modifier.weight(1f),
                     accentColor = TrackTechColors.Green,
                     valueSize = MetricSize.Small,
                     valueKind = MetricKind.Score,
+                    maxValueFontScale = 1.15f,
                 )
                 MetricTile(
                     label = "INVALID LAPS",
                     value = invalidLaps.toString(),
-                    modifier = Modifier.weight(1f),
                     accentColor = TrackTechColors.Red,
                     valueSize = MetricSize.Small,
                     valueKind = MetricKind.Score,
+                    maxValueFontScale = 1.15f,
+                )
+            } else {
+                OverviewMetricPair(
+                    first = {
+                        MetricTile(
+                            label = "BEST LAP",
+                            value = formatLapTime(bestLapMs),
+                            accentColor = TrackTechColors.Purple,
+                            valueSize = MetricSize.Medium,
+                            valueKind = MetricKind.Score,
+                            maxValueFontScale = 1.15f,
+                        )
+                    },
+                    second = {
+                        MetricTile(
+                            label = "TOTAL LAPS",
+                            value = totalLaps.toString(),
+                            accentColor = TrackTechColors.Cyan,
+                            valueSize = MetricSize.Medium,
+                            valueKind = MetricKind.Score,
+                            maxValueFontScale = 1.15f,
+                        )
+                    },
+                )
+                OverviewMetricPair(
+                    first = {
+                        MetricTile(
+                            label = "VALID LAPS",
+                            value = validLaps.toString(),
+                            accentColor = TrackTechColors.Green,
+                            valueSize = MetricSize.Small,
+                            valueKind = MetricKind.Score,
+                            maxValueFontScale = 1.15f,
+                        )
+                    },
+                    second = {
+                        MetricTile(
+                            label = "INVALID LAPS",
+                            value = invalidLaps.toString(),
+                            accentColor = TrackTechColors.Red,
+                            valueSize = MetricSize.Small,
+                            valueKind = MetricKind.Score,
+                            maxValueFontScale = 1.15f,
+                        )
+                    },
                 )
             }
             Spacer(Modifier.height(4.dp))
@@ -462,6 +504,7 @@ private fun OverviewSection(
                 accentColor = TrackTechColors.Red,
                 valueSize = MetricSize.Medium,
                 valueKind = MetricKind.Mechanical,
+                maxValueFontScale = 1.15f,
             )
             Spacer(Modifier.height(4.dp))
             // 辅助信息（Duration / Distance）用 row 风格 label-value
@@ -473,7 +516,25 @@ private fun OverviewSection(
                 label = "Distance",
                 value = distanceKm?.let { "%.2f km".format(it) } ?: "--",
             )
+            }
         }
+    }
+}
+
+internal fun shouldStackOverviewMetrics(availableWidthDp: Float, fontScale: Float): Boolean =
+    availableWidthDp < 360f || fontScale >= 1.20f
+
+@Composable
+private fun OverviewMetricPair(
+    first: @Composable () -> Unit,
+    second: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.weight(1f)) { first() }
+        Box(Modifier.weight(1f)) { second() }
     }
 }
 
@@ -872,9 +933,11 @@ internal fun computeLapSectorTable(crossings: List<TelemetryCrossingEvent>): Lap
 }
 
 // sector 列固定宽度 token（窄屏关键：固定列宽 + 横向滚动同步避免 5+ 列在窄屏挤压换行）。
-private val SectorTableLapColWidth = 48.dp
-private val SectorTableTimeColWidth = 76.dp
-private val SectorTableSectorColWidth = 60.dp
+private val SectorTableLapColWidth = 56.dp
+private val SectorTableTimeColWidth = 88.dp
+private val SectorTableSectorColWidth = 72.dp
+
+internal fun sectorColumnScale(fontScale: Float): Float = fontScale.coerceIn(1f, 1.6f)
 
 /**
  * 圈 × sector 拆分表块（表头 + THEORETICAL 行 + 各 valid/best 圈行，全部共享同一 hScroll 横向同步）。
@@ -892,6 +955,10 @@ private fun LapSectorTableBlock(
     // 点图标导航 lap_video（视频回放入口整合进 sector 成绩表）。
     onVideoClick: ((lapNumber: Int) -> Unit)? = null,
 ) {
+    val columnScale = sectorColumnScale(LocalDensity.current.fontScale)
+    val lapColumnWidth = SectorTableLapColWidth * columnScale
+    val timeColumnWidth = SectorTableTimeColWidth * columnScale
+    val sectorColumnWidth = SectorTableSectorColWidth * columnScale
     CutCornerPanel(
         modifier = Modifier.fillMaxWidth(),
         cutSize = 6.dp,
@@ -901,14 +968,14 @@ private fun LapSectorTableBlock(
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // 表头行：LAP | TIME | S1 | S2 | ... | SN
             Row(modifier = Modifier.horizontalScroll(hScroll)) {
-                SectorCell(SectorTableLapColWidth) {
+                SectorCell(lapColumnWidth) {
                     SectorCellText("LAP", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
                 }
-                SectorCell(SectorTableTimeColWidth) {
+                SectorCell(timeColumnWidth) {
                     SectorCellText("TIME", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
                 }
                 for (i in 0 until table.sectorCount) {
-                    SectorCell(SectorTableSectorColWidth) {
+                    SectorCell(sectorColumnWidth) {
                         SectorCellText("S${i + 1}", TrackTechTypography.UiTextLabel, TrackTechColors.Cyan)
                     }
                 }
@@ -918,10 +985,10 @@ private fun LapSectorTableBlock(
             // 改动 4：各 sector 段本就是"全场最快段"（overall best sector）→ 按规范显紫（与圈行紫色 sector 统一）；
             // "OPT" 标签 + 拼接总时间保持绿色，标识这是合成理论行（非真实跑出的圈）。
             Row(modifier = Modifier.horizontalScroll(hScroll)) {
-                SectorCell(SectorTableLapColWidth) {
+                SectorCell(lapColumnWidth) {
                     SectorCellText("OPT", TrackTechTypography.UiTextLabel, TrackTechColors.Green)
                 }
-                SectorCell(SectorTableTimeColWidth) {
+                SectorCell(timeColumnWidth) {
                     SectorCellText(
                         formatLapTime(table.theoreticalTotalMs),
                         TrackTechTypography.UiTextBody,
@@ -929,7 +996,7 @@ private fun LapSectorTableBlock(
                     )
                 }
                 table.bestSplitPerSector.forEach { ms ->
-                    SectorCell(SectorTableSectorColWidth) {
+                    SectorCell(sectorColumnWidth) {
                         SectorCellText(formatSectorSplit(ms), TrackTechTypography.UiTextBody, TrackTechColors.Purple)
                     }
                 }
@@ -970,10 +1037,10 @@ private fun LapSectorTableBlock(
                             .clickable { onLapClick(lap.lapNumber) }
                             .horizontalScroll(hScroll),
                     ) {
-                        SectorCell(SectorTableLapColWidth) {
+                        SectorCell(lapColumnWidth) {
                             SectorCellText("Lap ${lap.lapNumber}", TrackTechTypography.UiTextSmall, TrackTechColors.TextSecondary)
                         }
-                        SectorCell(SectorTableTimeColWidth) {
+                        SectorCell(timeColumnWidth) {
                             SectorCellText(formatLapTime(lap.lapTimeMs), TrackTechTypography.UiTextBody, timeColor)
                         }
                         lap.splits.forEachIndexed { i, split ->
@@ -989,7 +1056,7 @@ private fun LapSectorTableBlock(
                                     ),
                                 )
                             }
-                            SectorCell(SectorTableSectorColWidth) {
+                            SectorCell(sectorColumnWidth) {
                                 SectorCellText(
                                     if (split != null) formatSectorSplit(split) else "—",
                                     TrackTechTypography.UiTextBody,
