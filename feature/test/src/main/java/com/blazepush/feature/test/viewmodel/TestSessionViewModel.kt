@@ -33,6 +33,8 @@ import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.FilteredGpsData
 import com.blazepush.core.domain.usecase.GpsDataFilter
+import com.blazepush.core.domain.model.GPS_MAIN_SILENCE_MAX_TIMEOUT_MS
+import com.blazepush.core.domain.usecase.isUsableForTiming
 import com.blazepush.core.domain.usecase.MOTION_THRESHOLD_KMH
 import com.blazepush.core.domain.usecase.SmartTestLauncher
 import com.blazepush.feature.test.model.LapRunConfig
@@ -376,6 +378,9 @@ class TestSessionViewModel(
     // 供 updateLaunchStatus 的 lastDataAge 计算，与 GpsData 的协议时间字段解耦
     // （对应 fix-laptime-clock-source-integrity spec Requirement 3.5 (c)）
     private var lastReceivedAtElapsed: Long = 0L
+    private var lastConnectionGeneration: Long = 0L
+    private var lastMainFrameSequence: Long = 0L
+    private var lastMainFrameSilenceTimeoutMs: Long = GPS_MAIN_SILENCE_MAX_TIMEOUT_MS
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     private val preTriggerBuffer = mutableListOf<FilteredGpsData>()
 
@@ -385,6 +390,19 @@ class TestSessionViewModel(
     // (25Hz 真机 / 5Hz 模拟器)语义一致:持续 <1.0 km/h 满 1000ms 即武装。
     private var standstillSinceTs: Long? = null
     private var consecutiveTriggerCount = 0
+
+    /** 清除依赖连续轨迹的消费者状态，但保留 Main 帧接收元数据用于判断下一段 gap。 */
+    private fun resetGpsContinuity() {
+        lastLapGpsSample = null
+        preTriggerBuffer.clear()
+        gpsDataFilter.reset()
+        _filteredSpeedKmh.value = 0.0
+        _realtimeDeltaState.value = _realtimeDeltaState.value.copy(
+            staleFrameCount = STALE_FRAME_THRESHOLD,
+            outDeltaMs = null,
+            outIsStale = true,
+        )
+    }
 
     init {
         // A37：异步加载 availableTracks，不指定 Dispatchers.IO（catalog 实现自负 IO 边界）
@@ -411,9 +429,38 @@ class TestSessionViewModel(
 
         viewModelScope.launch {
             gpsDataViewModel.gpsData.collect { gpsData ->
-                // 无论 isTimeSynced 真假，首行更新 elapsedRealtime 以驱动 lastDataAge 计算
-                // （Requirement 3.5 (c)：lastDataAge 与协议 timestamp 解耦）
-                lastReceivedAtElapsed = SystemClock.elapsedRealtime()
+                if (gpsData.connectionGeneration != lastConnectionGeneration) {
+                    lastConnectionGeneration = gpsData.connectionGeneration
+                    lastReceivedAtElapsed = 0L
+                    lastMainFrameSequence = 0L
+                    lastMainFrameSilenceTimeoutMs = GPS_MAIN_SILENCE_MAX_TIMEOUT_MS
+                    resetGpsContinuity()
+                }
+
+                // 只采信 BluetoothDataSource 在 GPS Main 解析成功时写入的单调时刻。
+                // 时间包、stale 翻转、连接状态复位都不能伪装成新定位帧。
+                val isNewMainFrame = gpsData.hasMainFrame &&
+                    gpsData.mainFrameSequence != lastMainFrameSequence
+                if (isNewMainFrame) {
+                    val receivedAt = gpsData.mainFrameReceivedAtElapsedRealtimeMs
+                    val gapMs = receivedAt - lastReceivedAtElapsed
+                    if (lastReceivedAtElapsed > 0L &&
+                        gapMs !in 0..<lastMainFrameSilenceTimeoutMs
+                    ) {
+                        // 即使 stale StateFlow 因调度合并未被观察到，也绝不跨静默 gap
+                        // 用旧坐标和恢复首帧做过线/滤波/预触发计算。
+                        resetGpsContinuity()
+                    }
+                    lastMainFrameSequence = gpsData.mainFrameSequence
+                    lastReceivedAtElapsed = receivedAt
+                    lastMainFrameSilenceTimeoutMs = gpsData.mainFrameSilenceTimeoutMs
+                }
+                updateLaunchStatus(gpsData)
+
+                if (!gpsData.isUsableForTiming()) {
+                    resetGpsContinuity()
+                    return@collect
+                }
 
                 val filteredData = gpsDataFilter.process(gpsData)
                 // frequency-agnostic 诊断(2026-06-05):raw/filtered 并排逐帧(VERBOSE 全量,
@@ -425,7 +472,6 @@ class TestSessionViewModel(
                 )
                 _filteredSpeedKmh.value = filteredData.speed // 仪表同源(Decision 2)
                 updatePreTriggerBuffer(filteredData)
-                updateLaunchStatus(gpsData)
                 processFilteredData(filteredData)
 
                 // round wire-laptime-to-gps-filter（2026-05-05 hotfix B 回滚）：
@@ -917,9 +963,9 @@ class TestSessionViewModel(
         // Requirement 3：未同步帧整帧跳过，并重置 lastLapGpsSample
         // 失联恢复后首个同步帧走首样本分支（previousSample == null），
         // 避免 detector 对"跨几秒位移"做线段相交判定伪造过线。
-        if (!gpsData.isTimeSynced) {
+        if (!gpsData.isUsableForTiming()) {
             lastLapGpsSample = null
-            FileLogger.d(TAG, "bridgeGpsToLapTiming: skip unsynced frame, reset prev")
+            FileLogger.d(TAG, "bridgeGpsToLapTiming: skip unusable/stale frame, reset prev")
             return
         }
 
@@ -1093,7 +1139,11 @@ class TestSessionViewModel(
         val connectionState = _connectionState.value
         // Requirement 3.5 (c)：lastDataAge 用 elapsedRealtime delta，不依赖 gpsData.timestamp
         // 避免未同步 / sentinel 值污染 launchStatus 数据年龄判定
-        val lastDataAge = SystemClock.elapsedRealtime() - lastReceivedAtElapsed
+        val lastDataAge = if (lastReceivedAtElapsed > 0L) {
+            SystemClock.elapsedRealtime() - lastReceivedAtElapsed
+        } else {
+            Long.MAX_VALUE
+        }
 
         // 根据测试类型确定起点速度范围
         val template = when (val state = _testState.value) {

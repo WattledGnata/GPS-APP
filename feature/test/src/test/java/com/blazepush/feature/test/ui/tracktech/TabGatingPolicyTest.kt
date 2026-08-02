@@ -30,6 +30,12 @@ class TabGatingPolicyTest {
         speed = speed,
         satelliteCount = 8,
         hdop = 1.5,
+        timestamp = 1_000L,
+        fixQuality = 1,
+        isTimeSynced = true,
+        hasMainFrame = true,
+        isConnected = true,
+        consecutiveReliableMainFrames = 3,
     )
 
     private fun goodDataQuality(dataAge: Long = 500L): DataQuality = DataQuality(
@@ -112,6 +118,66 @@ class TabGatingPolicyTest {
         )
         assertFalse(readiness.canEnterTestFlow)
         assertTrue(readiness.unmetConditions.contains(TabReadinessCondition.DATA_FRESH))
+    }
+
+    @Test
+    fun dataAgeUsesFrameSpecificDynamicDeadline() {
+        val fresh = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(mainFrameSilenceTimeoutMs = 400L),
+            goodDataQuality(dataAge = 399L),
+        )
+        val expired = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(mainFrameSilenceTimeoutMs = 400L),
+            goodDataQuality(dataAge = 400L),
+        )
+
+        assertFalse(fresh.unmetConditions.contains(TabReadinessCondition.DATA_FRESH))
+        assertTrue(expired.unmetConditions.contains(TabReadinessCondition.DATA_FRESH))
+    }
+
+    @Test
+    fun staleOrMissingCurrentGenerationMainFrame_returnsDataFreshUnmet() {
+        val stale = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(isStale = true),
+            goodDataQuality(),
+        )
+        val missing = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(hasMainFrame = false),
+            goodDataQuality(),
+        )
+        assertTrue(stale.unmetConditions.contains(TabReadinessCondition.DATA_FRESH))
+        assertTrue(missing.unmetConditions.contains(TabReadinessCondition.DATA_FRESH))
+    }
+
+    @Test
+    fun noFixOrUnsyncedFrame_cannotEnterTestFlow() {
+        val noFix = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(fixQuality = 0),
+            goodDataQuality(),
+        )
+        val unsynced = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(isTimeSynced = false, timestamp = Long.MIN_VALUE),
+            goodDataQuality(),
+        )
+        assertTrue(noFix.unmetConditions.contains(TabReadinessCondition.GPS_FIX_VALID))
+        assertTrue(unsynced.unmetConditions.contains(TabReadinessCondition.TIME_SYNCED))
+    }
+
+    @Test
+    fun fewerThanThreeReliableRecoveryFrames_cannotEnterTestFlow() {
+        val readiness = TabGatingPolicy.computeTabReadiness(
+            ConnectionState.CONNECTED,
+            goodGpsData().copy(consecutiveReliableMainFrames = 2),
+            goodDataQuality(),
+        )
+
+        assertTrue(readiness.unmetConditions.contains(TabReadinessCondition.GPS_SIGNAL_STABLE))
     }
 
     /**

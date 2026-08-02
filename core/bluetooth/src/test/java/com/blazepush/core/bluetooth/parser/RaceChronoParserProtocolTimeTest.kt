@@ -106,6 +106,33 @@ class RaceChronoParserProtocolTimeTest {
     }
 
     @Test
+    fun timePacket_invalidatesCachedFrameSyncUntilNextMatchingMainFrame() {
+        val cached = emptyGpsData().copy(timestamp = 123L, isTimeSynced = true)
+        val timeData = createGpsTimeData(1773478969360L, syncBits = 3)
+
+        val afterTime = parser.parseGpsTimeData(timeData, cached)
+
+        assertEquals(Long.MIN_VALUE, afterTime.timestamp)
+        assertEquals(false, afterTime.isTimeSynced)
+    }
+
+    @Test
+    fun shortTimePacket_clearsOldProtocolReference() {
+        val sampleTimestamp = 1773478969360L
+        val syncBits = 3
+        parser.parseGpsTimeData(createGpsTimeData(sampleTimestamp, syncBits), emptyGpsData())
+        val afterShort = parser.parseGpsTimeData(ByteArray(2), emptyGpsData())
+
+        val result = parser.parseGpsData(
+            createGpsMainData((sampleTimestamp % 3_600_000L).toInt(), syncBits),
+            afterShort,
+        )
+
+        assertEquals(Long.MIN_VALUE, result.timestamp)
+        assertEquals(false, result.isTimeSynced)
+    }
+
+    @Test
     fun parseGpsData_recoveryAfterDesync_switchesBackToSynced() {
         val sampleTimestamp = 1773478969360L
         val timeSinceHourStart = (sampleTimestamp % 3_600_000L).toInt()

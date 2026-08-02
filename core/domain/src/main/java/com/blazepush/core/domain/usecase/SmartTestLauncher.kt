@@ -1,11 +1,12 @@
 package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 
 /**
  * 智能启动测试系统
- * 检测5项启动条件，确保测试在最佳状态下开始
+ * 检测 BLE、主帧 freshness、fix、时间、卫星、HDOP 与起点速度条件。
  */
 class SmartTestLauncher {
 
@@ -50,6 +51,7 @@ class SmartTestLauncher {
         startSpeedMin: Double = 0.0,
         startSpeedMax: Double = 3.0
     ): LaunchStatus {
+        val mainFrameDeadlineMs = gpsData.mainFrameSilenceTimeoutMs
         val conditions = listOf(
             // 1. BLE连接状态
             LaunchCondition(
@@ -69,12 +71,45 @@ class SmartTestLauncher {
                 id = "data_reception",
                 name = "数据接收",
                 description = "能正常接收GPS数据",
-                isMet = lastDataAge < 1000,
+                isMet = gpsData.hasMainFrame && !gpsData.isStale &&
+                    lastDataAge in 0..<mainFrameDeadlineMs,
                 icon = when {
-                    lastDataAge < 1000 -> ConditionIcon.CHECKED
+                    !gpsData.hasMainFrame || gpsData.isStale -> ConditionIcon.ERROR
+                    lastDataAge in 0..<mainFrameDeadlineMs -> ConditionIcon.CHECKED
                     lastDataAge < 3000 -> ConditionIcon.WAITING
                     else -> ConditionIcon.ERROR
                 }
+            ),
+            LaunchCondition(
+                id = "gps_fix",
+                name = "GPS定位",
+                description = "已获得有效定位",
+                isMet = gpsData.fixQuality > 0,
+                icon = if (gpsData.fixQuality > 0) ConditionIcon.CHECKED else ConditionIcon.WAITING,
+            ),
+            LaunchCondition(
+                id = "time_sync",
+                name = "GPS时间",
+                description = "定位帧与协议时间已同步",
+                isMet = gpsData.isTimeSynced && gpsData.timestamp != Long.MIN_VALUE,
+                icon = if (gpsData.isTimeSynced && gpsData.timestamp != Long.MIN_VALUE) {
+                    ConditionIcon.CHECKED
+                } else {
+                    ConditionIcon.WAITING
+                },
+            ),
+            LaunchCondition(
+                id = "gps_stability",
+                name = "GPS稳定性",
+                description = "连续 $GPS_FIX_RECOVERY_MAIN_FRAMES 帧定位可靠",
+                isMet = gpsData.consecutiveReliableMainFrames >= GPS_FIX_RECOVERY_MAIN_FRAMES,
+                icon = if (
+                    gpsData.consecutiveReliableMainFrames >= GPS_FIX_RECOVERY_MAIN_FRAMES
+                ) {
+                    ConditionIcon.CHECKED
+                } else {
+                    ConditionIcon.WAITING
+                },
             ),
             // 3. 卫星数 >= 6
             LaunchCondition(

@@ -17,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -30,8 +31,7 @@ import java.util.UUID
  *              Requirement 3（A40 close 统一走回调路径）。
  *              测试策略：反射注入 mock `BluetoothGatt` 避开 Android runtime 依赖；
  *              反射替换 `scope` 字段为 `TestScope`，由 `runTest` 控制虚拟时钟；
- *              对于 race 这类"虚拟时钟下难以真实复现"的语义，辅以**源码结构断言**
- *              锁定关键代码形状（`ensureActive()` 存在于 delay 与 body 之间等）。
+ *              数据静默由连接期单一 watchdog 监控，25Hz 主帧只更新时间戳。
  * @author haozhang93
  * @date 2026-04-24
  */
@@ -42,6 +42,7 @@ class BleConnectionTest {
     private lateinit var mockContext: Context
     private lateinit var mockGatt: BluetoothGatt
     private lateinit var logMock: AutoCloseable
+    private var elapsedRealtime = 0L
 
     /**
      * 每个 @Test 前的初始化：mock Log 静态调用，mock Context + BluetoothGatt，
@@ -56,6 +57,7 @@ class BleConnectionTest {
             context = mockContext,
             deviceAddress = "AA:BB:CC:DD:EE:FF",
             onDataReceived = { _: UUID, _: ByteArray -> },
+            elapsedRealtimeMs = { elapsedRealtime },
         )
         setField("bluetoothGatt", mockGatt)
     }
@@ -75,14 +77,15 @@ class BleConnectionTest {
      * 行为反转而来——真机固件无卫星不推帧，丢星 = 静默，曾被误判死链拆链。）
      */
     @Test
-    fun startDataTimeoutCheck_onTimeout_marksStaleAndKeepsConnected() = runTest {
+    fun startDataWatchdog_onTimeout_marksStaleAndKeepsConnected() = runTest {
         setField("scope", this)
         stateFlow().value = ConnectionState.CONNECTED
         setField("lastDataTime", 0L)
 
-        invokePrivate("startDataTimeoutCheck")
+        invokePrivate("startDataWatchdog")
 
-        advanceTimeBy(10_500)
+        advanceTimeBy(1_000)
+        elapsedRealtime = 1_000L
         runCurrent()
 
         Mockito.verify(mockGatt, Mockito.never()).disconnect()
@@ -93,33 +96,38 @@ class BleConnectionTest {
             connection.connectionState.value,
         )
         assertTrue("数据静默超时 MUST 置 dataStale=true", connection.dataStale.value)
+        invokePrivate("cleanup")
     }
 
     /**
-     * R2 Scenario 2：race 场景在虚拟时钟下难以真实复现，改用源码结构断言
-     * 锁定 ensureActive() 在 delay 之后、超时分支代码之前的位置 —— v1 无此
-     * 调用；v2 有。
+     * 25Hz 主帧只更新时间戳，不得为每帧取消/创建一个超时协程。一个连接期只运行
+     * 一个 watchdog；连续 25 帧后仍是同一个 Job，并保持数据新鲜。
      */
     @Test
-    fun startDataTimeoutCheck_rapidCancelRestart_sourceHasEnsureActiveGuard() {
-        val source = File("src/main/java/com/blazepush/core/bluetooth/BleConnection.kt").readText()
-        val fnStart = source.indexOf("private fun startDataTimeoutCheck()")
-        assertTrue("必须定义 startDataTimeoutCheck", fnStart > 0)
-        val fnEnd = source.indexOf("\n    }\n", fnStart)
-        assertTrue("必须闭合 startDataTimeoutCheck 方法体", fnEnd > fnStart)
-        val body = source.substring(fnStart, fnEnd)
+    fun mainFramesAt25Hz_reuseSingleWatchdogAndUseAdaptiveDeadline() = runTest {
+        setField("scope", this)
+        stateFlow().value = ConnectionState.CONNECTED
+        invokePrivate("startDataWatchdog")
+        val watchdog = getField("dataWatchdogJob")
+        val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
+        Mockito.`when`(mockChar.uuid)
+            .thenReturn(UUID.fromString("00000003-0000-1000-8000-00805f9b34fb"))
 
-        val delayIdx = body.indexOf("delay(DATA_TIMEOUT_MS)")
-        val ensureActiveIdx = body.indexOf("ensureActive()")
-        val ifIdx = body.indexOf("if (System.currentTimeMillis() - lastDataTime")
+        repeat(25) { index ->
+            elapsedRealtime = (index + 1) * 40L
+            gattCallback().onCharacteristicChanged(mockGatt, mockChar, byteArrayOf(1, 2, 3))
+            advanceTimeBy(40L)
+            runCurrent()
+        }
 
-        assertTrue("delay 必须存在", delayIdx > 0)
-        assertTrue("ensureActive() 必须存在于 startDataTimeoutCheck body", ensureActiveIdx > 0)
-        assertTrue("if 超时判断必须存在", ifIdx > 0)
-        assertTrue(
-            "ensureActive() 位置 MUST 在 delay 之后、if 判断之前（消除 cancel/restart race）",
-            delayIdx < ensureActiveIdx && ensureActiveIdx < ifIdx,
-        )
+        assertSame("25Hz 主帧不得重建 watchdog Job", watchdog, getField("dataWatchdogJob"))
+        assertFalse("持续收到 25Hz 主帧时数据必须保持新鲜", connection.dataStale.value)
+
+        elapsedRealtime = 1_400L
+        advanceTimeBy(400L)
+        runCurrent()
+        assertTrue("25Hz 节拍建立后静默 400ms 应判为不可靠", connection.dataStale.value)
+        invokePrivate("cleanup")
     }
 
     /**
@@ -176,17 +184,30 @@ class BleConnectionTest {
         Mockito.verify(mockGatt, Mockito.never()).disconnect()
     }
 
+    @Test
+    fun onGpsTimeCharacteristicChanged_afterStale_doesNotMaskMainFrameSilence() {
+        staleFlow().value = true
+        stateFlow().value = ConnectionState.CONNECTED
+        val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
+        Mockito.`when`(mockChar.uuid)
+            .thenReturn(UUID.fromString("00000004-0000-1000-8000-00805f9b34fb"))
+
+        gattCallback().onCharacteristicChanged(mockGatt, mockChar, byteArrayOf(1, 2, 3))
+
+        assertTrue("GPS Time 包不得清除主定位帧静默状态", connection.dataStale.value)
+    }
+
     /**
-     * ble-connection-liveness spec R1 反例锁（源码结构断言）：startDataTimeoutCheck 超时分支
+     * ble-connection-liveness spec R1 反例锁（源码结构断言）：startDataWatchdog 超时分支
      * MUST NOT 含拆链动作，且 MUST 改为置软陈旧状态（防"空实现什么都不做"trivially pass）。
      */
     @Test
-    fun startDataTimeoutCheck_timeoutBranch_marksStaleNotDisconnect() {
+    fun startDataWatchdog_timeoutBranch_marksStaleNotDisconnect() {
         val source = File("src/main/java/com/blazepush/core/bluetooth/BleConnection.kt").readText()
-        val fnStart = source.indexOf("private fun startDataTimeoutCheck()")
-        assertTrue("必须定义 startDataTimeoutCheck", fnStart > 0)
+        val fnStart = source.indexOf("private fun startDataWatchdog()")
+        assertTrue("必须定义 startDataWatchdog", fnStart > 0)
         val fnEnd = source.indexOf("\n    }\n", fnStart)
-        assertTrue("必须闭合 startDataTimeoutCheck 方法体", fnEnd > fnStart)
+        assertTrue("必须闭合 startDataWatchdog 方法体", fnEnd > fnStart)
         val body = source.substring(fnStart, fnEnd)
 
         assertFalse(

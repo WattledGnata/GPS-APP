@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
+import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
@@ -106,7 +107,7 @@ fun GpsDetailsScreen(
         PositionPanel(gpsData = gpsData)
 
         DetailsSection(title = "DEVICE")
-        DeviceInfoPanel(connectionState = connectionState, isStale = gpsData.isStale)
+        DeviceInfoPanel(connectionState = connectionState, gpsData = gpsData)
 
         Spacer(Modifier.height(24.dp))
     }
@@ -516,7 +517,7 @@ private fun PositionField(label: String, value: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun DeviceInfoPanel(connectionState: ConnectionState, isStale: Boolean) {
+private fun DeviceInfoPanel(connectionState: ConnectionState, gpsData: GpsData) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     CutCornerPanel(
         modifier = Modifier
@@ -564,20 +565,29 @@ private fun DeviceInfoPanel(connectionState: ConnectionState, isStale: Boolean) 
                     .height(1.dp)
                     .background(TrackTechColors.Border),
             )
-            // ble-connection-liveness：丢星时链路保持 CONNECTED，这里呈"等待卫星"而非"已断开"。
+            // BLE 已连接、Main 静默、明确无 fix 是不同证据，不能都显示成“等待卫星”。
             DeviceInfoRow(
                 iconContent = {
                     Icon(
                         imageVector = Icons.Filled.SignalCellularAlt,
                         contentDescription = null,
-                        tint = if (isConnected && isStale) TrackTechColors.Red else TrackTechColors.Cyan,
+                        tint = if (isConnected && gpsData.isStale) {
+                            TrackTechColors.Red
+                        } else {
+                            TrackTechColors.Cyan
+                        },
                         modifier = Modifier.size(18.dp),
                     )
                 },
                 label = "Signal",
                 value = when {
                     !isConnected -> "—"
-                    isStale -> "等待卫星"
+                    gpsData.isStale && !gpsData.hasMainFrame -> "未收到 GPS 数据"
+                    gpsData.isStale -> "GPS 数据中断"
+                    !gpsData.hasMainFrame -> "等待 GPS 数据"
+                    gpsData.fixQuality <= 0 || gpsData.satelliteCount <= 0 -> "等待卫星"
+                    gpsData.consecutiveReliableMainFrames < GPS_FIX_RECOVERY_MAIN_FRAMES ->
+                        "GPS 稳定中 ${gpsData.consecutiveReliableMainFrames}/$GPS_FIX_RECOVERY_MAIN_FRAMES"
                     else -> "实时"
                 },
             )
