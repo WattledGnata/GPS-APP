@@ -63,6 +63,27 @@ class CameraRecordingRotationContractTest {
     }
 
     @Test
+    fun `recording start is session-first and finalize waits for binding persistence`() {
+        val src = engineSource()
+        assertTrue(
+            "CameraX output filename MUST carry persisted session ownership before Start",
+            src.contains("\"\${sessionId}_\${requestedAtWallClock}.mp4\""),
+        )
+        assertTrue(
+            "engine MUST expose Starting between request and CameraX Start",
+            src.contains("RecordingState.Starting(activeSessionId)"),
+        )
+        assertTrue(
+            "Finalize completion MUST happen after repository binding",
+            src.contains("Finalize binding persisted before completion"),
+        )
+        assertFalse(
+            "null-session orphan recording branch MUST remain removed",
+            src.contains("无 active lap session → 孤立视频"),
+        )
+    }
+
+    @Test
     fun `lap live screen bridges lap completion to engine`() {
         val relPath = "feature/test/src/main/java/com/blazepush/feature/test/ui/tracktech/LapLiveScreen.kt"
         val candidates = listOf(

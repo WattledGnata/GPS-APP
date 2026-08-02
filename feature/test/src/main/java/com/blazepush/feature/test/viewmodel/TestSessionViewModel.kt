@@ -51,6 +51,7 @@ import com.blazepush.feature.test.usecase.ReferenceLapIndex
 import com.blazepush.feature.test.usecase.buildReferenceLapIndex
 import com.blazepush.feature.test.usecase.projectDelta
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +65,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 enum class TestMode {
@@ -310,14 +313,50 @@ class TestSessionViewModel(
 
     private var activeLapSessionId: String? = null
     private var activeLapStartSystemTs: Long? = null
+    private val lapSessionMutex = Mutex()
+    private var lapSessionGeneration = 0L
+    private var lapSessionStartJob: Job? = null
 
     /**
      * 返回当前 active lap session id（录制引擎在 startRecording 时调用，读取当前关联的 session）。
-     * null = 无进行中的 lap session（录制将成为孤立视频）。
+     * null = 尚未持久化或已结束。录制入口不得直接使用 null 启动 CameraX，
+     * 必须先 await [prepareActiveLapSessionForRecording]。
      *
      * camera-recording-and-gps-sync round（MUST 6）：public accessor，不破坏内部 private 写语义。
      */
     fun getActiveLapSessionId(): String? = activeLapSessionId
+
+    /**
+     * 为 REC 或 GPS 写入确保圈速 Session 已经插入 Room。
+     *
+     * Mutex 将“第二个有效 GPS 帧”与“用户点 REC”两个并发入口收敛为一次
+     * startSession；generation 防止创建期间退出/重进后把旧 Session 误挂到新页面。
+     * 返回 null 表示圈速已结束或上下文已换代，调用方必须 fail closed。
+     */
+    suspend fun prepareActiveLapSessionForRecording(): String? = lapSessionMutex.withLock {
+        activeLapSessionId?.let { return@withLock it }
+        if (_currentMode.value != TestMode.LapDebug || !isLapRecording || activeLapStartSystemTs == null) {
+            return@withLock null
+        }
+        val config = _lapRunConfig.value ?: return@withLock null
+        val generation = lapSessionGeneration
+        val created = telemetryRepository.startSession(
+            type = TelemetrySessionType.LAP_SESSION,
+            trackId = config.trackId,
+            trackNameSnapshot = trackCatalog.getTrack(config.trackId)?.name?.zh,
+        )
+        if (generation != lapSessionGeneration || !isLapRecording) {
+            telemetryRepository.endSession(created)
+            return@withLock null
+        }
+        activeLapSessionId = created
+        FileLogger.d(TAG, "lap session persisted before consumer start: sessionId=$created generation=$generation")
+        created
+    }
+
+    /** REC await 返回后、CameraX 真正启动前的无挂起复核。 */
+    fun isActiveLapSession(sessionId: String): Boolean =
+        isLapRecording && activeLapSessionId == sessionId
     private var lastWrittenCrossingCount: Int = 0
 
     private val _launchStatus = MutableStateFlow(
@@ -535,9 +574,16 @@ class TestSessionViewModel(
         lastLapGpsSample = null
         isLapRecording = true
         lastWrittenCrossingCount = 0
-        // session 懒启动：锚点在此记录，writer 在第一帧到达段3时 inline 创建
+        // 进页锚点：Session 在下方立即异步持久化，GPS/REC 只 await 同一创建任务。
         activeLapStartSystemTs = System.currentTimeMillis()
         activeLapSessionId = null
+        lapSessionGeneration++
+        // RaceChrono 语义：进入圈速页就是一次 Session attempt。立即落 Room，
+        // 不等 GPS 第二帧/不等 REC；快进快出允许留下 0s/几秒短 Session。
+        // REC/GPS 仍复用 prepare 的 Mutex，不会重复创建。
+        lapSessionStartJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            prepareActiveLapSessionForRecording()
+        }
 
         FileLogger.d(TAG, "lapDebugTrackSummary: ${buildTrackDebugSummary(track)}")
     }
@@ -560,11 +606,14 @@ class TestSessionViewModel(
     }
 
     private fun endActiveLapSession() {
-        val sessionId = activeLapSessionId ?: return
+        // 同步摘掉旧 id，避免立即重进/换赛道时新状态覆盖后丢失旧 Session 收尾。
+        val sessionId = activeLapSessionId
         activeLapSessionId = null
         activeLapStartSystemTs = null
         lastWrittenCrossingCount = 0
-        viewModelScope.launch { telemetryRepository.endSession(sessionId) }
+        if (sessionId != null) {
+            viewModelScope.launch { telemetryRepository.endSession(sessionId) }
+        }
     }
 
     /**
@@ -607,7 +656,8 @@ class TestSessionViewModel(
      * @date 2026-05-01
      */
     suspend fun finishActiveLapSession(): LapSessionSaveResult? {
-        val sessionId = activeLapSessionId ?: return null
+        // 快进快出也必须先完成“进页即建 Session”，再收尾为 0s/几秒记录。
+        lapSessionStartJob?.join()
         val sessionSnapshot = _lapSession.value
         val startTs = activeLapStartSystemTs
         // D12 契约：lapCount / bestLapMs 仅基于 qualityFlags 全空的 valid 圈，
@@ -617,7 +667,16 @@ class TestSessionViewModel(
         val bestLapMs = validLaps.minOfOrNull { it.durationMillis }
         val totalDurationMs = startTs?.let { System.currentTimeMillis() - it } ?: 0L
 
-        telemetryRepository.endSession(sessionId)
+        val sessionId = lapSessionMutex.withLock {
+            val current = activeLapSessionId
+            // 先关闭入口，再做 IO：REC await 与 END 交错时，后续的无挂起复核必定失败。
+            isLapRecording = false
+            activeLapSessionId = null
+            activeLapStartSystemTs = null
+            lastWrittenCrossingCount = 0
+            if (current != null) telemetryRepository.endSession(current)
+            current
+        } ?: return null
 
         // unify-lap-count-pairing-semantics round（road-test-first 强制埋点）：读回持久化 lapCount
         // （站点 A，wallClock 配对身份数）与 Snackbar valid 计数（站点 D，qualityFlags 过滤）一并记录，
@@ -628,10 +687,6 @@ class TestSessionViewModel(
             "finishLap sid=$sessionId snackbarValid=$lapCount persistedLapCount=$persistedLapCount key=wallClock",
         )
 
-        activeLapSessionId = null
-        activeLapStartSystemTs = null
-        lastWrittenCrossingCount = 0
-        isLapRecording = false
         _lapSession.value = sessionSnapshot?.copy(status = LapSessionStatus.Finished)
 
         return LapSessionSaveResult(
@@ -909,19 +964,7 @@ class TestSessionViewModel(
         // activeLapStartSystemTs != null 表示 lap 模式已激活；session 在首帧懒启动，保证 writer 就绪
         val lapAnchorTs = activeLapStartSystemTs
         if (lapAnchorTs != null) {
-            if (activeLapSessionId == null) {
-                // persist-session-summary-fields round（**与 round A `fix-lap-binary-ts-hygiene` 同函数潜在冲突**：
-                // A 改 line 562 附近 tsDeltaMs 公式；本 round 改本行 startSession 签名加 trackId+trackNameSnapshot）：
-                // - trackId 来自当前 LapRunConfig
-                // - trackNameSnapshot 是 startSession 时刻 catalog 解析的 zh display name 快照
-                //   （多赛道扩展后 catalog 删除赛道时 detail 屏 D5 仍能显示当时赛道名，不 fallback currentSelectedTrack）
-                val trackNameSnapshot = trackCatalog.getTrack(config.trackId)?.name?.zh
-                activeLapSessionId = telemetryRepository.startSession(
-                    type = TelemetrySessionType.LAP_SESSION,
-                    trackId = config.trackId,
-                    trackNameSnapshot = trackNameSnapshot,
-                )
-            }
+            prepareActiveLapSessionForRecording()
             // fix-lap-binary-ts-hygiene round：anchor 必须等于 header.startTs（同时刻、同时钟域）。
             // 拉 repository.activeSessionStartTs 作为 anchor（startSession 内部赋值与 header.startTs 同源）。
             // sessionStartTs == null 是 invariant 破坏（startSession 刚返回 sessionId 时不该出现），

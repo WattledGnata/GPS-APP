@@ -5,8 +5,9 @@ package com.blazepush.feature.test.recording
  * 录制状态机（sealed class）。
  *
  * 状态转移：
- *   Idle → [Recording]（startRecording 成功 + VideoRecordEvent.Start 到来）
- *   Recording → [Stopping]（stopRecording 请求已发，等待 Finalize）
+ *   Idle → [Starting]（Session 已持久化，CameraX start 已发出）
+ *   Starting → [Recording]（VideoRecordEvent.Start 到来）
+ *   Starting/Recording → [Stopping]（stopRecording 请求已发，等待 Finalize）
  *   Stopping → [Idle]（VideoRecordEvent.Finalize 成功）
  *   任意状态 → [Error]（bind 失败 / Finalize error）
  *   Error → [Idle]（可手动 reset，UI 重试）
@@ -20,15 +21,18 @@ sealed class RecordingState {
     /** 空闲，未录制 */
     object Idle : RecordingState()
 
+    /** Session 已持久化且 CameraX 启动请求已发出，尚未收到首帧 Start。 */
+    data class Starting(val sessionId: String) : RecordingState()
+
     /**
      * 录制中。
      *
      * @param startedAtWallClock VideoRecordEvent.Start 回调时取 System.currentTimeMillis()（与遥测同时钟域）
-     * @param sessionId          录制时刻的 active lap session id；null = 无 active session（孤立视频）
+     * @param sessionId          录制时刻已持久化的 active lap session id
      */
     data class Recording(
         val startedAtWallClock: Long,
-        val sessionId: String?,
+        val sessionId: String,
     ) : RecordingState()
 
     /**

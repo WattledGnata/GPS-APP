@@ -438,6 +438,43 @@ class TelemetryRepository(
         videoSegmentDao.queryBySessionId(sessionId).map { it.toDomain() }
 
     /**
+     * 冷启动恢复“CameraX 已产生数据，但进程在 Finalize/绑定写库前被杀”的窗口。
+     *
+     * 新录像文件名固化为 `<session UUID>_<createdAt>.mp4`；Session 在 CameraX 启动前已经
+     * 持久化，因此这里只恢复能验证 Session 存在、文件非空、且尚未绑定的文件。
+     * 旧版纯时间戳文件名无法可靠反推归属，故 fail closed 不猜测。
+     *
+     * @return 本次新恢复的视频段数
+     */
+    suspend fun recoverSessionVideoFiles(): Int {
+        val videoDir = File(context.filesDir, "video")
+        val candidates = videoDir.listFiles { file -> file.isFile && file.extension.equals("mp4", true) }
+            .orEmpty()
+        var recovered = 0
+        val pattern = Regex("^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_(\\d+)\\.mp4$")
+        for (file in candidates) {
+            val match = pattern.matchEntire(file.name) ?: continue
+            if (file.length() <= 0L) continue
+            val sessionId = match.groupValues[1]
+            val createdAt = match.groupValues[2].toLongOrNull() ?: continue
+            val session = sessionDao.queryBySessionId(sessionId) ?: continue
+            val alreadyBound = videoSegmentDao.queryBySessionId(sessionId)
+                .any { it.filePath == file.absolutePath } || session.videoFilePath == file.absolutePath
+            if (alreadyBound) continue
+            attachVideoToSession(
+                sessionId = sessionId,
+                videoFilePath = file.absolutePath,
+                videoStartedAtWallClock = createdAt,
+                playable = null,
+                durationMs = null,
+            )
+            recovered++
+            Log.d("VideoRecovery", "recovered interrupted recording: sessionId=$sessionId path=${file.name}")
+        }
+        return recovered
+    }
+
+    /**
      * playable 首播回写 wrapper（②c）。失败由调用方 catch，仅日志不阻塞播放。
      */
     suspend fun updateSegmentPlayable(id: Long, playable: Boolean) {
