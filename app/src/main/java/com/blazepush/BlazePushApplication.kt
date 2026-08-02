@@ -105,6 +105,11 @@ class BlazePushApplication : Application() {
     private fun recoverIncompleteLapSessions() {
         appScope.launch {
             try {
+                // 先把“已有文件、Finalize/绑定未落库”的视频按文件名恢复到 Session，
+                // 再收尾 incomplete session，让 endTs 派生能看到恢复后的视频证据。
+                val recoveredVideos = GlobalContext.get().get<TelemetryRepository>()
+                    .recoverSessionVideoFiles()
+                FileLogger.d("VideoRecovery", "startup recoveredVideos=$recoveredVideos")
                 val report = GlobalContext.get().get<IncompleteLapSessionRecoveryCoordinator>()
                     .recover()
                 FileLogger.d(

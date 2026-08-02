@@ -112,6 +112,33 @@ class VideoSegmentAttachCascadeTest {
         assertEquals(legacy.length(), stats.totalBytes)
     }
 
+    @Test
+    fun `cold start recovers nonempty session-prefixed video exactly once`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val createdAt = 1_777_000_123_456L
+        val interrupted = newVideoFile("${sessionId}_${createdAt}.mp4")
+
+        assertEquals(1, repo.recoverSessionVideoFiles())
+        assertEquals(0, repo.recoverSessionVideoFiles())
+
+        val segment = fakeSegmentDao.queryBySessionId(sessionId).single()
+        assertEquals(interrupted.absolutePath, segment.filePath)
+        assertEquals(createdAt, segment.startWallClock)
+        assertNull(segment.playable)
+        assertEquals(interrupted.absolutePath, fakeSessionDao.queryBySessionId(sessionId)?.videoFilePath)
+    }
+
+    @Test
+    fun `cold start does not guess legacy unknown or empty video ownership`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        newVideoFile("1777000123456.mp4")
+        newVideoFile("00000000-0000-0000-0000-000000000000_1777000123456.mp4")
+        File(videoDir, "${sessionId}_1777000123456.mp4").createNewFile()
+
+        assertEquals(0, repo.recoverSessionVideoFiles())
+        assertTrue(fakeSegmentDao.queryBySessionId(sessionId).isEmpty())
+    }
+
     /** case B（spec Req2 Scenario 2）：首段 index 0 + endWallClock 推算。 */
     @Test
     fun `case B - first segment index zero with computed endWallClock`() = runTest {

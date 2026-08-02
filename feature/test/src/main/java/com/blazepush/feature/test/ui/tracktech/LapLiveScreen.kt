@@ -81,6 +81,7 @@ import com.blazepush.feature.test.usecase.AbnormalState
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.utils.VoiceAnnouncer
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
@@ -170,6 +171,8 @@ fun LapLiveScreen(
     // 停圈速退出时若正在录制：先 await 视频落盘（screen 存活期间 camera 源不断），期间显示"保存视频中…"遮罩。
     // 大文件 moov 写入可能几秒，MUST 有 UI 反馈避免用户以为卡死。
     var savingVideo by remember { mutableStateOf(false) }
+    // REC 先 await Session Room 持久化。END 必须先 join 这个短任务，避免“结束后才启动 CameraX”。
+    var recordingStartJob by remember { mutableStateOf<Job?>(null) }
     val trackName = track?.name?.zh ?: "—"
 
     // camera-preview-in-laplivescreen round v2（横滑独立预览页返工）：
@@ -262,7 +265,8 @@ fun LapLiveScreen(
     // 此时若 isRecording 只认 Recording 则 shouldBind 翻 false → LaunchedEffect 重算 unbind camera →
     // 正在 Finalize 的录制源失活 → code=4 复发。故 Stopping 态也必须保持绑定，直到 Finalize 完成 state→Idle
     // （此时 await 已 resume、即将 popBackStack，unbind 安全）。
-    val isRecordingActive = recordingState is RecordingState.Recording || recordingState is RecordingState.Stopping
+    val isRecordingActive = recordingState is RecordingState.Starting ||
+        recordingState is RecordingState.Recording || recordingState is RecordingState.Stopping
     val shouldBind = (pagerState.settledPage == 1 || isRecordingActive) && hasCamera && cameraPermissionGranted
     // recording-params-config-screen round：key 加 recordingConfig → 用户改参数返回时 config 变 → 重跑 effect →
     // 引擎 boundConfig != config → rebind 应用新参数（design Decision 7）。同 config 抖动仍幂等不 rebind。
@@ -297,7 +301,7 @@ fun LapLiveScreen(
             //   录制中 → stopRecording 异步落盘，Finalize 回调里才 unbind（避免 VideoCapture 管道被提前拆断）
             //   非录制 → 直接 unbind（省电释放）
             val currentState = recordingEngine.recordingState.value
-            if (currentState is RecordingState.Recording) {
+            if (currentState is RecordingState.Starting || currentState is RecordingState.Recording) {
                 FileLogger.d("CamRec", "screen 销毁兜底：录制中，stop 后等落盘完成再 unbind（best-effort，主路径已由 onConfirmEnd await 保障）")
                 recordingEngine.stopRecording {
                     FileLogger.d("CamRec", "screen 销毁：落盘完成，执行延迟 unbind")
@@ -314,12 +318,15 @@ fun LapLiveScreen(
 
     val onConfirmEnd: () -> Unit = {
         coroutineScope.launch {
+            // REC 可能正在等 Room insert；先等它收敛，再读引擎实时状态停录。
+            recordingStartJob?.join()
             // 真根因修复（SOURCE_INACTIVE / code=4）：camera 绑在 screen 级 LifecycleOwner（NavBackStackEntry）。
             // 停圈速退出若立即 popBackStack → NavBackStackEntry DESTROYED → CameraX 自动停 camera →
             // 正在录的 VideoCapture 源失活 → Finalize ERROR_SOURCE_INACTIVE，视频损坏 + 不写库。
             // 修复：录制中先 stopRecordingAndAwait 等落盘完成（screen 仍存活 → camera 源不断 → Finalize OK +
             // attachVideoToSession 写库），**期间不 popBackStack**，落盘完成后才 finishActiveLapSession + 退出。
-            if (recordingState is RecordingState.Recording) {
+            val liveRecordingState = recordingEngine.recordingState.value
+            if (liveRecordingState is RecordingState.Starting || liveRecordingState is RecordingState.Recording) {
                 FileLogger.d("CamRec", "停圈速退出：录制中，先等视频落盘再退出（screen 存活→camera 源不断→Finalize OK）")
                 savingVideo = true
                 recordingEngine.stopRecordingAndAwait()
@@ -364,7 +371,16 @@ fun LapLiveScreen(
                 permissionGranted = cameraPermissionGranted,
                 onRequestPermission = requestCameraPermission,
                 recordingEngine = recordingEngine,
-                sessionViewModel = sessionViewModel,
+                onStartRecording = {
+                    recordingStartJob = coroutineScope.launch {
+                        val sessionId = sessionViewModel.prepareActiveLapSessionForRecording()
+                        if (sessionId == null || !sessionViewModel.isActiveLapSession(sessionId)) {
+                            FileLogger.e("CamRec", "REC fail closed: lap session 未激活/已结束，不启动 CameraX")
+                        } else {
+                            recordingEngine.startRecording(context, sessionId)
+                        }
+                    }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -612,10 +628,9 @@ private fun CameraPreviewPage(
     permissionGranted: Boolean,
     onRequestPermission: () -> Unit,
     recordingEngine: CameraRecordingEngine,
-    sessionViewModel: TestSessionViewModel,
+    onStartRecording: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val recordingState by recordingEngine.recordingState.collectAsState()
     // recording-params-config-screen round（实施期修订）：设置面板改 overlay 浮层，由本页 state 控制显隐（不跳路由）
     var showRecordingSettings by remember { mutableStateOf(false) }
@@ -721,6 +736,7 @@ private fun CameraPreviewPage(
 
             // Start/Stop 录制按钮（右下角 · 最小可用 · 精致版留 round 5）
             val recBtnText = when (recordingState) {
+                is RecordingState.Starting -> "启动中..."
                 is RecordingState.Recording -> "STOP"
                 is RecordingState.Stopping -> "停止中..."
                 is RecordingState.Error -> "重试"
@@ -737,12 +753,9 @@ private fun CameraPreviewPage(
                         recordingEngine.stopRecording()
                     } else if (recordingState is RecordingState.Idle || recordingState is RecordingState.Error) {
                         if (recordingState is RecordingState.Error) recordingEngine.resetError()
-                        recordingEngine.startRecording(
-                            context = context,
-                            activeSessionId = sessionViewModel.getActiveLapSessionId(),
-                        )
+                        onStartRecording()
                     }
-                    // Stopping 状态下按钮点击忽略
+                    // Starting / Stopping 状态下按钮点击忽略
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

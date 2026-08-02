@@ -3,6 +3,7 @@ package com.blazepush.feature.test.viewmodel
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.GpsDataFilter
 import com.blazepush.feature.test.model.LapRunConfig
@@ -34,6 +35,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.times
+import org.mockito.Mockito.verify
 import java.io.File
 
 /**
@@ -74,6 +77,59 @@ class TestSessionViewModelTrackLapTest {
             assertEquals(DEFAULT_TRACK_ID, viewModel.lapRunConfig.value?.trackId)
             assertEquals(config, viewModel.lapRunConfig.value)
             assertTrue(viewModel.availableTracks.value.any { track -> track.id == DEFAULT_TRACK_ID })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `entering lap page eagerly persists one session before REC`() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = mockTelemetryRepositoryWithEmptyFlows()
+            doReturn("persisted-session").`when`(repository).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+            val viewModel = createViewModel(telemetryRepository = repository)
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+
+            assertEquals("persisted-session", viewModel.getActiveLapSessionId())
+            assertEquals("persisted-session", viewModel.prepareActiveLapSessionForRecording())
+            assertEquals("persisted-session", viewModel.prepareActiveLapSessionForRecording())
+            assertTrue(viewModel.isActiveLapSession("persisted-session"))
+            verify(repository, times(1)).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `ending before first GPS frame keeps and closes short session`() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = mockTelemetryRepositoryWithEmptyFlows()
+            doReturn("short-session").`when`(repository).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+            val viewModel = createViewModel(telemetryRepository = repository)
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+
+            assertEquals("short-session", viewModel.finishActiveLapSession()?.sessionId)
+            assertEquals(null, viewModel.prepareActiveLapSessionForRecording())
+            verify(repository, times(1)).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+            verify(repository, times(1)).endSession("short-session")
         } finally {
             Dispatchers.resetMain()
         }
@@ -380,7 +436,11 @@ class TestSessionViewModelTrackLapTest {
         stateFlow.value = session
     }
 
-    private fun createViewModel(trackCatalog: TrackCatalog = PresetTrackCatalog()): TestSessionViewModel {
+    private fun createViewModel(
+        trackCatalog: TrackCatalog = PresetTrackCatalog(),
+        telemetryRepository: com.blazepush.core.data.repository.TelemetryRepository =
+            mockTelemetryRepositoryWithEmptyFlows(),
+    ): TestSessionViewModel {
         gpsFlow = MutableStateFlow(emptyGpsSample())
         connectionState = MutableStateFlow(ConnectionState.CONNECTED)
 
@@ -401,7 +461,7 @@ class TestSessionViewModelTrackLapTest {
             gpsDataFilter = gpsDataFilter,
             trackCatalog = trackCatalog,
             lapTimingEngine = LapTimingEngine(),
-            telemetryRepository = mockTelemetryRepositoryWithEmptyFlows(),
+            telemetryRepository = telemetryRepository,
             recentTracksStore = com.blazepush.feature.test.datastore.FakeRecentTracksStore(),
             lapUploadOrchestrator = FakeLapUploadTrigger(),
         )
