@@ -1,11 +1,22 @@
 package com.blazepush.feature.test.ui.tracktech
 
+import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class DebugCaptureDashboardTest {
+
+    @Test
+    fun `BLE and Main statuses stay independent`() {
+        assertEquals("BLE CONNECTED", debugBleStatusText(ConnectionState.CONNECTED))
+        assertEquals("WAITING MAIN", debugMainStatusText(GpsData.Empty.copy(isConnected = true)))
+        assertEquals(
+            "MAIN STALE",
+            debugMainStatusText(GpsData.Empty.copy(hasMainFrame = true, isStale = true)),
+        )
+    }
 
     @Test
     fun `frame age is unavailable before first Main frame`() {

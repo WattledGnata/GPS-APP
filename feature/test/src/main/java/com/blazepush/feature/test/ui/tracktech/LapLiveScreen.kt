@@ -471,6 +471,8 @@ private fun LapHudPage(
                     lapLiveState.abnormalState == null
                 },
                 isDebugCapture = isDebugCapture,
+                connectionState = connectionState,
+                gpsData = gpsData,
             )
 
             val abnormal = lapLiveState.abnormalState
@@ -835,6 +837,8 @@ private fun LapLiveTopStrip(
     lapNumber: Int,
     isReady: Boolean,
     isDebugCapture: Boolean = false,
+    connectionState: ConnectionState? = null,
+    gpsData: GpsData? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -867,14 +871,55 @@ private fun LapLiveTopStrip(
             )
         }
         Spacer(Modifier.weight(1f))
-        Text(
-            text = if (isReady) "Ready" else "—",
-            style = TrackTechTypography.UiTextSmall,
-            color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (isDebugCapture) {
+            val bleConnected = connectionState == ConnectionState.CONNECTED
+            Text(
+                text = debugBleStatusText(connectionState),
+                style = TrackTechTypography.UiTextLabel,
+                color = when (connectionState) {
+                    ConnectionState.CONNECTED -> TrackTechColors.Green
+                    ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> TrackTechColors.Purple
+                    ConnectionState.DISCONNECTED, null -> TrackTechColors.Red
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(14.dp))
+            Text(
+                text = debugMainStatusText(gpsData),
+                style = TrackTechTypography.UiTextLabel,
+                color = when {
+                    !bleConnected -> TrackTechColors.TextMuted
+                    gpsData?.isStale == true -> TrackTechColors.Red
+                    gpsData?.hasMainFrame == true -> TrackTechColors.Green
+                    else -> TrackTechColors.Purple
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Text(
+                text = if (isReady) "Ready" else "—",
+                style = TrackTechTypography.UiTextSmall,
+                color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
+}
+
+internal fun debugBleStatusText(connectionState: ConnectionState?): String = when (connectionState) {
+    ConnectionState.CONNECTED -> "BLE CONNECTED"
+    ConnectionState.CONNECTING -> "BLE CONNECTING"
+    ConnectionState.DISCONNECTING -> "BLE DISCONNECTING"
+    ConnectionState.DISCONNECTED, null -> "BLE DISCONNECTED"
+}
+
+internal fun debugMainStatusText(gpsData: GpsData?): String = when {
+    gpsData == null || !gpsData.hasMainFrame -> "WAITING MAIN"
+    gpsData.isStale -> "MAIN STALE"
+    else -> "MAIN LIVE"
 }
 
 @Composable
