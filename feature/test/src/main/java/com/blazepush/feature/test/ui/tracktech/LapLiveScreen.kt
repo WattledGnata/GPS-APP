@@ -9,6 +9,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -92,6 +93,9 @@ import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 private const val HOLD_DURATION_MS = 1500L
@@ -880,6 +884,35 @@ private fun DebugCaptureDashboard(
     connectionState: ConnectionState,
     modifier: Modifier = Modifier,
 ) {
+    var nowElapsedRealtimeMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    var nowWallClockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
+            nowWallClockMs = System.currentTimeMillis()
+            delay(200L)
+        }
+    }
+    val frameAgeMs = debugFrameAgeMs(gpsData, nowElapsedRealtimeMs)
+    val hasFreshMain = gpsData.hasMainFrame && !gpsData.isStale &&
+        frameAgeMs != null && frameAgeMs < gpsData.mainFrameSilenceTimeoutMs
+    val speedText = if (hasFreshMain) "%.1f".format(Locale.US, gpsData.speed) else "--"
+    val satellitesText = if (hasFreshMain) gpsData.satelliteCount.toString() else "--"
+    val rateText = if (hasFreshMain && gpsData.frequency > 0.0) {
+        "%.1f".format(Locale.US, gpsData.frequency)
+    } else {
+        "--"
+    }
+    val ageText = frameAgeMs?.toString() ?: "--"
+    val ageAccent = when {
+        frameAgeMs == null -> TrackTechColors.TextMuted
+        frameAgeMs >= gpsData.mainFrameSilenceTimeoutMs -> TrackTechColors.Red
+        else -> TrackTechColors.Green
+    }
+    val timeText = remember(nowWallClockMs) {
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(nowWallClockMs))
+    }
+
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -887,66 +920,122 @@ private fun DebugCaptureDashboard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1.25f),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "MAIN FRAMES",
-                value = stats.mainFrameCount.toString(),
+                label = "CURRENT SPEED",
+                value = speedText,
+                unit = if (hasFreshMain) "km/h" else null,
+                status = if (hasFreshMain) "实时 Main 帧" else "等待新鲜数据",
+                modifier = Modifier.weight(1.45f).fillMaxHeight(),
+                accentColor = TrackTechColors.Cyan,
+                valueSize = MetricSize.Hero,
+                valueKind = MetricKind.Mechanical,
+                maxValueFontScale = 1.15f,
+            )
+            Column(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MetricTile(
+                    label = "SATELLITES",
+                    value = satellitesText,
+                    status = if (hasFreshMain) "FIX Q${gpsData.fixQuality}" else "NO FRESH FRAME",
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    accentColor = if (gpsData.fixQuality > 0 && hasFreshMain) {
+                        TrackTechColors.Green
+                    } else {
+                        TrackTechColors.Red
+                    },
+                    valueSize = MetricSize.Medium,
+                    maxValueFontScale = 1.15f,
+                )
+                MetricTile(
+                    label = "MAIN RATE",
+                    value = rateText,
+                    unit = if (rateText != "--") "Hz" else null,
+                    status = "实测接收帧率",
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    accentColor = TrackTechColors.Purple,
+                    valueSize = MetricSize.Medium,
+                    maxValueFontScale = 1.15f,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().weight(0.72f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MetricTile(
+                label = "CURRENT TIME",
+                value = timeText,
+                status = if (gpsData.isTimeSynced) "PHONE CLOCK · GPS SYNCED" else "PHONE CLOCK",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
+                maxValueFontScale = 1.10f,
             )
             MetricTile(
-                label = "RELIABLE",
-                value = stats.reliableFrameCount.toString(),
+                label = "RX AGE",
+                value = ageText,
+                unit = if (frameAgeMs != null) "ms" else null,
+                status = "距最新 Main 帧",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                accentColor = TrackTechColors.Green,
+                accentColor = ageAccent,
+                valueColor = ageAccent,
                 valueSize = MetricSize.Medium,
+                maxValueFontScale = 1.15f,
             )
             MetricTile(
-                label = "NO FIX",
-                value = stats.noFixFrameCount.toString(),
+                label = "HDOP",
+                value = if (hasFreshMain && gpsData.hdop > 0.0) {
+                    "%.2f".format(Locale.US, gpsData.hdop)
+                } else {
+                    "--"
+                },
+                status = if (gpsData.isTimeSynced) "TIME SYNCED" else "TIME UNSYNCED",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                accentColor = TrackTechColors.Red,
+                accentColor = if (hasFreshMain && gpsData.hdop > 0.0 && gpsData.hdop < 2.0) {
+                    TrackTechColors.Green
+                } else {
+                    TrackTechColors.Red
+                },
                 valueSize = MetricSize.Medium,
+                maxValueFontScale = 1.15f,
             )
         }
         CutCornerPanel(
             modifier = Modifier.fillMaxWidth(),
-            cutSize = 8.dp,
+            cutSize = 6.dp,
             cutCorners = cutCornersAll,
-            contentPadding = 12.dp,
+            contentPadding = 8.dp,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                DebugStatusRow("BLE", connectionState.name)
-                DebugStatusRow(
-                    "MAIN",
-                    when {
-                        gpsData.isStale -> "静默 / STALE"
-                        gpsData.hasMainFrame -> "实时 · #${gpsData.mainFrameSequence}"
-                        else -> "尚未收到"
-                    },
-                )
-                DebugStatusRow(
-                    "FIX",
-                    "Q${gpsData.fixQuality} · SAT ${gpsData.satelliteCount} · HDOP ${"%.2f".format(gpsData.hdop)}",
-                )
-                DebugStatusRow(
-                    "TIME",
-                    if (gpsData.isTimeSynced) "SYNCED" else "UNSYNCED",
-                )
-                DebugStatusRow(
-                    "FRESHNESS",
-                    "GEN ${gpsData.connectionGeneration} · ${gpsData.mainFrameSilenceTimeoutMs}ms",
-                )
-                DebugStatusRow(
-                    "SESSION",
-                    stats.sessionId?.take(8) ?: "CREATING",
-                )
-            }
+            DebugStatusRow(
+                label = connectionState.name,
+                value = buildString {
+                    append(
+                        when {
+                            gpsData.isStale -> "MAIN STALE"
+                            gpsData.hasMainFrame -> "MAIN #${gpsData.mainFrameSequence}"
+                            else -> "NO MAIN"
+                        },
+                    )
+                    append(" · GEN ${gpsData.connectionGeneration}")
+                    append(" · DEADLINE ${gpsData.mainFrameSilenceTimeoutMs}ms")
+                    append(" · FRAMES ${stats.mainFrameCount}")
+                    append(" / OK ${stats.reliableFrameCount}")
+                    append(" / NO FIX ${stats.noFixFrameCount}")
+                    append(" · SID ${stats.sessionId?.take(8) ?: "CREATING"}")
+                },
+            )
         }
     }
+}
+
+internal fun debugFrameAgeMs(gpsData: GpsData, nowElapsedRealtimeMs: Long): Long? {
+    if (!gpsData.hasMainFrame || gpsData.mainFrameReceivedAtElapsedRealtimeMs <= 0L) return null
+    return (nowElapsedRealtimeMs - gpsData.mainFrameReceivedAtElapsedRealtimeMs).coerceAtLeast(0L)
 }
 
 @Composable
@@ -956,7 +1045,7 @@ private fun DebugStatusRow(label: String, value: String) {
             text = label,
             style = TrackTechTypography.UiTextSmall,
             color = TrackTechColors.TextSecondary,
-            modifier = Modifier.width(92.dp),
+            modifier = Modifier.width(110.dp),
             maxLines = 1,
         )
         Text(
