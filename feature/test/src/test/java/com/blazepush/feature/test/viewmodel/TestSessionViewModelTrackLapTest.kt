@@ -431,12 +431,24 @@ class TestSessionViewModelTrackLapTest {
             }
     }
 
-    private fun emitGps(timestamp: Long, latitude: Double, longitude: Double) {
+    private fun emitGps(
+        timestamp: Long,
+        latitude: Double,
+        longitude: Double,
+        mainFrameSequence: Long = 1L,
+        mainFrameReceivedAtElapsedRealtimeMs: Long = 1L,
+        mainFrameSilenceTimeoutMs: Long = 1_000L,
+        consecutiveReliableMainFrames: Int = 3,
+    ) {
         gpsFlow.value = emptyGpsSample().copy(
             timestamp = timestamp,
             latitude = latitude,
             longitude = longitude,
-            speed = 36.0
+            speed = 36.0,
+            mainFrameSequence = mainFrameSequence,
+            mainFrameReceivedAtElapsedRealtimeMs = mainFrameReceivedAtElapsedRealtimeMs,
+            mainFrameSilenceTimeoutMs = mainFrameSilenceTimeoutMs,
+            consecutiveReliableMainFrames = consecutiveReliableMainFrames,
         )
     }
 
@@ -465,8 +477,8 @@ class TestSessionViewModelTrackLapTest {
         longitude = 0.0,
         altitude = 0.0,
         bearing = 0.0,
-        satelliteCount = 0,
-        hdop = 0.0,
+        satelliteCount = 8,
+        hdop = 1.2,
         vdop = 0.0,
         frequency = 10.0,
         isConnected = true,
@@ -475,10 +487,66 @@ class TestSessionViewModelTrackLapTest {
         fixQuality = 1,
         // 默认已同步 —— 历史用例都期望 emit 的帧能走到 engine
         // 新加的"未同步"用例会显式 .copy(isTimeSynced = false) 覆盖
-        isTimeSynced = true
+        isTimeSynced = true,
+        hasMainFrame = true,
+        mainFrameSequence = 1L,
+        mainFrameReceivedAtElapsedRealtimeMs = 1L,
+        consecutiveReliableMainFrames = 3,
     )
 
     // ==================== v2 (fix-laptime-clock-source-integrity) ====================
+
+    @Test
+    fun bridgeGpsToLapTiming_afterDynamicMainGap_waitsForStableRecoveryAndRestartsTrack() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            emitGps(1_000L, 30.4970, 104.4330, 1L, 1_000L, 400L)
+            dispatcher.scheduler.advanceUntilIdle()
+            emitGps(1_040L, 30.4971, 104.4331, 2L, 1_040L, 400L)
+            dispatcher.scheduler.advanceUntilIdle()
+            val samplesBeforeGap = viewModel.lapSession.value?.samples?.size ?: 0
+            assertTrue("第二个连续帧应已进入计时引擎", samplesBeforeGap >= 1)
+
+            // 25Hz 动态 deadline=400ms。恢复前两帧仍处于稳定性确认阶段。
+            emitGps(1_440L, 30.4990, 104.4350, 3L, 1_440L, 400L, 1)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(
+                "恢复首帧不得跨动态静默 gap 进入计时引擎",
+                samplesBeforeGap,
+                viewModel.lapSession.value?.samples?.size ?: 0,
+            )
+
+            emitGps(1_480L, 30.4991, 104.4351, 4L, 1_480L, 400L, 2)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(
+                "第二个恢复帧仍不得进入计时引擎",
+                samplesBeforeGap,
+                viewModel.lapSession.value?.samples?.size ?: 0,
+            )
+
+            // 第三个可靠帧恢复置信度，但只作为新轨迹基准。
+            emitGps(1_520L, 30.4992, 104.4352, 5L, 1_520L, 400L, 3)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(
+                "达到恢复门槛的首帧只建立新轨迹基准",
+                samplesBeforeGap,
+                viewModel.lapSession.value?.samples?.size ?: 0,
+            )
+
+            emitGps(1_560L, 30.4993, 104.4353, 6L, 1_560L, 400L, 4)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertTrue(
+                "置信度恢复后的下一连续帧应重新进入计时引擎",
+                (viewModel.lapSession.value?.samples?.size ?: 0) > samplesBeforeGap,
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 
     /**
      * bridgeGpsToLapTiming 时间未同步时跳过该帧并重置 prev。

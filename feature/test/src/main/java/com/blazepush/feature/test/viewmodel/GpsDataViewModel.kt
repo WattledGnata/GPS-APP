@@ -2,6 +2,7 @@
 package com.blazepush.feature.test.viewmodel
 
 import android.util.Log
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blazepush.feature.test.FileLogger
@@ -89,7 +90,9 @@ class GpsDataViewModel(
         )
 
     // 数据统计
-    private var lastDataTime = 0L
+    private var lastMainFrameSequence = 0L
+    private var lastMainFrameReceivedAtElapsed = 0L
+    private var lastMainFrameGeneration = 0L
 
     // road-test-first 持久日志去重：仅在 isStale 翻转时落盘，避免 25Hz gpsData 刷屏
     private var lastLoggedIsStale: Boolean? = null
@@ -169,20 +172,31 @@ class GpsDataViewModel(
      *   不再硬编码 10Hz 假设
      */
     private fun updateDataStats(data: GpsData) {
-        val now = System.currentTimeMillis()
-
-        // dataAge = "上次包到现在多久了"，用本地 System.currentTimeMillis 差值。
-        // 不使用协议 timestamp：parseGpsTimeData 用 Calendar.getInstance()（本地时区）
-        // 把 GPS UTC 时间映射到本地时区，中国 UTC+8 时差 8 小时，直接 now-timestamp
-        // 会得到天文数字，永远触发 DATA_FRESH 失败。
-        val dataAge = if (lastDataTime > 0L) now - lastDataTime else 0L
-        lastDataTime = now
+        val now = SystemClock.elapsedRealtime()
+        val isNewMainFrame = data.hasMainFrame &&
+            (data.connectionGeneration != lastMainFrameGeneration ||
+                data.mainFrameSequence != lastMainFrameSequence)
+        val interFrameAge = if (isNewMainFrame && lastMainFrameReceivedAtElapsed > 0L) {
+            data.mainFrameReceivedAtElapsedRealtimeMs - lastMainFrameReceivedAtElapsed
+        } else {
+            0L
+        }
+        if (isNewMainFrame) {
+            lastMainFrameGeneration = data.connectionGeneration
+            lastMainFrameSequence = data.mainFrameSequence
+            lastMainFrameReceivedAtElapsed = data.mainFrameReceivedAtElapsedRealtimeMs
+        }
+        val dataAge = if (data.hasMainFrame) {
+            (now - data.mainFrameReceivedAtElapsedRealtimeMs).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
 
         // A28 frequency：透传 parser 1 秒滑窗结果
         val frequency = data.frequency
 
         // A28 packetLoss：纯函数计算（测试确定性）
-        val packetLossRate = computePacketLossRate(dataAge = dataAge, frequency = data.frequency)
+        val packetLossRate = computePacketLossRate(dataAge = interFrameAge, frequency = data.frequency)
 
         // 构建统计信息
         val stats = DataStats(
@@ -282,7 +296,9 @@ class GpsDataViewModel(
      * 重置同时把 _dataQuality 回到 DataQuality.Empty，确保 DISCONNECTED 后 UI 立即回初始态
      */
     fun resetStats() {
-        lastDataTime = 0L
+        lastMainFrameSequence = 0L
+        lastMainFrameReceivedAtElapsed = 0L
+        lastMainFrameGeneration = 0L
         _dataQuality.value = DataQuality.Empty
     }
 

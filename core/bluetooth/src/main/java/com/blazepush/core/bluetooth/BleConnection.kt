@@ -15,18 +15,20 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.blazepush.core.domain.model.ConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /**
@@ -41,7 +43,8 @@ import java.util.UUID
 class BleConnection(
     private val context: Context,
     private val deviceAddress: String,
-    private val onDataReceived: (UUID, ByteArray) -> Unit
+    private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
+    private val onDataReceived: (UUID, ByteArray) -> Unit,
 ) {
     companion object {
         private const val TAG = "BleConnection"
@@ -66,8 +69,6 @@ class BleConnection(
 
         // 超时时间设置
         private const val CONNECTION_TIMEOUT_MS = 15000L // 15秒连接超时
-        private const val DATA_TIMEOUT_MS = 10000L // 10秒数据超时
-
         /**
          * 解析 BLE Battery Level (0x2A19) 特征值。
          * @return 0..100 的百分比，非法值或空数据返回 null。
@@ -86,7 +87,7 @@ class BleConnection(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    // 数据陈旧软状态：链路 CONNECTED 但已 DATA_TIMEOUT_MS 无新帧时置 true（不拆链）。
+    // 数据陈旧软状态：链路 CONNECTED，但动态 Main deadline 已过时置 true（不拆链）。
     // ble-connection-liveness spec R1：静默 ≠ 死链（真机固件无卫星不推帧），真死链走
     // onConnectionStateChange(STATE_DISCONNECTED) 回调判定。与 GpsData.isConnected 正交。
     @Suppress("PropertyName")
@@ -100,8 +101,11 @@ class BleConnection(
     val batteryPercent: StateFlow<Int?> = _batteryPercent.asStateFlow()
 
     // 数据接收时间记录
+    @Volatile
     private var lastDataTime = 0L
-    private var timeoutJob: Job? = null
+    private var dataWatchdogJob: Job? = null
+    private val mainFrameCadenceTracker = MainFrameCadenceTracker()
+    private val mainFrameSignal = Channel<Unit>(capacity = Channel.CONFLATED)
 
     // 待启用的通知队列
     private val pendingCharacteristics = mutableListOf<BluetoothGattCharacteristic>()
@@ -196,11 +200,11 @@ class BleConnection(
                 Log.d(TAG, "所有通知启用完成，握手成功 → 判定已连接（不等数据帧）")
                 _connectionState.value = ConnectionState.CONNECTED
                 // 握手完成即开始数据新鲜度监控：冷启动无 fix（设备无卫星不推帧）时，
-                // DATA_TIMEOUT_MS 后置 dataStale=true（"等待卫星"提示）而非拆链。
+                // 按设备 Main 节拍计算 deadline，最迟 1 秒置 dataStale=true 而非拆链。
                 // 收到首帧后由 handleCharacteristicChange 重置窗口（ble-connection-liveness spec R1）。
-                lastDataTime = System.currentTimeMillis()
-                timeoutJob?.cancel()
-                startDataTimeoutCheck()
+                mainFrameCadenceTracker.reset()
+                lastDataTime = elapsedRealtimeMs()
+                startDataWatchdog()
             }
         }
 
@@ -267,10 +271,15 @@ class BleConnection(
             logReceivedData(characteristic.uuid, value)
             onDataReceived(characteristic.uuid, value)
 
-            // 更新数据接收时间
-            lastDataTime = System.currentTimeMillis()
-            // 收到帧 = 非陈旧（无论后续 parse 成败，数据在链路上流动）（ble-connection-liveness spec R1 恢复）
-            _dataStale.value = false
+            // 只有 GPS Main 是新定位帧。GPS Time 通知/主动 read 即使持续活跃，
+            // 也不能掩盖主定位特征静默。
+            if (characteristic.uuid == GPS_MAIN_UUID) {
+                val receivedAt = elapsedRealtimeMs()
+                lastDataTime = receivedAt
+                mainFrameCadenceTracker.onMainFrame(receivedAt)
+                _dataStale.value = false
+                mainFrameSignal.trySend(Unit)
+            }
 
             // 收到数据就认为连接成功
             if (_connectionState.value != ConnectionState.CONNECTED) {
@@ -278,9 +287,6 @@ class BleConnection(
                 _connectionState.value = ConnectionState.CONNECTED
             }
 
-            // 取消并重新启动超时检测
-            timeoutJob?.cancel()
-            startDataTimeoutCheck()
         }
 
         private fun logReceivedData(uuid: UUID, data: ByteArray) {
@@ -440,28 +446,49 @@ class BleConnection(
         }
     }
 
-    private fun startDataTimeoutCheck() {
-        timeoutJob = scope.launch {
-            delay(DATA_TIMEOUT_MS)
-            // A24 race 消除：delay 刚结束到 body 执行之间可能被 cancel；
-            // ensureActive() 让已取消的协程在此刻抛 CancellationException，
-            // 避免 "假断连瞬间 → 新帧立即 CONNECTED" 的 1-2ms 抖动
-            ensureActive()
-            if (System.currentTimeMillis() - lastDataTime > DATA_TIMEOUT_MS) {
-                // ble-connection-liveness spec R1：数据静默 MUST NOT 拆链。
-                // 真机固件（无卫星不推帧）丢星 = 蓝牙静默，曾被此处误判死链 disconnect →
-                // 跑圈过隧道/桥洞丢几秒星就掉线且不自愈。改为只置软陈旧状态：链路保持
-                // CONNECTED，等卫星恢复推帧时 handleCharacteristicChange 自动清除。
-                // 真死链（设备关机/出范围）由 onConnectionStateChange(STATE_DISCONNECTED)
-                // 经 BLE supervision timeout 判定（A40 统一释放路径，不在此处拆）。
-                Log.w(TAG, "数据静默：标记陈旧（不拆链，链路保持 CONNECTED）")
-                _dataStale.value = true
+    private fun startDataWatchdog() {
+        if (dataWatchdogJob?.isActive == true) return
+        dataWatchdogJob = scope.launch {
+            while (true) {
+                if (_dataStale.value) {
+                    // 静默后不轮询；下一 Main 帧会清 stale 并通过 conflated signal 唤醒。
+                    mainFrameSignal.receive()
+                    continue
+                }
+                val timeoutMs = mainFrameCadenceTracker.currentSilenceTimeoutMs()
+                val remainingMs =
+                    (lastDataTime + timeoutMs - elapsedRealtimeMs()).coerceAtLeast(0L)
+                if (remainingMs > 0L) {
+                    val frameArrived = withTimeoutOrNull(remainingMs) {
+                        mainFrameSignal.receive()
+                        true
+                    } ?: false
+                    if (frameArrived) continue
+                }
+                val currentTimeoutMs = mainFrameCadenceTracker.currentSilenceTimeoutMs()
+                if (!_dataStale.value &&
+                    elapsedRealtimeMs() - lastDataTime >= currentTimeoutMs
+                ) {
+                    // ble-connection-liveness spec R1：数据静默 MUST NOT 拆链。
+                    // 真机固件（无卫星不推帧）丢星 = 蓝牙静默，曾被此处误判死链 disconnect →
+                    // 跑圈过隧道/桥洞丢几秒星就掉线且不自愈。改为只置软陈旧状态：链路保持
+                    // CONNECTED，等卫星恢复推帧时 handleCharacteristicChange 自动清除。
+                    // 真死链（设备关机/出范围）由 onConnectionStateChange(STATE_DISCONNECTED)
+                    // 经 BLE supervision timeout 判定（A40 统一释放路径，不在此处拆）。
+                    Log.w(TAG, "数据静默：标记陈旧（不拆链，链路保持 CONNECTED）")
+                    _dataStale.value = true
+                }
             }
         }
     }
 
     private fun cleanup() {
-        timeoutJob?.cancel()
+        dataWatchdogJob?.cancel()
+        dataWatchdogJob = null
+        while (mainFrameSignal.tryReceive().isSuccess) {
+            // 清除复用 BleConnection 时可能残留的 conflated 唤醒信号。
+        }
+        mainFrameCadenceTracker.reset()
         pendingCharacteristics.clear()
         isWritingDescriptor = false
         lastDataTime = 0L

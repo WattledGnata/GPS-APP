@@ -34,6 +34,7 @@ class BluetoothDataSourceTest {
     private lateinit var mockParser: RaceChronoParser
     private lateinit var source: BluetoothDataSource
     private lateinit var logMock: AutoCloseable
+    private var elapsedRealtime = 1_000L
 
     private val gpsMainUuid = UUID.fromString("00000003-0000-1000-8000-00805f9b34fb")
     private val gpsTimeUuid = UUID.fromString("00000004-0000-1000-8000-00805f9b34fb")
@@ -48,7 +49,11 @@ class BluetoothDataSourceTest {
         logMock = Mockito.mockStatic(Log::class.java)
         mockContext = Mockito.mock(Context::class.java)
         mockParser = Mockito.mock(RaceChronoParser::class.java)
-        source = BluetoothDataSource(mockContext, mockParser)
+        source = BluetoothDataSource(
+            context = mockContext,
+            parser = mockParser,
+            elapsedRealtimeMs = { elapsedRealtime },
+        )
     }
 
     /**
@@ -365,6 +370,95 @@ class BluetoothDataSourceTest {
             "BluetoothDataSource.handleIncomingData 方法必须存在（internal 可见于同 module 测试）",
             method != null,
         )
+    }
+
+    @Test
+    fun repeatedIdenticalMainFrames_incrementSequenceAndRefreshMonotonicReceiptTime() {
+        val allZeroNoFix = GpsData.Empty.copy(errorMessage = null)
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(allZeroNoFix)
+
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        val first = source.dataFlow.value
+        elapsedRealtime = 1_040L
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        val second = source.dataFlow.value
+
+        assertEquals(1L, first.mainFrameSequence)
+        assertEquals(2L, second.mainFrameSequence)
+        assertEquals(1_040L, second.mainFrameReceivedAtElapsedRealtimeMs)
+        assertTrue("all-zero 主帧仍是当前代次的新主帧", second.hasMainFrame)
+        assertFalse("无 fix 不应误变成 test ready", second.isTestReady)
+        assertEquals(0, second.consecutiveReliableMainFrames)
+    }
+
+    @Test
+    fun valid25HzFrames_propagateDynamicDeadlineAndRequireStableRecovery() {
+        val valid = GpsData.Empty.copy(
+            timestamp = 1_000L,
+            satelliteCount = 8,
+            hdop = 1.0,
+            fixQuality = 1,
+            isTimeSynced = true,
+            errorMessage = null,
+        )
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(valid)
+
+        repeat(4) { index ->
+            elapsedRealtime = 1_000L + index * 40L
+            source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        }
+
+        assertEquals(400L, source.dataFlow.value.mainFrameSilenceTimeoutMs)
+        assertEquals(3, source.dataFlow.value.consecutiveReliableMainFrames)
+
+        elapsedRealtime += 400L
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+
+        assertEquals("动态 deadline 后恢复应从第一帧重新计数", 1, source.dataFlow.value.consecutiveReliableMainFrames)
+    }
+
+    @Test
+    fun newConnectionGeneration_clearsCachedPositionAndRejectsOldGattCallback() {
+        val valid = GpsData.Empty.copy(latitude = 30.0, longitude = 104.0, errorMessage = null)
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(valid)
+        val firstGeneration = source.beginConnectionGeneration()
+        source.handleIncomingData(firstGeneration, gpsMainUuid, ByteArray(20))
+        assertTrue(source.dataFlow.value.hasMainFrame)
+
+        val secondGeneration = source.beginConnectionGeneration()
+        assertFalse(source.dataFlow.value.hasMainFrame)
+        assertEquals(0.0, source.dataFlow.value.latitude, 0.0)
+        assertEquals(0L, source.dataFlow.value.mainFrameSequence)
+
+        source.handleIncomingData(firstGeneration, gpsMainUuid, ByteArray(20))
+        assertEquals(secondGeneration, source.dataFlow.value.connectionGeneration)
+        assertFalse("旧 GATT 代次回调必须丢弃", source.dataFlow.value.hasMainFrame)
+    }
+
+    @Test
+    fun gpsTimePacket_doesNotRefreshPositionSequenceReceiptTimeOrStaleState() {
+        setDataFlow(
+            GpsData.Empty.copy(
+                isConnected = true,
+                isStale = true,
+                hasMainFrame = true,
+                mainFrameSequence = 7L,
+                mainFrameReceivedAtElapsedRealtimeMs = 900L,
+                mainFrameSilenceTimeoutMs = 400L,
+                consecutiveReliableMainFrames = 0,
+            ),
+        )
+        Mockito.`when`(mockParser.parseGpsTimeData(any(), any())).thenReturn(
+            source.dataFlow.value.copy(isTimeSynced = false, errorMessage = null),
+        )
+
+        source.handleIncomingData(gpsTimeUuid, ByteArray(3))
+
+        assertEquals(7L, source.dataFlow.value.mainFrameSequence)
+        assertEquals(900L, source.dataFlow.value.mainFrameReceivedAtElapsedRealtimeMs)
+        assertEquals(400L, source.dataFlow.value.mainFrameSilenceTimeoutMs)
+        assertEquals(0, source.dataFlow.value.consecutiveReliableMainFrames)
+        assertTrue(source.dataFlow.value.isStale)
     }
 
     @Suppress("UNCHECKED_CAST")

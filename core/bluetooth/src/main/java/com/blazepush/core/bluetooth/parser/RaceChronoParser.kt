@@ -64,9 +64,14 @@ class RaceChronoParser {
     fun parseGpsTimeData(data: ByteArray, currentData: GpsData): GpsData {
         if (data.size < 3) {
             Log.e(TAG, "Invalid GPS time data size: ${data.size}, expected 3")
+            protocolTimeReference = null
             // A25：时间包短包失败信号通过 errorMessage 字段上抛给 BluetoothDataSource，
             //      与主包路径对称 —— 让下游失败分支显式置 isConnected=false
-            return currentData.copy(errorMessage = "short-packet")
+            return currentData.copy(
+                timestamp = Long.MIN_VALUE,
+                isTimeSynced = false,
+                errorMessage = "short-packet",
+            )
         }
 
         return try {
@@ -100,11 +105,22 @@ class RaceChronoParser {
             //       真正职责；时间包到达本身不代表"定位质量满足测试就绪门槛"。
             // A25 契约闭合：成功路径仍显式清 errorMessage，避免前帧失败残留让下游
             //               把"本帧 parse 成功"误解释成"最近一次 parse 失败"
-            currentData.copy(errorMessage = null)
+            // 时间包只更新 parser 基准，不能让缓存的上一主帧继续显示为已同步。
+            // 必须等下一个 syncBits 匹配的 GPS Main 帧才恢复 isTimeSynced=true。
+            currentData.copy(
+                timestamp = Long.MIN_VALUE,
+                isTimeSynced = false,
+                errorMessage = null,
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing GPS time data", e)
+            protocolTimeReference = null
             // A25：时间包解析异常失败信号通过 errorMessage 上抛
-            currentData.copy(errorMessage = "parse-error: ${e.message}")
+            currentData.copy(
+                timestamp = Long.MIN_VALUE,
+                isTimeSynced = false,
+                errorMessage = "parse-error: ${e.message}",
+            )
         }
     }
 

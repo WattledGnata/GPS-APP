@@ -7,9 +7,12 @@ package com.blazepush.core.bluetooth
 import com.blazepush.core.domain.model.ConnectionState
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
+import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.usecase.hasReliableFixEvidence
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +37,8 @@ import kotlinx.coroutines.launch
 class BluetoothDataSource(
     private val context: Context,
     private val parser: RaceChronoParser,
-    dispatcher: CoroutineDispatcher = Dispatchers.IO
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     companion object {
         private const val TAG = "BluetoothDataSource"
@@ -50,6 +54,10 @@ class BluetoothDataSource(
     private var userInitiatedDisconnect = false
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
+    private var activeConnectionGeneration = 0L
+    private var mainFrameSequence = 0L
+    private val mainFrameCadenceTracker = MainFrameCadenceTracker()
+    private var consecutiveReliableMainFrames = 0
 
     // 唯一的数据输出口
     private val _dataFlow = MutableStateFlow(GpsData.Empty)
@@ -97,11 +105,13 @@ class BluetoothDataSource(
                 bleConnection?.disconnect()
                 bleConnection = null
 
+                val generation = beginConnectionGeneration()
+
                 _connectionState.value = ConnectionState.CONNECTING
                 Log.d(TAG, "状态设置为 CONNECTING，创建 BleConnection")
 
                 bleConnection = BleConnection(context, deviceAddress) { uuid, rawData ->
-                    handleIncomingData(uuid, rawData)
+                    handleIncomingData(generation, uuid, rawData)
                 }
 
                 // 在单独的协程中监听 BleConnection 的状态变化
@@ -112,7 +122,16 @@ class BluetoothDataSource(
                         // cancel，不破 A27 cleanup 严格顺序契约（connectionCollectJob 单点取消即清干净）。
                         launch {
                             bleConnection?.dataStale?.collect { stale ->
-                                _dataFlow.value = _dataFlow.value.copy(isStale = stale)
+                                if (stale) consecutiveReliableMainFrames = 0
+                                val current = _dataFlow.value
+                                _dataFlow.value = current.copy(
+                                    isStale = stale,
+                                    consecutiveReliableMainFrames = if (stale) {
+                                        0
+                                    } else {
+                                        current.consecutiveReliableMainFrames
+                                    },
+                                )
                             }
                         }
                         launch {
@@ -134,7 +153,10 @@ class BluetoothDataSource(
                                     reconnectJob = null
                                 }
                                 // 意外断开(远端断/连接超时)→ 调度重连(spec R1)
-                                ConnectionState.DISCONNECTED -> maybeScheduleReconnect()
+                                ConnectionState.DISCONNECTED -> {
+                                    invalidateConnectionGeneration(isStale = false)
+                                    maybeScheduleReconnect()
+                                }
                                 else -> { /* CONNECTING/DISCONNECTING 无重连动作 */ }
                             }
                         }
@@ -186,8 +208,7 @@ class BluetoothDataSource(
             bleConnection?.disconnect()
             bleConnection = null
             _connectionState.value = ConnectionState.DISCONNECTED
-            // isStale 一并清：断开后由 connectionState 主导 UI，陈旧软状态无意义残留会污染重连首帧前的判定
-            _dataFlow.value = _dataFlow.value.copy(isConnected = false, isStale = false)
+            invalidateConnectionGeneration(isStale = false)
             _batteryPercent.value = null
         }
     }
@@ -199,38 +220,109 @@ class BluetoothDataSource(
      * 不经过真实 BLE 链路直接喂数据。可见性 `internal` 保证同 module 测试可调，
      * 对外仍是实现细节。
      *
-     * 契约：`isConnected == true` 的充要条件是 "GATT 连上 + **最近一次** parse 成功"。
+     * 契约：GPS Main 成功才建立主帧身份；GPS Time 只更新时间基准，
+     * 不递增主帧 sequence、不刷新接收时刻、不清 stale。
      *
      * 语义：
-     * - 已知 UUID（主包 / 时间包）→ parser 产出 GpsData（可能含 errorMessage）
-     *   - `errorMessage == null`：parse 成功 → 置 isConnected=true + 清 errorMessage
-     *   - `errorMessage != null`：parse 失败（短包 / catch）→ **显式** 置
-     *     isConnected=false + 保留 parser 的 errorMessage。
-     *     parser 的失败路径是 `currentData.copy(errorMessage = ...)`，`copy` 保留了
-     *     上一帧的 `isConnected` 字段 —— 若不显式翻转，上一帧成功（isConnected=true）
-     *     → 当前帧短包会导致 `isConnected = true + errorMessage != null` 的状态自相
-     *     矛盾，破坏"最近一次 parse 成功"契约。
+     * - GPS Main parse 成功 → 递增 sequence，记录 monotonic receipt time，hasMainFrame=true。
+     * - GPS Main parse 失败 → hasMainFrame=false，禁止沿用上一位置。
+     * - GPS Time 成功/失败 → 保留主帧 freshness 元数据，等下一主帧确认同步。
      * - 未知 UUID → parseResult == null → 整个写入块跳过，_dataFlow.value 完全不
      *   触碰，isConnected 原值保留（硬区分 v1 的 `else -> _dataFlow.value.copy(isConnected = true)`）
      */
     internal fun handleIncomingData(uuid: java.util.UUID, rawData: ByteArray) {
+        handleIncomingData(activeConnectionGeneration, uuid, rawData)
+    }
+
+    internal fun handleIncomingData(generation: Long, uuid: java.util.UUID, rawData: ByteArray) {
+        if (generation != activeConnectionGeneration) {
+            Log.d(TAG, "ignore frame from old generation=$generation active=$activeConnectionGeneration")
+            return
+        }
+        val isMainFrame = uuid.toString() == "00000003-0000-1000-8000-00805f9b34fb"
         val parseResult: com.blazepush.core.domain.model.GpsData? = when (uuid.toString()) {
             "00000003-0000-1000-8000-00805f9b34fb" -> parser.parseGpsData(rawData, _dataFlow.value)
             "00000004-0000-1000-8000-00805f9b34fb" -> parser.parseGpsTimeData(rawData, _dataFlow.value)
             else -> null
         }
         if (parseResult != null) {
-            // isStale = false 两分支都显式置：收到帧 = 非陈旧（无论 parse 成败，数据在流）。
-            // parser 的 currentData.copy(...) 会保留前帧 isStale，不显式翻转会让"静默置 true"
-            // 在下一帧错误残留（同 isConnected 契约陷阱，ble-connection-liveness spec R3）。
-            _dataFlow.value = if (parseResult.errorMessage != null) {
-                // 失败分支 MUST 显式设 isConnected=false：parser copy 保留前帧 isConnected，
-                // 若前帧是 true，不显式翻转会违反"最近一次 parse 成功"契约
-                parseResult.copy(isConnected = false, isStale = false)
+            _dataFlow.value = if (isMainFrame && parseResult.errorMessage == null) {
+                val receivedAt = elapsedRealtimeMs()
+                val previous = _dataFlow.value
+                if (previous.hasMainFrame) {
+                    val gapMs = receivedAt - previous.mainFrameReceivedAtElapsedRealtimeMs
+                    if (gapMs !in 0..<previous.mainFrameSilenceTimeoutMs) {
+                        consecutiveReliableMainFrames = 0
+                    }
+                }
+                mainFrameCadenceTracker.onMainFrame(receivedAt)
+                mainFrameSequence++
+                val current = parseResult.copy(
+                    isConnected = true,
+                    errorMessage = null,
+                    isStale = false,
+                    connectionGeneration = generation,
+                    mainFrameSequence = mainFrameSequence,
+                    mainFrameReceivedAtElapsedRealtimeMs = receivedAt,
+                    hasMainFrame = true,
+                    mainFrameSilenceTimeoutMs = mainFrameCadenceTracker.currentSilenceTimeoutMs(),
+                    consecutiveReliableMainFrames = 0,
+                )
+                consecutiveReliableMainFrames = if (current.hasReliableFixEvidence()) {
+                    minOf(consecutiveReliableMainFrames + 1, GPS_FIX_RECOVERY_MAIN_FRAMES)
+                } else {
+                    0
+                }
+                current.copy(consecutiveReliableMainFrames = consecutiveReliableMainFrames)
+            } else if (isMainFrame) {
+                consecutiveReliableMainFrames = 0
+                // 主包解析失败不能沿用前一个可用位置的 freshness 身份。
+                parseResult.copy(
+                    isConnected = false,
+                    // 链路确实收到了主包，静默语义为 false；但包不可解析，
+                    // hasMainFrame=false 保证不会被计时消费。
+                    isStale = false,
+                    connectionGeneration = generation,
+                    hasMainFrame = false,
+                    consecutiveReliableMainFrames = 0,
+                )
             } else {
-                parseResult.copy(isConnected = true, errorMessage = null, isStale = false)
+                // GPS Time 包不是 Main 帧：不递增 sequence，不刷新接收时刻，不清 stale。
+                val current = _dataFlow.value
+                parseResult.copy(
+                    isConnected = if (parseResult.errorMessage != null) {
+                        false
+                    } else {
+                        current.isConnected
+                    },
+                    connectionGeneration = generation,
+                    mainFrameSequence = current.mainFrameSequence,
+                    mainFrameReceivedAtElapsedRealtimeMs =
+                        current.mainFrameReceivedAtElapsedRealtimeMs,
+                    hasMainFrame = current.hasMainFrame,
+                    isStale = current.isStale,
+                    mainFrameSilenceTimeoutMs = current.mainFrameSilenceTimeoutMs,
+                    consecutiveReliableMainFrames = current.consecutiveReliableMainFrames,
+                )
             }
         }
     }
-}
 
+    /** 开始一个新 GATT 代次，立即废弃所有上一代位置与 parser 时间基准。 */
+    internal fun beginConnectionGeneration(): Long {
+        invalidateConnectionGeneration(isStale = true)
+        return activeConnectionGeneration
+    }
+
+    private fun invalidateConnectionGeneration(isStale: Boolean) {
+        activeConnectionGeneration++
+        mainFrameSequence = 0L
+        mainFrameCadenceTracker.reset()
+        consecutiveReliableMainFrames = 0
+        parser.reset()
+        _dataFlow.value = GpsData.Empty.copy(
+            connectionGeneration = activeConnectionGeneration,
+            isStale = isStale,
+        )
+    }
+}
