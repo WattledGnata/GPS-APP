@@ -10,8 +10,10 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.blazepush.core.bluetooth.BleDeviceManager
+import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.data.repository.IncompleteLapSessionRecoveryCoordinator
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.feature.test.di.bluetoothModule
@@ -22,11 +24,14 @@ import com.blazepush.feature.test.di.repositoryModule
 import com.blazepush.feature.test.di.utilsModule
 import com.blazepush.feature.test.di.viewModelModule
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.diagnostic.DiagnosticEvidenceRecorder
 import com.blazepush.feature.test.livetiming.LapUploadTrigger
+import com.blazepush.feature.test.recording.CameraRecordingEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -39,6 +44,8 @@ class BlazePushApplication : Application() {
 
     // 冷启动恢复 cutoff：只处理本进程创建前遗留的占位 session，避免异步任务误收尾新计时。
     private val processStartedAtMs = System.currentTimeMillis()
+    private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
+    private val diagnosticEvidence = DiagnosticEvidenceRecorder(processStartedAtElapsedMs)
 
     // Application 级后台任务 scope（进程生命周期，无需取消）
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -50,25 +57,36 @@ class BlazePushApplication : Application() {
     private val foregroundCallbacks = object : ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
             if (startedActivityCount++ == 0) {
+                diagnosticEvidence.updateAppLifecycle("FOREGROUND")
                 requestImmediateBleReconnect("app foreground")
             }
         }
-        override fun onActivityStopped(activity: Activity) { startedActivityCount-- }
-        override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
-        override fun onActivityResumed(activity: Activity) = Unit
-        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) {
+            if (--startedActivityCount == 0) diagnosticEvidence.updateAppLifecycle("BACKGROUND")
+        }
+        override fun onActivityCreated(activity: Activity, state: Bundle?) {
+            diagnosticEvidence.updateAppLifecycle("ACTIVITY_CREATED")
+        }
+        override fun onActivityResumed(activity: Activity) {
+            diagnosticEvidence.updateAppLifecycle("RESUMED")
+        }
+        override fun onActivityPaused(activity: Activity) {
+            diagnosticEvidence.updateAppLifecycle("PAUSED")
+        }
         override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
-        override fun onActivityDestroyed(activity: Activity) = Unit
+        override fun onActivityDestroyed(activity: Activity) {
+            diagnosticEvidence.updateAppLifecycle("ACTIVITY_DESTROYED")
+        }
     }
 
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (
-                intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED &&
-                intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) ==
-                BluetoothAdapter.STATE_ON
-            ) {
-                requestImmediateBleReconnect("bluetooth enabled")
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                diagnosticEvidence.updateBluetoothAdapter(bluetoothAdapterStateLabel(state))
+                if (state == BluetoothAdapter.STATE_ON) {
+                    requestImmediateBleReconnect("bluetooth enabled")
+                }
             }
         }
     }
@@ -116,6 +134,7 @@ class BlazePushApplication : Application() {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         bluetoothReceiverRegistered = true
+        startDiagnosticEvidenceCollection()
 
         // cleanup-perftest-telemetry-session-orphan round：存量 PERFORMANCE_TEST 孤儿行
         // 一次性 sweep（幂等，cascade 修复后理论恒 0）。失败不得影响 app 启动。
@@ -145,6 +164,36 @@ class BlazePushApplication : Application() {
         } catch (t: Throwable) {
             FileLogger.e("Livetiming", "register network recovery failed", t)
         }
+    }
+
+    private fun startDiagnosticEvidenceCollection() {
+        val koin = GlobalContext.get()
+        val gpsRepository = koin.get<GpsDataRepository>()
+        val cameraRecordingEngine = koin.get<CameraRecordingEngine>()
+        appScope.launch { gpsRepository.connectionState.collect(diagnosticEvidence::updateConnection) }
+        appScope.launch { gpsRepository.bleHandshake.collect(diagnosticEvidence::updateHandshake) }
+        appScope.launch { gpsRepository.gpsDataFlow.collect(diagnosticEvidence::updateGps) }
+        appScope.launch { gpsRepository.batteryCapability.collect(diagnosticEvidence::updateBattery) }
+        appScope.launch {
+            cameraRecordingEngine.recordingState.collect(diagnosticEvidence::updateCamera)
+        }
+        appScope.launch {
+            while (true) {
+                FileLogger.d(
+                    "DiagnosticEvidence",
+                    diagnosticEvidence.snapshot(SystemClock.elapsedRealtime()),
+                )
+                delay(DIAGNOSTIC_SNAPSHOT_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun bluetoothAdapterStateLabel(state: Int): String = when (state) {
+        BluetoothAdapter.STATE_OFF -> "OFF"
+        BluetoothAdapter.STATE_TURNING_ON -> "TURNING_ON"
+        BluetoothAdapter.STATE_ON -> "ON"
+        BluetoothAdapter.STATE_TURNING_OFF -> "TURNING_OFF"
+        else -> "UNKNOWN($state)"
     }
 
     private fun recoverIncompleteLapSessions() {
@@ -208,5 +257,9 @@ class BlazePushApplication : Application() {
         }
         appScope.cancel()
         super.onTerminate()
+    }
+
+    private companion object {
+        const val DIAGNOSTIC_SNAPSHOT_INTERVAL_MS = 1_000L
     }
 }

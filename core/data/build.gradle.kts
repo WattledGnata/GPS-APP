@@ -62,4 +62,6 @@ dependencies {
     testImplementation("org.mockito:mockito-core:5.2.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     androidTestImplementation(libs.androidx.junit)
+    // Explicit runner-side Context API used by the v9->v10 SQLite instrumentation fixture.
+    androidTestImplementation(libs.androidx.test.core)
 }
