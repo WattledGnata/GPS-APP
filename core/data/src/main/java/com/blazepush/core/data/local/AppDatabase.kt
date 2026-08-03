@@ -414,12 +414,12 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * 完整迁移链（v2→v9），供 AppModule Room builder 和 JVM 单测使用。
+         * 完整迁移链（v2→v10），供 AppModule Room builder 和 JVM 单测使用。
          * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
-         * v2→v9 全程严格覆盖，fallbackFrom 列表不含 2-8。
+         * v2→v10 全程严格覆盖，fallbackFrom 列表不含 2-9。
          *
          * @author CC
-         * @description aggregated migration chain v2→v9
+         * @description aggregated migration chain v2→v10
          * @date 2026-06-07
          */
         val migrationChain: List<Migration> = listOf(

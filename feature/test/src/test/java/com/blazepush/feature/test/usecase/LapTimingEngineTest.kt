@@ -6,6 +6,9 @@
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.feature.test.model.laptiming.ActiveLap
+import com.blazepush.core.domain.model.LapConfidence
+import com.blazepush.core.domain.model.LapConfidencePolicy
+import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
@@ -59,6 +62,57 @@ class LapTimingEngineTest {
             sample(4_000L, latitude = 0.0, longitude = 0.00001),
         )
         assertTrue(result.activeLap!!.gapIntervals.single().affectedGateIds.isEmpty())
+    }
+
+    @Test
+    fun recordMainGap_wrongDirectionStillAffectsGate_withoutCrossing() {
+        val forward = crossingSamples(track.startFinishGate, 100L, 200L)
+        val opened = engine.processSample(newSession(), track, forward.first, forward.second)
+        val wrongPrevious = forward.second.copy(timestampMillis = 1_000L)
+        val wrongCurrent = forward.first.copy(timestampMillis = 2_000L)
+        assertEquals(CrossingReason.WrongDirection, detector.detect(wrongPrevious, wrongCurrent, track.startFinishGate).reason)
+
+        val result = engine.recordMainGap(opened, track, wrongPrevious, wrongCurrent)
+        val gap = result.activeLap!!.gapIntervals.single()
+        val decision = LapConfidencePolicy.evaluate(
+            LapEvidence(
+                startCrossingTimestampMillis = 200L,
+                finishCrossingTimestampMillis = 3_000L,
+                requiredGateIds = setOf(track.startFinishGate.id),
+                acceptedGateIds = setOf(track.startFinishGate.id),
+                gaps = listOf(gap),
+            )
+        )
+        assertTrue(gap.affectedGateIds.contains(track.startFinishGate.id))
+        assertEquals(opened.crossingEvents, result.crossingEvents)
+        assertEquals(LapConfidence.Estimated, decision.confidence)
+    }
+
+    @Test
+    fun recordMainGap_tooSlowStillAffectsGate_withoutCrossing() {
+        val slowGate = track.startFinishGate.copy(minDirectionalSpeedMps = 10.0)
+        val slowTrack = track.copy(startFinishGate = slowGate)
+        val crossing = crossingSamples(slowGate, 100L, 200L)
+        val opened = engine.processSample(newSession(), slowTrack, crossing.first, crossing.second)
+        val slowPrevious = crossing.first.copy(timestampMillis = 1_000L)
+        val slowCurrent = crossing.second.copy(timestampMillis = 1_000_000L)
+        assertEquals(CrossingReason.TooSlow, detector.detect(slowPrevious, slowCurrent, slowGate).reason)
+
+        val result = engine.recordMainGap(opened, slowTrack, slowPrevious, slowCurrent)
+        val gap = result.activeLap!!.gapIntervals.single()
+        val decision = LapConfidencePolicy.evaluate(
+            LapEvidence(
+                startCrossingTimestampMillis = 200L,
+                finishCrossingTimestampMillis = 1_100_000L,
+                requiredGateIds = setOf(slowGate.id),
+                acceptedGateIds = setOf(slowGate.id),
+                gaps = listOf(gap),
+            )
+        )
+        assertTrue(gap.affectedGateIds.contains(slowGate.id))
+        assertEquals(opened.crossingEvents, result.crossingEvents)
+        assertTrue(result.completedLaps.isEmpty())
+        assertEquals(LapConfidence.Estimated, decision.confidence)
     }
 
     @Test

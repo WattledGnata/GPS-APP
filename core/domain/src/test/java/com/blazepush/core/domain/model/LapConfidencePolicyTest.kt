@@ -35,7 +35,7 @@ class LapConfidencePolicyTest {
         assertEquals(LapConfidence.Estimated, result.confidence)
         assertFalse(result.eligibility.personalBest)
         assertTrue(result.eligibility.comparison)
-        assertTrue(result.eligibility.upload)
+        assertFalse(result.eligibility.upload)
     }
 
     @Test fun `missing required gate is incomplete`() {
@@ -67,5 +67,19 @@ class LapConfidencePolicyTest {
         assertFalse(automatic.eligibility.personalBest)
         assertTrue(approved.eligibility.personalBest)
         assertTrue(approved.eligibility.voiceAnnouncement)
+        assertFalse("server cannot persist quality yet, so Reviewed upload fails closed", approved.eligibility.upload)
+    }
+
+    @Test fun `only clean confidence may upload`() {
+        val clean = LapConfidencePolicy.evaluate(evidence())
+        val reviewed = LapConfidencePolicy.evaluate(evidence(flags = setOf(LapEvidenceFlag.SparseSamples)))
+        val estimated = LapConfidencePolicy.evaluate(
+            evidence(gaps = listOf(LapGapInterval(1200, 1300, setOf("SF"))))
+        )
+        val incomplete = LapConfidencePolicy.evaluate(evidence(accepted = emptySet()))
+        assertTrue(clean.eligibility.upload)
+        assertFalse(reviewed.eligibility.upload)
+        assertFalse(estimated.eligibility.upload)
+        assertFalse(incomplete.eligibility.upload)
     }
 }

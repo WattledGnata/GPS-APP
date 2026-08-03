@@ -2,6 +2,9 @@
 package com.blazepush.feature.test.livetiming
 
 import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapEvidenceFlag
+import com.blazepush.core.domain.model.LapGapInterval
+import com.blazepush.core.domain.model.LapConfidence
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -60,7 +63,18 @@ class LapUploadOrchestratorTest {
 
     private fun orchestrator() = LapUploadOrchestrator(api, dao, userProfile, nowMs = { 123L })
 
-    private fun record(lapIndex: Int = 2, trackId: String = "preset-tfic-lpcc") = LapRecord(
+    private fun cleanEvidence() = LapEvidence(
+        startCrossingTimestampMillis = 0L,
+        finishCrossingTimestampMillis = 1_700_000_000_000L,
+        requiredGateIds = setOf("SF"),
+        acceptedGateIds = setOf("SF"),
+    )
+
+    private fun record(
+        lapIndex: Int = 2,
+        trackId: String = "preset-tfic-lpcc",
+        evidence: LapEvidence? = cleanEvidence(),
+    ) = LapRecord(
         recordId = "r$lapIndex",
         sessionId = "s1",
         trackId = trackId,
@@ -69,12 +83,7 @@ class LapUploadOrchestratorTest {
         finishedAtMillis = 1_700_000_000_000L,
         durationMillis = 92345L,
         sectorTimes = listOf(31000L, 30000L, 31345L),
-        evidence = LapEvidence(
-            startCrossingTimestampMillis = 0L,
-            finishCrossingTimestampMillis = 1_700_000_000_000L,
-            requiredGateIds = setOf("SF"),
-            acceptedGateIds = setOf("SF"),
-        ),
+        evidence = evidence,
     )
 
     @Test
@@ -187,6 +196,46 @@ class LapUploadOrchestratorTest {
         orchestrator().flush()
         assertTrue(api.calls.isEmpty())
         assertTrue(dao.store.containsKey("legacy"))
+    }
+
+    @Test
+    fun nonCleanPending_isPreservedAndNotUploaded() = runTest {
+        listOf(LapConfidence.Reviewed, LapConfidence.Estimated, LapConfidence.Incomplete).forEachIndexed { index, quality ->
+            dao.enqueue(
+                PendingLapUploadEntity(
+                    clientLapId = "non-clean-$index",
+                    trackId = "track",
+                    driver = "driver",
+                    lapNo = index + 1,
+                    lapTimeMs = 1000,
+                    createdAtMs = 1,
+                    quality = quality.name,
+                    evidenceVersion = 1,
+                )
+            )
+        }
+
+        orchestrator().flush()
+
+        assertTrue(api.calls.isEmpty())
+        assertEquals(3, dao.store.size)
+    }
+
+    @Test
+    fun nonCleanLaps_failClosed_withoutUploadOrPending() = runTest {
+        userProfile.setDriverName("driver")
+        val reviewed = cleanEvidence().copy(flags = setOf(LapEvidenceFlag.LowAccuracy))
+        val estimated = cleanEvidence().copy(
+            gaps = listOf(LapGapInterval(100, 200, setOf("SF")))
+        )
+        val incomplete = cleanEvidence().copy(acceptedGateIds = emptySet())
+
+        listOf(reviewed, estimated, incomplete, null).forEachIndexed { index, evidence ->
+            orchestrator().onLapCompleted(record(lapIndex = index, evidence = evidence))
+        }
+
+        assertTrue(api.calls.isEmpty())
+        assertTrue(dao.store.isEmpty())
     }
 
     // ---- fakes ----

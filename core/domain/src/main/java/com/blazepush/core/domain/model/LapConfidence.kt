@@ -91,9 +91,9 @@ object LapConfidencePolicy {
                 personalBest = reviewedApproved,
                 voiceAnnouncement = reviewedApproved,
                 comparison = true,
-                upload = evidence.reviewProvenance != LapReviewProvenance.LegacyUnknown,
+                upload = false,
             )
-            LapConfidence.Estimated -> LapEligibility(false, false, true, true)
+            LapConfidence.Estimated -> LapEligibility(false, false, true, false)
             LapConfidence.Incomplete -> LapEligibility(false, false, false, false)
         }
         return LapQualityDecision(confidence, evidence.reviewProvenance, evidence.flags, eligibility)

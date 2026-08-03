@@ -144,7 +144,7 @@ class LapTimingEngine(
 
     private fun buildGap(track: Track, previous: GpsSample, current: GpsSample): LapGapInterval {
         val affectedGateIds = (listOf(track.startFinishGate) + track.orderedSectorGates).mapNotNull { gate ->
-            gate.id.takeIf { detector.detect(previous, current, gate).accepted }
+            gate.id.takeIf { detector.intersectsGateGeometry(previous, current, gate) }
         }.toSet()
         return LapGapInterval(previous.timestampMillis, current.timestampMillis, affectedGateIds)
     }

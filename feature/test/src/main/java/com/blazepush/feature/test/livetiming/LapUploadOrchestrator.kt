@@ -6,6 +6,7 @@ import com.blazepush.core.data.local.entity.PendingLapUploadEntity
 import com.blazepush.core.network.LapUploadApi
 import com.blazepush.core.network.LapUploadDto
 import com.blazepush.core.network.UploadResult
+import com.blazepush.core.domain.model.LapConfidence
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.model.laptiming.LapRecord
@@ -88,8 +89,11 @@ class LapUploadOrchestrator(
         val pending = dao.all()
         for (p in pending) {
             val dto = p.toDto() // 复用持久化 clientLapId,不 new
-            if (dto.quality == null || dto.evidenceVersion == null) {
-                FileLogger.d("Livetiming", "legacy unknown pending 保留且不自动上传 ${dto.clientLapId}")
+            if (dto.quality != LapConfidence.Clean.name || dto.evidenceVersion == null) {
+                FileLogger.d(
+                    "Livetiming",
+                    "非 Clean/legacy pending 保留且不自动上传 ${dto.clientLapId} quality=${dto.quality}",
+                )
                 continue
             }
             when (val r = uploader.upload(dto)) {

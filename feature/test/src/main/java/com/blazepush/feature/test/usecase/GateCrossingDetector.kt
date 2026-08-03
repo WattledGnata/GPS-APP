@@ -47,38 +47,9 @@ class GateCrossingDetector {
         current: GpsSample,
         gate: TimingGate
     ): GateCrossingDetection {
-        // 1. 以 gate 线中点为投影原点
-        //
-        // 投影契约（A11 / backlog, opsx code review BC.3）：
-        // `lonScale = cos(originLat)` 用 gate 中点单点计算，下游把它应用到 previous /
-        // current 位置投影。这隐含假设：
-        //   - gate 线长度 < 1 km（典型赛道起终点 ~60 m，远小于该阈值）
-        //   - 调用方保证 previous / current 在 gate 附近 < 1 km 半径内（生产中由
-        //     `bridgeGpsToLapTiming` + engine 的 activeLap 边界保证，单帧位移 < 10 m）
-        //
-        // 超出该半径会因 originLat 与实际纬度的差异引入 >0.01% 的经度投影形变。
-        // 当前所有使用场景（TFIC preset 30.49°N，gate 60 m，帧间位移 1-10 m）
-        // 形变 <1e-5，可忽略；未来长 gate / 远距 prev-curr 场景需重新评估。
-        val originLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
-        val originLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
-        val lonScale = METERS_PER_DEGREE_LAT * cos(Math.toRadians(originLat))
-
-        val prevN = (previous.latitude - originLat) * METERS_PER_DEGREE_LAT
-        val prevE = (previous.longitude - originLon) * lonScale
-        val currN = (current.latitude - originLat) * METERS_PER_DEGREE_LAT
-        val currE = (current.longitude - originLon) * lonScale
-        val gateStartN = (gate.line.start.latitude - originLat) * METERS_PER_DEGREE_LAT
-        val gateStartE = (gate.line.start.longitude - originLon) * lonScale
-        val gateEndN = (gate.line.end.latitude - originLat) * METERS_PER_DEGREE_LAT
-        val gateEndE = (gate.line.end.longitude - originLon) * lonScale
-
-        // 2. 米空间线段相交（R1：返回 Double? 带 t 参数，null 表示不相交）
-        val intersectionT = segmentsIntersectMeters(
-            ax = prevN, ay = prevE,
-            bx = currN, by = currE,
-            cx = gateStartN, cy = gateStartE,
-            dx = gateEndN, dy = gateEndE
-        )
+        // 1-2. Pure geometry is intentionally separate from legal timing acceptance. Gap evidence
+        // must retain a covered gate even when direction or minimum-speed validation rejects it.
+        val intersectionT = intersectionProgress(previous, current, gate)
 
         if (intersectionT == null) {
             return GateCrossingDetection(
@@ -89,6 +60,14 @@ class GateCrossingDetector {
                 crossingProgress = null
             )
         }
+
+        val originLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
+        val originLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
+        val lonScale = METERS_PER_DEGREE_LAT * cos(Math.toRadians(originLat))
+        val prevN = (previous.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val prevE = (previous.longitude - originLon) * lonScale
+        val currN = (current.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val currE = (current.longitude - originLon) * lonScale
 
         // 3. passDirection 投影到米空间 + 归一化为单位向量（只取方向，忽略幅值）
         val passDirN = gate.passDirection.x * METERS_PER_DEGREE_LAT
@@ -143,6 +122,33 @@ class GateCrossingDetector {
             directionalSpeedMps = directionalSpeedMps,
             directionScore = directionScore,
             crossingProgress = intersectionT.coerceIn(0.0, 1.0)
+        )
+    }
+
+    /** Pure segment/gate intersection. It never applies direction/speed rules or creates crossing. */
+    internal fun intersectsGateGeometry(
+        previous: GpsSample,
+        current: GpsSample,
+        gate: TimingGate,
+    ): Boolean = intersectionProgress(previous, current, gate) != null
+
+    private fun intersectionProgress(previous: GpsSample, current: GpsSample, gate: TimingGate): Double? {
+        val originLat = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
+        val originLon = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
+        val lonScale = METERS_PER_DEGREE_LAT * cos(Math.toRadians(originLat))
+        val prevN = (previous.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val prevE = (previous.longitude - originLon) * lonScale
+        val currN = (current.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val currE = (current.longitude - originLon) * lonScale
+        val gateStartN = (gate.line.start.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val gateStartE = (gate.line.start.longitude - originLon) * lonScale
+        val gateEndN = (gate.line.end.latitude - originLat) * METERS_PER_DEGREE_LAT
+        val gateEndE = (gate.line.end.longitude - originLon) * lonScale
+        return segmentsIntersectMeters(
+            ax = prevN, ay = prevE,
+            bx = currN, by = currE,
+            cx = gateStartN, cy = gateStartE,
+            dx = gateEndN, dy = gateEndE,
         )
     }
 
