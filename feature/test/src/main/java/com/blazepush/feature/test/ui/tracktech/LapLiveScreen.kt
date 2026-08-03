@@ -75,6 +75,7 @@ import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
 import com.blazepush.feature.test.recording.CameraRecordingEngine
 import com.blazepush.feature.test.recording.RecordingConfig
 import com.blazepush.feature.test.datastore.RecordingPreferencesRepository
@@ -142,6 +143,7 @@ fun LapLiveScreen(
     val track by sessionViewModel.currentSelectedTrack.collectAsState()
     val currentMode by sessionViewModel.currentMode.collectAsState()
     val debugCaptureStats by sessionViewModel.debugCaptureStats.collectAsState()
+    val lapGpsReadiness by sessionViewModel.lapGpsReadiness.collectAsState()
     val gpsDataViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
     val connectionState by gpsDataViewModel.connectionState.collectAsState()
@@ -370,6 +372,7 @@ fun LapLiveScreen(
             LapHudPage(
                 trackName = trackName,
                 lapLiveState = lapLiveState,
+                lapGpsReadiness = lapGpsReadiness,
                 isDebugCapture = isDebugCapture,
                 debugCaptureStats = debugCaptureStats,
                 gpsData = gpsData,
@@ -443,6 +446,7 @@ fun LapLiveScreen(
 private fun LapHudPage(
     trackName: String,
     lapLiveState: LapLiveState,
+    lapGpsReadiness: LapGpsReadiness,
     isDebugCapture: Boolean,
     debugCaptureStats: DebugCaptureStats,
     gpsData: GpsData,
@@ -465,11 +469,7 @@ private fun LapHudPage(
             LapLiveTopStrip(
                 trackName = trackName,
                 lapNumber = lapLiveState.currentLapNumber,
-                isReady = if (isDebugCapture) {
-                    connectionState == ConnectionState.CONNECTED && !gpsData.isStale
-                } else {
-                    lapLiveState.abnormalState == null
-                },
+                lapGpsReadiness = lapGpsReadiness,
                 isDebugCapture = isDebugCapture,
                 connectionState = connectionState,
                 gpsData = gpsData,
@@ -835,7 +835,7 @@ private fun CameraPreviewPage(
 private fun LapLiveTopStrip(
     trackName: String,
     lapNumber: Int,
-    isReady: Boolean,
+    lapGpsReadiness: LapGpsReadiness,
     isDebugCapture: Boolean = false,
     connectionState: ConnectionState? = null,
     gpsData: GpsData? = null,
@@ -899,9 +899,13 @@ private fun LapLiveTopStrip(
             )
         } else {
             Text(
-                text = if (isReady) "Ready" else "—",
+                text = lapGpsReadiness.name,
                 style = TrackTechTypography.UiTextSmall,
-                color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
+                color = if (lapGpsReadiness == LapGpsReadiness.ARMED) {
+                    TrackTechColors.Green
+                } else {
+                    TrackTechColors.TextMuted
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

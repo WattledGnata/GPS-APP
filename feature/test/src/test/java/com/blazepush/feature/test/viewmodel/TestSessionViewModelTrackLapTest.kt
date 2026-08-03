@@ -11,6 +11,7 @@ import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapQualityFlag
+import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.TimingGate
@@ -59,6 +60,7 @@ class TestSessionViewModelTrackLapTest {
     private val dispatcher = StandardTestDispatcher()
     private var gpsFlow = MutableStateFlow(emptyGpsSample())
     private var connectionState = MutableStateFlow(ConnectionState.CONNECTED)
+    private var nextMainFrameSequence = 2L
 
     /**
      * 选择 lap debug 模式后 lapRunConfig 应反映给定 trackId。
@@ -104,6 +106,116 @@ class TestSessionViewModelTrackLapTest {
                 DEFAULT_TRACK_ID,
                 "成都天府国际赛道",
             )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `START while device disconnected persists session and waits for device`() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = mockTelemetryRepositoryWithEmptyFlows()
+            doReturn("offline-session").`when`(repository).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+            val viewModel = createViewModel(telemetryRepository = repository)
+            connectionState.value = ConnectionState.DISCONNECTED
+            gpsFlow.value = GpsData.Empty
+            dispatcher.scheduler.advanceUntilIdle()
+
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals("offline-session", viewModel.getActiveLapSessionId())
+            assertEquals(LapGpsReadiness.WAITING_DEVICE, viewModel.lapGpsReadiness.value)
+            assertEquals(LapSessionStatus.Ready, viewModel.lapSession.value?.status)
+            verify(repository, times(1)).startSession(
+                TelemetrySessionType.LAP_SESSION,
+                DEFAULT_TRACK_ID,
+                "成都天府国际赛道",
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `unreliable stale stabilizing and old generation frames never feed lap engine`() = runTest {
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = createViewModel()
+            viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            gpsFlow.value = emptyGpsSample().copy(
+                timestamp = 1_000L,
+                connectionGeneration = 2L,
+                mainFrameSequence = 1L,
+                mainFrameReceivedAtElapsedRealtimeMs = 1_000L,
+                latitude = 30.4970,
+                longitude = 104.4330,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+            gpsFlow.value = emptyGpsSample().copy(
+                timestamp = 1_040L,
+                connectionGeneration = 2L,
+                mainFrameSequence = 2L,
+                mainFrameReceivedAtElapsedRealtimeMs = 1_040L,
+                latitude = 30.4971,
+                longitude = 104.4331,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+            val acceptedSampleCount = viewModel.lapSession.value?.samples?.size ?: 0
+            assertTrue(acceptedSampleCount >= 1)
+
+            val rejectedFrames = listOf(
+                emptyGpsSample().copy(
+                    timestamp = 1_060L,
+                    connectionGeneration = 2L,
+                    mainFrameSequence = 2L,
+                    mainFrameReceivedAtElapsedRealtimeMs = 1_040L,
+                    latitude = 30.4990,
+                    longitude = 104.4350,
+                ),
+                emptyGpsSample().copy(
+                    timestamp = 1_080L,
+                    connectionGeneration = 2L,
+                    mainFrameSequence = 3L,
+                    hasMainFrame = false,
+                ),
+                emptyGpsSample().copy(
+                    timestamp = 1_120L,
+                    connectionGeneration = 2L,
+                    mainFrameSequence = 4L,
+                    fixQuality = 0,
+                    satelliteCount = 0,
+                ),
+                emptyGpsSample().copy(
+                    timestamp = 1_160L,
+                    connectionGeneration = 2L,
+                    mainFrameSequence = 5L,
+                    consecutiveReliableMainFrames = 2,
+                ),
+                emptyGpsSample().copy(
+                    timestamp = 1_200L,
+                    connectionGeneration = 2L,
+                    mainFrameSequence = 6L,
+                    isStale = true,
+                ),
+                emptyGpsSample().copy(
+                    timestamp = 1_240L,
+                    connectionGeneration = 1L,
+                    mainFrameSequence = 99L,
+                ),
+            )
+            rejectedFrames.forEach { frame ->
+                gpsFlow.value = frame
+                dispatcher.scheduler.advanceUntilIdle()
+                assertEquals(acceptedSampleCount, viewModel.lapSession.value?.samples?.size ?: 0)
+            }
         } finally {
             Dispatchers.resetMain()
         }
@@ -477,6 +589,7 @@ class TestSessionViewModelTrackLapTest {
     ): TestSessionViewModel {
         gpsFlow = MutableStateFlow(emptyGpsSample())
         connectionState = MutableStateFlow(ConnectionState.CONNECTED)
+        nextMainFrameSequence = 2L
 
         val gpsDataViewModel = mock(GpsDataViewModel::class.java)
         doReturn(gpsFlow).`when`(gpsDataViewModel).gpsData
@@ -529,7 +642,7 @@ class TestSessionViewModelTrackLapTest {
         timestamp: Long,
         latitude: Double,
         longitude: Double,
-        mainFrameSequence: Long = 1L,
+        mainFrameSequence: Long? = null,
         mainFrameReceivedAtElapsedRealtimeMs: Long = 1L,
         mainFrameSilenceTimeoutMs: Long = 1_000L,
         consecutiveReliableMainFrames: Int = 3,
@@ -539,7 +652,7 @@ class TestSessionViewModelTrackLapTest {
             latitude = latitude,
             longitude = longitude,
             speed = 36.0,
-            mainFrameSequence = mainFrameSequence,
+            mainFrameSequence = mainFrameSequence ?: nextMainFrameSequence++,
             mainFrameReceivedAtElapsedRealtimeMs = mainFrameReceivedAtElapsedRealtimeMs,
             mainFrameSilenceTimeoutMs = mainFrameSilenceTimeoutMs,
             consecutiveReliableMainFrames = consecutiveReliableMainFrames,
@@ -598,15 +711,15 @@ class TestSessionViewModelTrackLapTest {
             viewModel.selectLapDebugMode(DEFAULT_TRACK_ID)
             dispatcher.scheduler.advanceUntilIdle()
 
-            emitGps(1_000L, 30.4970, 104.4330, 1L, 1_000L, 400L)
+            emitGps(1_000L, 30.4970, 104.4330, 2L, 1_000L, 400L)
             dispatcher.scheduler.advanceUntilIdle()
-            emitGps(1_040L, 30.4971, 104.4331, 2L, 1_040L, 400L)
+            emitGps(1_040L, 30.4971, 104.4331, 3L, 1_040L, 400L)
             dispatcher.scheduler.advanceUntilIdle()
             val samplesBeforeGap = viewModel.lapSession.value?.samples?.size ?: 0
             assertTrue("第二个连续帧应已进入计时引擎", samplesBeforeGap >= 1)
 
             // 25Hz 动态 deadline=400ms。恢复前两帧仍处于稳定性确认阶段。
-            emitGps(1_440L, 30.4990, 104.4350, 3L, 1_440L, 400L, 1)
+            emitGps(1_440L, 30.4990, 104.4350, 4L, 1_440L, 400L, 1)
             dispatcher.scheduler.advanceUntilIdle()
             assertEquals(
                 "恢复首帧不得跨动态静默 gap 进入计时引擎",
@@ -614,7 +727,7 @@ class TestSessionViewModelTrackLapTest {
                 viewModel.lapSession.value?.samples?.size ?: 0,
             )
 
-            emitGps(1_480L, 30.4991, 104.4351, 4L, 1_480L, 400L, 2)
+            emitGps(1_480L, 30.4991, 104.4351, 5L, 1_480L, 400L, 2)
             dispatcher.scheduler.advanceUntilIdle()
             assertEquals(
                 "第二个恢复帧仍不得进入计时引擎",
@@ -623,7 +736,7 @@ class TestSessionViewModelTrackLapTest {
             )
 
             // 第三个可靠帧恢复置信度，但只作为新轨迹基准。
-            emitGps(1_520L, 30.4992, 104.4352, 5L, 1_520L, 400L, 3)
+            emitGps(1_520L, 30.4992, 104.4352, 6L, 1_520L, 400L, 3)
             dispatcher.scheduler.advanceUntilIdle()
             assertEquals(
                 "达到恢复门槛的首帧只建立新轨迹基准",
@@ -631,7 +744,7 @@ class TestSessionViewModelTrackLapTest {
                 viewModel.lapSession.value?.samples?.size ?: 0,
             )
 
-            emitGps(1_560L, 30.4993, 104.4353, 6L, 1_560L, 400L, 4)
+            emitGps(1_560L, 30.4993, 104.4353, 7L, 1_560L, 400L, 4)
             dispatcher.scheduler.advanceUntilIdle()
             assertTrue(
                 "置信度恢复后的下一连续帧应重新进入计时引擎",

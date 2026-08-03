@@ -67,6 +67,36 @@ class LapTimingEngineTest {
     }
 
     @Test
+    fun `GPS arriving after session start uses first crossing only to open then second to complete`() {
+        val eagerlyCreatedSession = newSession().copy(startedAtMillis = 100L)
+        val firstCrossing = crossingSamples(track.startFinishGate, 10_000L, 10_200L)
+
+        val opened = engine.processSample(
+            session = eagerlyCreatedSession,
+            track = track,
+            previousSample = firstCrossing.first,
+            currentSample = firstCrossing.second,
+        )
+
+        assertEquals(0, opened.completedLaps.size)
+        assertEquals(1, opened.currentLapIndex)
+        val lapStart = requireNotNull(opened.activeLap).startedAtMillis
+        assertTrue("lap must start at the late GPS crossing, not session creation", lapStart >= 10_000L)
+
+        val secondCrossing = crossingSamples(track.startFinishGate, 20_000L, 20_200L)
+        val completed = engine.processSample(
+            session = opened,
+            track = track,
+            previousSample = secondCrossing.first,
+            currentSample = secondCrossing.second,
+        )
+
+        assertEquals(1, completed.completedLaps.size)
+        assertEquals(lapStart, completed.completedLaps.single().startedAtMillis)
+        assertTrue(completed.completedLaps.single().trajectory.all { it.timestampMillis >= lapStart })
+    }
+
+    @Test
     fun processSample_secondStartFinishCrossing_completesLapEvenWithoutAllSectors() {
         val startedSession = engine.processSample(
             session = newSession(),

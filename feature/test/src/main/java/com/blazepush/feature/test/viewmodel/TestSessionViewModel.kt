@@ -42,12 +42,14 @@ import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.GpsSample
 import com.blazepush.feature.test.model.laptiming.LapRecord
+import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.laptiming.LapSessionStatus
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.usecase.LapLiveState
 import com.blazepush.feature.test.usecase.LapLiveStateDeriver
+import com.blazepush.feature.test.usecase.LapGpsReadinessDeriver
 import com.blazepush.feature.test.usecase.LapTimingEngine
 import com.blazepush.feature.test.usecase.ReferenceLapIndex
 import com.blazepush.feature.test.usecase.buildReferenceLapIndex
@@ -264,6 +266,9 @@ class TestSessionViewModel(
     private val _lapSession = MutableStateFlow<LapSession?>(null)
     val lapSession: StateFlow<LapSession?> = _lapSession.asStateFlow()
 
+    private val _lapGpsReadiness = MutableStateFlow(LapGpsReadiness.WAITING_DEVICE)
+    val lapGpsReadiness: StateFlow<LapGpsReadiness> = _lapGpsReadiness.asStateFlow()
+
     /**
      * round add-realtime-lap-delta：实时秒差跨帧状态。本 ViewModel 是 [projectDelta] 唯一调用方（Deriver 不调）。
      * - reference 在 _lapSession.completedLaps 出现新 best 时同步重建（首圈完成立即建 / 后续 PB 刷新触发重建）
@@ -419,6 +424,7 @@ class TestSessionViewModel(
     private var lastConnectionGeneration: Long = 0L
     private var lastMainFrameSequence: Long = 0L
     private var lastMainFrameSilenceTimeoutMs: Long = GPS_MAIN_SILENCE_MAX_TIMEOUT_MS
+    private var lastAcceptedLapGpsData: GpsData = GpsData.Empty
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     private val preTriggerBuffer = mutableListOf<FilteredGpsData>()
 
@@ -462,11 +468,29 @@ class TestSessionViewModel(
         viewModelScope.launch {
             bleDeviceManager.connectionState.collect { state ->
                 _connectionState.value = state
+                if (state != ConnectionState.CONNECTED) {
+                    lastAcceptedLapGpsData = GpsData.Empty
+                    _lapGpsReadiness.value = LapGpsReadiness.WAITING_DEVICE
+                } else {
+                    _lapGpsReadiness.value = LapGpsReadinessDeriver.derive(
+                        connectionState = state,
+                        gpsData = lastAcceptedLapGpsData,
+                    )
+                }
             }
         }
 
         viewModelScope.launch {
             gpsDataViewModel.gpsData.collect { gpsData ->
+                // connectionGeneration is monotonic. A delayed callback from an older GATT
+                // generation must not alter readiness, continuity, persistence, or the engine.
+                if (gpsData.connectionGeneration < lastConnectionGeneration) {
+                    FileLogger.d(
+                        TAG,
+                        "drop old GPS generation=${gpsData.connectionGeneration} active=$lastConnectionGeneration",
+                    )
+                    return@collect
+                }
                 if (gpsData.connectionGeneration != lastConnectionGeneration) {
                     lastConnectionGeneration = gpsData.connectionGeneration
                     lastReceivedAtElapsed = 0L
@@ -474,6 +498,12 @@ class TestSessionViewModel(
                     lastMainFrameSilenceTimeoutMs = GPS_MAIN_SILENCE_MAX_TIMEOUT_MS
                     resetGpsContinuity()
                 }
+
+                lastAcceptedLapGpsData = gpsData
+                _lapGpsReadiness.value = LapGpsReadinessDeriver.derive(
+                    connectionState = _connectionState.value,
+                    gpsData = gpsData,
+                )
 
                 // 只采信 BluetoothDataSource 在 GPS Main 解析成功时写入的单调时刻。
                 // 时间包、stale 翻转、连接状态复位都不能伪装成新定位帧。
@@ -503,6 +533,11 @@ class TestSessionViewModel(
 
                 if (!gpsData.isUsableForTiming()) {
                     resetGpsContinuity()
+                    return@collect
+                }
+                if (_currentMode.value == TestMode.LapDebug && !isNewMainFrame) {
+                    // Time 包、连接状态和 stale 派生更新可能让 StateFlow 发射，但它们不是新轨迹点。
+                    // 只允许 mainFrameSequence 前进的可靠 Main 帧进入滤波与圈速引擎。
                     return@collect
                 }
 
@@ -660,6 +695,10 @@ class TestSessionViewModel(
         _currentMode.value = TestMode.LapDebug
         _lapRunConfig.value = config
         _lapSession.value = createLapSession(track.id)
+        _lapGpsReadiness.value = LapGpsReadinessDeriver.derive(
+            connectionState = _connectionState.value,
+            gpsData = lastAcceptedLapGpsData,
+        )
         _latestLapRecords.value = emptyList()
         lastLapGpsSample = null
         isLapRecording = true
@@ -682,6 +721,7 @@ class TestSessionViewModel(
         _currentMode.value = TestMode.DebugCapture
         _lapRunConfig.value = null
         _lapSession.value = null
+        _lapGpsReadiness.value = LapGpsReadiness.WAITING_DEVICE
         _latestLapRecords.value = emptyList()
         resetGpsContinuity()
         isLapRecording = true
