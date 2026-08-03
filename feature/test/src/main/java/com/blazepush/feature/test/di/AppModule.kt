@@ -81,6 +81,7 @@ val databaseModule = module {
     single { get<AppDatabase>().pendingLapUploadDao() }
     // video-segment-schema round ②a：视频段一对多 DAO
     single { get<AppDatabase>().videoSegmentDao() }
+    single { get<AppDatabase>().lapEvidenceDao() }
 }
 
 /**
@@ -120,7 +121,15 @@ val repositoryModule = module {
     single { CarModelRepository(get()) }
     single { BluetoothDeviceRepository(get()) }
     // video-segment-schema round ②a：第 4 参 VideoSegmentDao
-    single { TelemetryRepository(androidContext(), get(), get(), get()) }
+    single {
+        TelemetryRepository(
+            context = androidContext(),
+            sessionDao = get(),
+            crossingDao = get(),
+            videoSegmentDao = get(),
+            lapEvidenceDao = get(),
+        )
+    }
     // driver-display-name round：车手显示名（livetiming lap-upload driver 本地前置）
     single { UserProfileRepository(androidContext()) }
     single { VideoOverlayStylePreferences(androidContext()) }

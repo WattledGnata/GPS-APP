@@ -82,7 +82,9 @@ fun TestExecutionScreen(
     LaunchedEffect(completedLaps.size) {
         if (completedLaps.size > lastAnnouncedLapCount) {
             completedLaps.lastOrNull()?.let { lap ->
-                voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+                if (lap.qualityDecision.eligibility.voiceAnnouncement) {
+                    voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+                }
             }
             lastAnnouncedLapCount = completedLaps.size
         }

@@ -1,6 +1,8 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.livetiming
 
+import com.blazepush.core.domain.model.LapEvidence
+
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
@@ -67,6 +69,12 @@ class LapUploadOrchestratorTest {
         finishedAtMillis = 1_700_000_000_000L,
         durationMillis = 92345L,
         sectorTimes = listOf(31000L, 30000L, 31345L),
+        evidence = LapEvidence(
+            startCrossingTimestampMillis = 0L,
+            finishCrossingTimestampMillis = 1_700_000_000_000L,
+            requiredGateIds = setOf("SF"),
+            acceptedGateIds = setOf("SF"),
+        ),
     )
 
     @Test
@@ -162,6 +170,23 @@ class LapUploadOrchestratorTest {
 
         assertEquals("启动与网络回调并发时同一待传圈只能上传一次", 1, api.calls.size)
         assertEquals(0, dao.store.size)
+    }
+
+    @Test
+    fun legacyPending_withoutQuality_isPreservedAndNotUploaded() = runTest {
+        dao.enqueue(
+            PendingLapUploadEntity(
+                clientLapId = "legacy",
+                trackId = "track",
+                driver = "driver",
+                lapNo = 1,
+                lapTimeMs = 1000,
+                createdAtMs = 1,
+            )
+        )
+        orchestrator().flush()
+        assertTrue(api.calls.isEmpty())
+        assertTrue(dao.store.containsKey("legacy"))
     }
 
     // ---- fakes ----

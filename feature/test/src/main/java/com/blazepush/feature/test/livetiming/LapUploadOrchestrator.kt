@@ -42,6 +42,14 @@ class LapUploadOrchestrator(
      * 满足 → 上报；Success 完成,失败入队。
      */
     override suspend fun onLapCompleted(record: LapRecord) {
+        val quality = record.qualityDecision
+        if (!quality.eligibility.upload) {
+            FileLogger.d(
+                "Livetiming",
+                "质量策略跳过上报 lap=${record.lapIndex} confidence=${quality.confidence} provenance=${quality.provenance}",
+            )
+            return
+        }
         // 路测修复（2026-06-04）：三个前置 gate 原先静默跳过 → 路测"上报失败"无法从日志区分
         // 是 gate 拦截还是网络/服务端失败；全部补可观测日志。
         if (!userProfile.livetimingEnabled.first()) {
@@ -80,6 +88,10 @@ class LapUploadOrchestrator(
         val pending = dao.all()
         for (p in pending) {
             val dto = p.toDto() // 复用持久化 clientLapId,不 new
+            if (dto.quality == null || dto.evidenceVersion == null) {
+                FileLogger.d("Livetiming", "legacy unknown pending 保留且不自动上传 ${dto.clientLapId}")
+                continue
+            }
             when (val r = uploader.upload(dto)) {
                 is UploadResult.Success -> dao.deleteByClientLapId(p.clientLapId) // 201（含幂等重复）出队
                 is UploadResult.HttpError -> when (r.code) {
@@ -117,6 +129,9 @@ class LapUploadOrchestrator(
                 sectorsMsCsv = dto.sectorsMs?.joinToString(","),
                 lappedAtRfc3339 = dto.lappedAt,
                 createdAtMs = nowMs(),
+                quality = dto.quality,
+                qualityFlagsCsv = dto.qualityFlags?.joinToString(","),
+                evidenceVersion = dto.evidenceVersion,
             ),
         )
     }
@@ -130,5 +145,8 @@ class LapUploadOrchestrator(
         sectorsMs = sectorsMsCsv?.takeIf { it.isNotBlank() }?.split(",")?.map { it.toLong() },
         clientLapId = clientLapId, // 复用持久化键,不 new
         lappedAt = lappedAtRfc3339,
+        quality = quality,
+        qualityFlags = qualityFlagsCsv?.takeIf { it.isNotBlank() }?.split(","),
+        evidenceVersion = evidenceVersion,
     )
 }

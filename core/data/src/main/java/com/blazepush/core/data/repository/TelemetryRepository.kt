@@ -11,12 +11,19 @@ import com.blazepush.core.data.local.binary.BinaryTelemetryRecovery
 import com.blazepush.core.data.local.binary.LapTelemetryReader
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.data.local.dao.CrossingEventDao
+import com.blazepush.core.data.local.dao.LapEvidenceDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
 import com.blazepush.core.data.local.dao.VideoSegmentDao
 import com.blazepush.core.data.local.entity.CrossingEventEntity
+import com.blazepush.core.data.local.entity.LapEvidenceEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
 import com.blazepush.core.data.local.entity.VideoSegmentEntity
 import com.blazepush.core.domain.model.LapTelemetry
+import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapConfidencePolicy
+import com.blazepush.core.domain.model.LapEvidenceFlag
+import com.blazepush.core.domain.model.LapGapInterval
+import com.blazepush.core.domain.model.LapReviewProvenance
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
@@ -33,6 +40,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
+import com.google.gson.Gson
 
 /**
  * 统一 GPS 点阵持久化入口（A56）。
@@ -50,7 +58,9 @@ class TelemetryRepository(
     private val videoSegmentDao: VideoSegmentDao,
     private val telemetryIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val flushWriter: suspend (BinaryTelemetryWriter) -> Unit = { writer -> writer.flush() },
+    private val lapEvidenceDao: LapEvidenceDao? = null,
 ) {
+    private val gson = Gson()
     enum class FlushResult { FLUSHED, ALREADY_DURABLE, SESSION_CHANGED, NO_ACTIVE_SESSION }
     data class RecoveredLapSession(
         val sessionId: String,
@@ -346,10 +356,22 @@ class TelemetryRepository(
                 val end = b.crossingWallClockTimestampMs
                 if (start != null && end != null) end - start else null
             }
+        val evidenceByLap = lapEvidenceDao?.findBySession(sessionId).orEmpty()
+            .associate { it.lapIndex to it.toDomainEvidence() }
+        // A null DAO exists only in legacy JVM fakes. Production DI always supplies it.
+        val decisions = if (lapEvidenceDao == null) emptyMap() else durations.indices.associateWith { lapIndex ->
+            LapConfidencePolicy.evaluate(evidenceByLap[lapIndex + 1])
+        }
+        val comparableDurations = if (lapEvidenceDao == null) durations.withIndex().toList() else {
+            durations.withIndex().filter { decisions.getValue(it.index).eligibility.comparison }
+        }
+        val pbDurations = if (lapEvidenceDao == null) durations else durations.withIndex()
+            .filter { decisions.getValue(it.index).eligibility.personalBest }
+            .map { it.value }
 
         PersistedLapEvidence(
-            lapCount = durations.size,
-            bestLapMs = durations.minOrNull(),
+            lapCount = comparableDurations.size,
+            bestLapMs = pbDurations.minOrNull(),
             topSpeedKmh = samples.maxOfOrNull { it.speedKmh }?.takeIf { it > 0.0 },
             lastCrossingWallClock = crossings.mapNotNull { it.crossingWallClockTimestampMs }.maxOrNull(),
             lastSampleDeltaMs = samples.maxOfOrNull { it.tsDeltaMs },
@@ -399,6 +421,44 @@ class TelemetryRepository(
      */
     suspend fun getCrossings(sessionId: String): List<TelemetryCrossingEvent> =
         crossingDao.queryBySessionId(sessionId).map { it.toDomain() }
+
+    /** Persist evidence only; raw telemetry and crossing rows remain the truth sources. */
+    suspend fun writeLapEvidence(sessionId: String, lapIndex: Int, evidence: LapEvidence) {
+        lapEvidenceDao?.upsert(
+            LapEvidenceEntity(
+                sessionId = sessionId,
+                lapIndex = lapIndex,
+                evidenceVersion = evidence.version,
+                startCrossingTimestampMillis = evidence.startCrossingTimestampMillis,
+                finishCrossingTimestampMillis = evidence.finishCrossingTimestampMillis,
+                requiredGateIdsCsv = evidence.requiredGateIds.sorted().joinToString(","),
+                acceptedGateIdsCsv = evidence.acceptedGateIds.sorted().joinToString(","),
+                gapIntervalsJson = gson.toJson(evidence.gaps),
+                qualityFlagsCsv = evidence.flags.map { it.name }.sorted().joinToString(","),
+                reviewProvenance = evidence.reviewProvenance.name,
+            )
+        )
+    }
+
+    suspend fun getLapEvidence(sessionId: String, lapIndex: Int): LapEvidence? =
+        lapEvidenceDao?.find(sessionId, lapIndex)?.toDomainEvidence()
+
+    suspend fun getLapEvidenceForSession(sessionId: String): Map<Int, LapEvidence> =
+        lapEvidenceDao?.findBySession(sessionId).orEmpty().associate { it.lapIndex to it.toDomainEvidence() }
+
+    private fun LapEvidenceEntity.toDomainEvidence(): LapEvidence = LapEvidence(
+        version = evidenceVersion,
+        startCrossingTimestampMillis = startCrossingTimestampMillis,
+        finishCrossingTimestampMillis = finishCrossingTimestampMillis,
+        requiredGateIds = requiredGateIdsCsv.csvSet(),
+        acceptedGateIds = acceptedGateIdsCsv.csvSet(),
+        gaps = gson.fromJson(gapIntervalsJson, Array<LapGapInterval>::class.java)?.toList().orEmpty(),
+        flags = qualityFlagsCsv.csvSet().mapNotNull { runCatching { LapEvidenceFlag.valueOf(it) }.getOrNull() }.toSet(),
+        reviewProvenance = runCatching { LapReviewProvenance.valueOf(reviewProvenance) }
+            .getOrDefault(LapReviewProvenance.LegacyUnknown),
+    )
+
+    private fun String.csvSet(): Set<String> = split(',').filter { it.isNotBlank() }.toSet()
 
     /**
      * 拉最近 N 个 LAP_SESSION（按 startTs 倒序），供 Records LAPS SESSION HISTORY 列表消费。

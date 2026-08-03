@@ -36,6 +36,32 @@ class LapTimingEngineTest {
     private val engine = LapTimingEngine(detector)
 
     @Test
+    fun recordMainGap_preservesEvidenceWithoutCreatingCrossing() {
+        val opening = crossingSamples(track.startFinishGate, 100L, 200L)
+        val opened = engine.processSample(newSession(), track, opening.first, opening.second)
+        val gapAcrossFinish = crossingSamples(track.startFinishGate, 2_000L, 4_000L)
+
+        val result = engine.recordMainGap(opened, track, gapAcrossFinish.first, gapAcrossFinish.second)
+
+        assertEquals(opened.crossingEvents, result.crossingEvents)
+        assertEquals(opened.completedLaps, result.completedLaps)
+        assertTrue(result.activeLap!!.gapIntervals.single().affectedGateIds.contains(track.startFinishGate.id))
+    }
+
+    @Test
+    fun recordMainGap_unrelatedToRequiredGates_keepsEmptyImpactEvidence() {
+        val opening = crossingSamples(track.startFinishGate, 100L, 200L)
+        val opened = engine.processSample(newSession(), track, opening.first, opening.second)
+        val result = engine.recordMainGap(
+            opened,
+            track,
+            sample(2_000L, latitude = 0.0, longitude = 0.0),
+            sample(4_000L, latitude = 0.0, longitude = 0.00001),
+        )
+        assertTrue(result.activeLap!!.gapIntervals.single().affectedGateIds.isEmpty())
+    }
+
+    @Test
     fun processSample_onJvm_doesNotCrashWhenAcceptedCrossingTriggersDebugLogging() {
         val startFinish = crossingSamples(track.startFinishGate, 1773477876490L, 1773477876690L)
         val startedSession = engine.processSample(

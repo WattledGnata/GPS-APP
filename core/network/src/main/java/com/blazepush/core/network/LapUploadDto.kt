@@ -21,4 +21,7 @@ data class LapUploadDto(
     @SerializedName("sectorsMs") val sectorsMs: List<Long>? = null,
     @SerializedName("clientLapId") val clientLapId: String,
     @SerializedName("lappedAt") val lappedAt: String? = null,
+    @SerializedName("quality") val quality: String? = null,
+    @SerializedName("qualityFlags") val qualityFlags: List<String>? = null,
+    @SerializedName("evidenceVersion") val evidenceVersion: Int? = null,
 )

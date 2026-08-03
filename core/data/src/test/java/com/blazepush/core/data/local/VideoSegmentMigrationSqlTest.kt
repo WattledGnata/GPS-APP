@@ -27,9 +27,9 @@ class VideoSegmentMigrationSqlTest {
 
     @Test
     fun migrationChain_lastIsEightToNine() {
-        val last = AppDatabase.migrationChain.last()
-        assertEquals(8, last.startVersion)
-        assertEquals(9, last.endVersion)
+        val migration = AppDatabase.migrationChain.single { it.startVersion == 8 }
+        assertEquals(8, migration.startVersion)
+        assertEquals(9, migration.endVersion)
     }
 
     @Test

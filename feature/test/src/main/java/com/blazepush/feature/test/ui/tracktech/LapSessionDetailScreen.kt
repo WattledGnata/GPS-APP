@@ -58,6 +58,10 @@ import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySession
+import com.blazepush.core.domain.model.LapConfidence
+import com.blazepush.core.domain.model.LapConfidencePolicy
+import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapReviewProvenance
 import com.blazepush.core.domain.model.SessionVideoStats
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.repository.TrackCatalog
@@ -90,6 +94,7 @@ fun LapSessionDetailScreen(
     var session by remember { mutableStateOf<TelemetrySession?>(null) }
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
     var videoStats by remember { mutableStateOf(SessionVideoStats(0, 0, 0L)) }
+    var evidenceByLap by remember { mutableStateOf<Map<Int, LapEvidence>>(emptyMap()) }
 
     // video-storage-cleanup round：成绩页单删视频（保留成绩）。删后 bump refreshTick 重载 session。
     var refreshTick by remember { mutableStateOf(0) }
@@ -102,11 +107,12 @@ fun LapSessionDetailScreen(
         session = telemetryRepository.getSession(sessionId)
         crossings = telemetryRepository.getCrossings(sessionId)
         videoStats = telemetryRepository.getSessionVideoStats(sessionId)
+        evidenceByLap = telemetryRepository.getLapEvidenceForSession(sessionId)
         // persist-session-summary-fields round 起：topSpeedKmh 直接读 entity.topSpeedKmh，
         // 不再每次进入 detail 屏全扫 binary（endSession 时已派生持久化）
     }
 
-    val derived = remember(crossings) { deriveDetailMetrics(crossings) }
+    val derived = remember(crossings, evidenceByLap) { deriveDetailMetrics(crossings, evidenceByLap) }
     // unify-lap-count-pairing-semantics round（road-test-first 强制埋点）：记录站点 B 圈列表
     // 有效圈数 + null wallClock 计数 + 配对 key，真机点击前 adb pull 核对列表与 getLapTelemetry
     // 可读圈一致（R2）。
@@ -190,7 +196,13 @@ fun LapSessionDetailScreen(
         // RaceChrono/AiM 风格的 "带 sector 列的表"。table 非 null（有 sector 门）时圈列表区
         // 渲染 sector 表（表头 + THEORETICAL 行 + valid/best 圈行，横向滚动同步固定列宽防窄屏挤压）；
         // table 为 null（无 sector 门或 <2 SF）时 fallback 回原 LapRecordsHeader + 全部 LapRecordRow。
-        val table = remember(crossings) { computeLapSectorTable(crossings) }
+        val comparisonLapNumbers = derived.lapRecords
+            .filter { it.status == UiLapStatus.VALID || it.status == UiLapStatus.BEST }
+            .map { it.lapNumber }
+            .toSet()
+        val table = remember(crossings, comparisonLapNumbers) {
+            computeLapSectorTable(crossings, comparisonLapNumbers)
+        }
         // sector 表横向滚动 state：表头 / THEORETICAL / 各圈行共享同一 hScroll 保证横向同步。
         val hScroll = rememberScrollState()
 
@@ -760,7 +772,12 @@ private fun VideoReplayIcon(onClick: () -> Unit) {
 private fun StatusChip(record: UiLapRecord) {
     val (label, color) = when (record.status) {
         UiLapStatus.BEST -> "BEST" to TrackTechColors.Purple
-        UiLapStatus.VALID -> return  // VALID 圈不显示 chip，时间字色已表达
+        UiLapStatus.VALID -> when (record.confidence) {
+            LapConfidence.Clean -> return
+            LapConfidence.Reviewed -> "REVIEWED" to TrackTechColors.Cyan
+            LapConfidence.Estimated -> "ESTIMATED" to TrackTechColors.TextMuted
+            LapConfidence.Incomplete -> "INCOMPLETE" to TrackTechColors.TextMuted
+        }
         UiLapStatus.INVALID -> "INVALID" to TrackTechColors.Red
         UiLapStatus.INCOMPLETE -> "INCOMPLETE" to TrackTechColors.TextMuted
     }
@@ -846,6 +863,8 @@ internal data class UiLapRecord(
     val diffMs: Long?,
     val status: UiLapStatus,
     val reason: String?,
+    val confidence: LapConfidence = LapConfidence.Reviewed,
+    val reviewProvenance: LapReviewProvenance = LapReviewProvenance.LegacyUnknown,
 )
 
 internal enum class UiLapStatus { BEST, VALID, INVALID, INCOMPLETE }
@@ -883,7 +902,10 @@ internal data class LapSectorRow(
  *
  * 无 sector 门（每圈 < 2 段）、<2 SF、或无完整圈 → null（圈列表区 fallback 回原简单列表）。
  */
-internal fun computeLapSectorTable(crossings: List<TelemetryCrossingEvent>): LapSectorTable? {
+internal fun computeLapSectorTable(
+    crossings: List<TelemetryCrossingEvent>,
+    eligibleLapNumbers: Set<Int>? = null,
+): LapSectorTable? {
     val acceptedSF = crossings
         .filter {
             it.gateType.equals("StartFinish", ignoreCase = true) &&
@@ -913,7 +935,7 @@ internal fun computeLapSectorTable(crossings: List<TelemetryCrossingEvent>): Lap
             lapTimeMs = lapEnd - lapStart,
             splits = bounds.zipWithNext { a, b -> b - a },
         )
-    }
+    }.filter { eligibleLapNumbers == null || it.lapNumber in eligibleLapNumbers }
     val sectorCount = perLap.maxOfOrNull { it.splits.size } ?: 0
     if (sectorCount < 2) return null
 
@@ -1118,7 +1140,10 @@ private fun SectorCellText(
     )
 }
 
-internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): DetailMetrics {
+internal fun deriveDetailMetrics(
+    crossings: List<TelemetryCrossingEvent>,
+    evidenceByLap: Map<Int, LapEvidence> = emptyMap(),
+): DetailMetrics {
     // unify-lap-count-pairing-semantics round：accepted SF 排序键 + duration 减法统一为
     // crossingWallClockTimestampMs（与 endSession 站点 A / getLapTelemetry 站点 C 同源），
     // 使 UiLapRecord.lapNumber=idx+1 严格对应 getLapTelemetry(sessionId, idx)（lapIndex=lapNumber-1）。
@@ -1137,7 +1162,12 @@ internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): Detai
             val sb = b.crossingWallClockTimestampMs
             if (sa != null && sb != null) sb - sa else null
         }
-    val bestLapMs = durations.minOrNull()
+    val decisions = durations.indices.associateWith { index ->
+        LapConfidencePolicy.evaluate(evidenceByLap[index + 1])
+    }
+    val bestLapMs = durations.withIndex()
+        .filter { decisions.getValue(it.index).eligibility.personalBest }
+        .minOfOrNull { it.value }
 
     val records = mutableListOf<UiLapRecord>()
     var bestAssigned = false
@@ -1148,8 +1178,14 @@ internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): Detai
             lapNumber = idx + 1,
             timeMs = dur,
             diffMs = bestLapMs?.let { dur - it },
-            status = if (isBest) UiLapStatus.BEST else UiLapStatus.VALID,
-            reason = null,
+            status = if (isBest) UiLapStatus.BEST else if (decisions.getValue(idx).eligibility.comparison) {
+                UiLapStatus.VALID
+            } else {
+                UiLapStatus.INCOMPLETE
+            },
+            reason = decisions.getValue(idx).confidence.name,
+            confidence = decisions.getValue(idx).confidence,
+            reviewProvenance = decisions.getValue(idx).provenance,
         )
     }
     rejectedSF.forEachIndexed { idx, c ->
@@ -1159,6 +1195,7 @@ internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): Detai
             diffMs = null,
             status = UiLapStatus.INVALID,
             reason = c.reason,
+            confidence = LapConfidence.Incomplete,
         )
     }
     return DetailMetrics(
@@ -1166,8 +1203,8 @@ internal fun deriveDetailMetrics(crossings: List<TelemetryCrossingEvent>): Detai
         // 不能用 acceptedSF.size，因为它把首次开圈 crossing 也算 1（第 1 圈完成时
         // acceptedSF 有 2 个，会让 UI 显示 TOTAL LAPS = 2 而实际只 1 圈完成）。
         totalLaps = durations.size + rejectedSF.size,
-        validLaps = durations.size,
-        invalidLaps = rejectedSF.size,
+        validLaps = records.count { it.status == UiLapStatus.VALID || it.status == UiLapStatus.BEST },
+        invalidLaps = records.count { it.status == UiLapStatus.INVALID || it.status == UiLapStatus.INCOMPLETE },
         bestLapMs = bestLapMs,
         lapRecords = records,
     )

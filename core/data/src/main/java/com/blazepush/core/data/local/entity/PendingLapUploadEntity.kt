@@ -25,4 +25,8 @@ data class PendingLapUploadEntity(
     val lappedAtRfc3339: String? = null,
     val createdAtMs: Long,
     val retryCount: Int = 0,
+    /** Null on v9 rows: maps to Reviewed + LegacyUnknown and is not sent automatically. */
+    val quality: String? = null,
+    val qualityFlagsCsv: String? = null,
+    val evidenceVersion: Int? = null,
 )

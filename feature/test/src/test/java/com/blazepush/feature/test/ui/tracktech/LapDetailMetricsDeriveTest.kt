@@ -2,7 +2,11 @@
 package com.blazepush.feature.test.ui.tracktech
 
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
+import com.blazepush.core.domain.model.LapConfidence
+import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapGapInterval
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -25,6 +29,35 @@ import org.junit.Test
  * @date 2026-05-30
  */
 class LapDetailMetricsDeriveTest {
+
+    @Test
+    fun `estimated faster lap remains comparable but cannot replace clean best`() {
+        val crossings = listOf(
+            acceptedSf(gpsTs = 100L, wallTs = 1_000L, idx = 0),
+            acceptedSf(gpsTs = 200L, wallTs = 2_000L, idx = 1),
+            acceptedSf(gpsTs = 300L, wallTs = 2_900L, idx = 2),
+        )
+        val clean = LapEvidence(
+            startCrossingTimestampMillis = 100L,
+            finishCrossingTimestampMillis = 200L,
+            requiredGateIds = setOf("SF"),
+            acceptedGateIds = setOf("SF"),
+        )
+        val estimated = LapEvidence(
+            startCrossingTimestampMillis = 200L,
+            finishCrossingTimestampMillis = 300L,
+            requiredGateIds = setOf("SF"),
+            acceptedGateIds = setOf("SF"),
+            gaps = listOf(LapGapInterval(220L, 260L, setOf("SF"))),
+        )
+
+        val metrics = deriveDetailMetrics(crossings, mapOf(1 to clean, 2 to estimated))
+
+        assertEquals(1_000L, metrics.bestLapMs)
+        assertEquals(UiLapStatus.BEST, metrics.lapRecords[0].status)
+        assertEquals(LapConfidence.Estimated, metrics.lapRecords[1].confidence)
+        assertEquals(UiLapStatus.VALID, metrics.lapRecords[1].status)
+    }
 
     private fun acceptedSf(
         gpsTs: Long,
@@ -63,7 +96,7 @@ class LapDetailMetricsDeriveTest {
         assertEquals(3, metrics.validLaps)
         assertEquals(listOf(1, 2, 3), validLapNumbers(metrics))
         // durations [1200, 1100, 1100] → best=1100
-        assertEquals(1100L, metrics.bestLapMs)
+        assertNull("v9 history is Reviewed LegacyUnknown, never unconditional best", metrics.bestLapMs)
     }
 
     @Test
@@ -84,7 +117,7 @@ class LapDetailMetricsDeriveTest {
         assertEquals(2, metrics.validLaps)
         assertEquals(listOf(1, 2), validLapNumbers(metrics))
         // 锁死 MUST 用 wallClock：best=100（非负，非 GPS 序的 -200）
-        assertEquals(100L, metrics.bestLapMs)
+        assertNull("legacy crossings have no v1 evidence", metrics.bestLapMs)
     }
 
     @Test
@@ -103,6 +136,6 @@ class LapDetailMetricsDeriveTest {
 
         assertEquals(2, metrics.validLaps)
         assertEquals(listOf(1, 2), validLapNumbers(metrics))
-        assertEquals(1100L, metrics.bestLapMs)
+        assertNull("legacy crossings have no v1 evidence", metrics.bestLapMs)
     }
 }

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
+import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.ui.components.LapSeries
 import com.blazepush.feature.test.ui.components.MultiLapSpeedChart
@@ -76,13 +77,15 @@ fun LapComparisonScreen(
     sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
+    var evidenceByLap by remember { mutableStateOf<Map<Int, LapEvidence>>(emptyMap()) }
 
     LaunchedEffect(sessionId) {
         crossings = telemetryRepository.getCrossings(sessionId)
+        evidenceByLap = telemetryRepository.getLapEvidenceForSession(sessionId)
     }
 
     // 复用 LapSessionDetailScreen.deriveDetailMetrics（internal 同 module）得可选圈。
-    val derived = remember(crossings) { deriveDetailMetrics(crossings) }
+    val derived = remember(crossings, evidenceByLap) { deriveDetailMetrics(crossings, evidenceByLap) }
 
     // 可比较圈（VALID/BEST + 非 null timeMs）：圈选择 chips 的数据源。
     val selectableLaps = remember(derived) {

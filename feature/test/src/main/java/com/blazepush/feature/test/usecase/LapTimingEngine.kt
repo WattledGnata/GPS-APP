@@ -9,6 +9,9 @@
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapEvidenceFlag
+import com.blazepush.core.domain.model.LapGapInterval
 import com.blazepush.feature.test.model.laptiming.ActiveLap
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
@@ -127,6 +130,25 @@ class LapTimingEngine(
         )
     }
 
+    /** Records bridge-detected Main silence without feeding its endpoints to crossing detection. */
+    fun recordMainGap(
+        session: LapSession,
+        track: Track,
+        previousSample: GpsSample,
+        recoveredSample: GpsSample,
+    ): LapSession = session.copy(
+        activeLap = session.activeLap?.copy(
+            gapIntervals = session.activeLap.gapIntervals + buildGap(track, previousSample, recoveredSample),
+        ),
+    )
+
+    private fun buildGap(track: Track, previous: GpsSample, current: GpsSample): LapGapInterval {
+        val affectedGateIds = (listOf(track.startFinishGate) + track.orderedSectorGates).mapNotNull { gate ->
+            gate.id.takeIf { detector.detect(previous, current, gate).accepted }
+        }.toSet()
+        return LapGapInterval(previous.timestampMillis, current.timestampMillis, affectedGateIds)
+    }
+
     private fun handleStartFinishCrossing(
         session: LapSession,
         track: Track,
@@ -191,6 +213,19 @@ class LapTimingEngine(
                 add(LapQualityFlag.ProtocolDesyncGap)
             }
         }
+        val evidenceFlags = buildSet {
+            if (activeLap.sectorEntries.size != track.sectorGates.size) {
+                add(LapEvidenceFlag.MissingRequiredGate)
+            }
+        }
+        val requiredGateIds = buildSet {
+            add(track.startFinishGate.id)
+            addAll(track.sectorGates.map { it.id })
+        }
+        val acceptedGateIds = buildSet {
+            add(track.startFinishGate.id)
+            addAll(activeLap.sectorEntries.map { it.gateId })
+        }
         val lapRecord = LapRecord(
             recordId = "${session.sessionId}-lap-${activeLap.lapIndex}",
             sessionId = session.sessionId,
@@ -207,7 +242,15 @@ class LapTimingEngine(
             //   Lap N+1 filter 同时捞走造成跨圈重复。改严格 `>` 让边界 event 归前圈，彻底消除碰撞。
             //   本 change spec 通过 `## MODIFIED Requirements` 段覆盖 engine-entry-hardening R3 Scenario 1。
             crossingEvents = updatedEvents.filter { it.timestampMillis > activeLap.startedAtMillis },
-            qualityFlags = qualityFlags
+            qualityFlags = qualityFlags,
+            evidence = LapEvidence(
+                startCrossingTimestampMillis = activeLap.startedAtMillis,
+                finishCrossingTimestampMillis = finishedMillis,
+                requiredGateIds = requiredGateIds,
+                acceptedGateIds = acceptedGateIds,
+                gaps = activeLap.gapIntervals,
+                flags = evidenceFlags,
+            ),
         )
         val nextLapIndex = activeLap.lapIndex + 1
         return session.copy(

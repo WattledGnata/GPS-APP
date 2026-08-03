@@ -1,6 +1,7 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.livetiming
 
+import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.feature.test.model.laptiming.LapRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,12 @@ class LapUploadMapperTest {
         finishedAtMillis = finishedAt,
         durationMillis = durationMillis,
         sectorTimes = sectors,
+        evidence = LapEvidence(
+            startCrossingTimestampMillis = 0L,
+            finishCrossingTimestampMillis = finishedAt,
+            requiredGateIds = setOf("SF"),
+            acceptedGateIds = setOf("SF"),
+        ),
     )
 
     @Test
@@ -48,6 +55,8 @@ class LapUploadMapperTest {
         assertEquals(listOf(31000L, 30000L, 31345L), dto.sectorsMs)
         assertEquals("s1:2", dto.clientLapId)
         assertTrue("lappedAt 是 RFC3339", dto.lappedAt!!.contains("T"))
+        assertEquals("Clean", dto.quality)
+        assertEquals(1, dto.evidenceVersion)
     }
 
     @Test

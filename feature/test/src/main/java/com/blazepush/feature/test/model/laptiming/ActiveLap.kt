@@ -1,5 +1,7 @@
 package com.blazepush.feature.test.model.laptiming
 
+import com.blazepush.core.domain.model.LapGapInterval
+
 /**
  * 进行中的圈状态快照。
  *
@@ -25,4 +27,6 @@ data class ActiveLap(
      * active lap 生命期内单调不减；闭圈瞬间立即被新 ActiveLap(0.0) 替换。
      */
     val distanceMetersSinceStart: Double = 0.0,
+    /** Main-frame gaps observed during this lap. They are evidence, not synthetic crossings. */
+    val gapIntervals: List<LapGapInterval> = emptyList(),
 )

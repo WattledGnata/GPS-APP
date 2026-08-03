@@ -159,7 +159,9 @@ fun LapLiveScreen(
     LaunchedEffect(completedLapsForVoice.size) {
         if (completedLapsForVoice.size > lastAnnouncedLapCount) {
             completedLapsForVoice.lastOrNull()?.let { lap ->
-                voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+                if (lap.qualityDecision.eligibility.voiceAnnouncement) {
+                    voiceAnnouncer.announceLapTime(lap.lapIndex + 1, lap.durationMillis)
+                }
             }
             lastAnnouncedLapCount = completedLapsForVoice.size
         }

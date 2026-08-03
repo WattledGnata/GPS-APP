@@ -37,5 +37,8 @@ object LapUploadMapper {
         sectorsMs = record.sectorTimes.takeIf { it.isNotEmpty() },
         clientLapId = clientLapId(record.sessionId, record.lapIndex),
         lappedAt = toRfc3339(record.finishedAtMillis),
+        quality = record.qualityDecision.confidence.name,
+        qualityFlags = record.qualityDecision.flags.map { it.name }.sorted().takeIf { it.isNotEmpty() },
+        evidenceVersion = record.evidence?.version,
     )
 }

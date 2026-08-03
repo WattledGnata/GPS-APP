@@ -44,6 +44,8 @@ import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.LapTelemetry
+import com.blazepush.core.domain.model.LapConfidencePolicy
+import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.usecase.AccelerationSmoother
 import com.blazepush.core.domain.usecase.GRAVITY_MS2
@@ -92,6 +94,7 @@ fun LapDetailScreen(
     sessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
     var lapTelemetry by remember { mutableStateOf<LapTelemetry?>(null) }
+    var lapEvidence by remember { mutableStateOf<LapEvidence?>(null) }
 
     // lap-detail-triview-panel:视频面板数据(2026-06-05 二轮:改用 LapPlaybackLoader 共享
     // 加载管线——overlay 帧/圈窗口/赛道点与全屏页同源;load 失败(无视频/无覆盖)即不渲染面板)。
@@ -124,6 +127,8 @@ fun LapDetailScreen(
             FileLogger.e("LapDetail", "getLapTelemetry null sid=$sessionId idx=$lapIndex")
         }
         lapTelemetry = result
+        // Persisted lap keys are 1-based; getLapTelemetry indices are 0-based.
+        lapEvidence = telemetryRepository.getLapEvidence(sessionId, lapIndex + 1)
 
         // 视频面板数据(spec R1):LapPlaybackLoader 共享管线(全屏页/导出同源)——
         // 无 session/无视频/无圈/无样本 → null → 占位变 "视频不可用"
@@ -186,6 +191,15 @@ fun LapDetailScreen(
             .background(TrackTechColors.Background),
     ) {
         LapDetailHeader(onBack = { navController.popBackStack() })
+        val quality = LapConfidencePolicy.evaluate(lapEvidence)
+        Text(
+            text = "QUALITY ${quality.confidence.name.uppercase()} · ${quality.provenance.name}",
+            style = TrackTechTypography.UiTextSmall,
+            color = TrackTechColors.TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
 
         val telemetry = lapTelemetry
         if (telemetry == null) {

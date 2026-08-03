@@ -207,8 +207,8 @@ class AppDatabaseMigrationSqlTest {
         // 本测试名称保留兼容（rename 需重构，scope-boundary 暂不动），断言已更新为 4。
         // 完整的 size=4 断言见 `migrationChain contains exactly four migrations`。
         assertEquals(
-            "migrationChain must contain 7 migrations: migration2To3..migration8To9 (video-segment-schema v8→v9)",
-            7,
+            "migrationChain must contain 8 migrations: migration2To3..migration9To10",
+            8,
             AppDatabase.migrationChain.size
         )
     }
@@ -320,8 +320,8 @@ class AppDatabaseMigrationSqlTest {
     @Test
     fun `migrationChain contains exactly four migrations`() {
         assertEquals(
-            "migrationChain must contain 7 migrations: migration2To3..migration8To9 (video-segment-schema v8→v9)",
-            7,
+            "migrationChain must contain 8 migrations: migration2To3..migration9To10",
+            8,
             AppDatabase.migrationChain.size
         )
     }
@@ -347,9 +347,23 @@ class AppDatabaseMigrationSqlTest {
             expectedNextStart = migration.endVersion
         }
         assertEquals(
-            "migrationChain must end at v9 (current @Database version, video-segment-schema)",
-            9,
+            "migrationChain must end at v10",
+            10,
             expectedNextStart
         )
+    }
+
+    @Test
+    fun `migration9To10 is additive and preserves legacy unknown`() {
+        assertEquals(9, AppDatabase.migration9To10.startVersion)
+        assertEquals(10, AppDatabase.migration9To10.endVersion)
+        assertTrue(AppDatabase.migration9To10Sql.any { it.contains("CREATE TABLE IF NOT EXISTS lap_evidence") })
+        assertTrue(AppDatabase.migration9To10Sql.any { it.contains("PRIMARY KEY(sessionId, lapIndex)") })
+        assertTrue(AppDatabase.migration9To10Sql.any { it.contains("ON DELETE CASCADE") })
+        for (column in listOf("quality TEXT", "qualityFlagsCsv TEXT", "evidenceVersion INTEGER")) {
+            val sql = AppDatabase.migration9To10Sql.single { it.contains("ADD COLUMN $column") }
+            assertTrue("legacy pending field must remain nullable: $sql", !sql.contains("NOT NULL"))
+        }
+        assertTrue(AppDatabase.migration9To10Sql.none { it.contains("DROP TABLE") || it.contains("DELETE FROM") })
     }
 }

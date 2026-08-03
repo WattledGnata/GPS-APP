@@ -8,6 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.blazepush.core.data.local.dao.BluetoothDeviceDao
 import com.blazepush.core.data.local.dao.CarModelDao
 import com.blazepush.core.data.local.dao.CrossingEventDao
+import com.blazepush.core.data.local.dao.LapEvidenceDao
 import com.blazepush.core.data.local.dao.PendingLapUploadDao
 import com.blazepush.core.data.local.dao.SpeedSegmentDao
 import com.blazepush.core.data.local.dao.TelemetrySessionDao
@@ -16,6 +17,7 @@ import com.blazepush.core.data.local.dao.VideoSegmentDao
 import com.blazepush.core.data.local.entity.BluetoothDeviceEntity
 import com.blazepush.core.data.local.entity.CarModelEntity
 import com.blazepush.core.data.local.entity.CrossingEventEntity
+import com.blazepush.core.data.local.entity.LapEvidenceEntity
 import com.blazepush.core.data.local.entity.PendingLapUploadEntity
 import com.blazepush.core.data.local.entity.SpeedSegmentEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
@@ -32,8 +34,9 @@ import com.blazepush.core.data.local.entity.VideoSegmentEntity
         CrossingEventEntity::class,
         PendingLapUploadEntity::class,
         VideoSegmentEntity::class,
+        LapEvidenceEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 /**
@@ -87,6 +90,8 @@ abstract class AppDatabase : RoomDatabase() {
      * 视频段一对多 DAO（schema v9，video-segment-schema round ②a）。
      */
     abstract fun videoSegmentDao(): VideoSegmentDao
+
+    abstract fun lapEvidenceDao(): LapEvidenceDao
 
     companion object {
         /**
@@ -379,6 +384,35 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        internal val migration9To10Sql: List<String> = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS lap_evidence (
+                sessionId TEXT NOT NULL,
+                lapIndex INTEGER NOT NULL,
+                evidenceVersion INTEGER NOT NULL,
+                startCrossingTimestampMillis INTEGER NOT NULL,
+                finishCrossingTimestampMillis INTEGER NOT NULL,
+                requiredGateIdsCsv TEXT NOT NULL,
+                acceptedGateIdsCsv TEXT NOT NULL,
+                gapIntervalsJson TEXT NOT NULL,
+                qualityFlagsCsv TEXT NOT NULL,
+                reviewProvenance TEXT NOT NULL,
+                PRIMARY KEY(sessionId, lapIndex),
+                FOREIGN KEY(sessionId) REFERENCES telemetry_sessions(sessionId) ON DELETE CASCADE
+            )
+            """.trimIndent(),
+            "CREATE INDEX IF NOT EXISTS index_lap_evidence_sessionId ON lap_evidence(sessionId)",
+            "ALTER TABLE pending_lap_uploads ADD COLUMN quality TEXT",
+            "ALTER TABLE pending_lap_uploads ADD COLUMN qualityFlagsCsv TEXT",
+            "ALTER TABLE pending_lap_uploads ADD COLUMN evidenceVersion INTEGER",
+        )
+
+        val migration9To10: Migration = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration9To10Sql.forEach { db.execSQL(it) }
+            }
+        }
+
         /**
          * 完整迁移链（v2→v9），供 AppModule Room builder 和 JVM 单测使用。
          * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
@@ -396,6 +430,7 @@ abstract class AppDatabase : RoomDatabase() {
             migration6To7,
             migration7To8,
             migration8To9,
+            migration9To10,
         )
     }
 }

@@ -502,6 +502,7 @@ class TestSessionViewModel(
                     resetGpsContinuity()
                 }
 
+                val previousAcceptedLapGpsData = lastAcceptedLapGpsData
                 lastAcceptedLapGpsData = gpsData
                 _lapGpsReadiness.value = LapGpsReadinessDeriver.derive(
                     connectionState = _connectionState.value,
@@ -518,6 +519,20 @@ class TestSessionViewModel(
                     if (lastReceivedAtElapsed > 0L &&
                         gapMs !in 0..<lastMainFrameSilenceTimeoutMs
                     ) {
+                        val activeSession = _lapSession.value
+                        val activeTrack = _currentSelectedTrack.value
+                        if (_currentMode.value == TestMode.LapDebug && activeSession != null &&
+                            activeTrack != null && previousAcceptedLapGpsData.hasMainFrame
+                        ) {
+                            val withGap = lapTimingEngine.recordMainGap(
+                                activeSession,
+                                activeTrack,
+                                previousAcceptedLapGpsData.toLapGpsSample(),
+                                gpsData.toLapGpsSample(),
+                            )
+                            _lapSession.value = withGap
+                            _latestLapRecords.value = withGap.completedLaps
+                        }
                         // 即使 stale StateFlow 因调度合并未被观察到，也绝不跨静默 gap
                         // 用旧坐标和恢复首帧做过线/滤波/预触发计算。
                         resetGpsContinuity()
@@ -600,7 +615,9 @@ class TestSessionViewModel(
     private fun maybeRebuildReference(session: LapSession?) {
         val completedLaps = session?.completedLaps ?: return
         if (completedLaps.isEmpty()) return
-        val newBest = completedLaps.minByOrNull { it.durationMillis } ?: return
+        val newBest = completedLaps
+            .filter { it.qualityDecision.eligibility.personalBest }
+            .minByOrNull { it.durationMillis } ?: return
 
         val state = _realtimeDeltaState.value
         val current = state.reference
@@ -858,10 +875,18 @@ class TestSessionViewModel(
         val startTs = activeLapStartSystemTs
         // D12 契约：lapCount / bestLapMs 仅基于 qualityFlags 全空的 valid 圈，
         // 排除 IncompleteSectors / ProtocolDesyncGap / SuspectedJitter 等带 quality flag 的作废圈
-        val validLaps = sessionSnapshot?.completedLaps.orEmpty().filter { it.qualityFlags.isEmpty() }
+        val validLaps = sessionSnapshot?.completedLaps.orEmpty()
+            .filter { it.qualityDecision.eligibility.personalBest }
         val lapCount = validLaps.size
         val bestLapMs = validLaps.minOfOrNull { it.durationMillis }
         val totalDurationMs = startTs?.let { System.currentTimeMillis() - it } ?: 0L
+
+        // Ensure evidence is durable before endSession derives the persisted best/count policy.
+        sessionSnapshot?.completedLaps.orEmpty().forEach { lap ->
+            lap.evidence?.let { evidence ->
+                telemetryRepository.writeLapEvidence(lap.sessionId, lap.lapIndex, evidence)
+            }
+        }
 
         val sessionId = lapSessionMutex.withLock {
             lapTelemetryFlushScheduler.cancel()
@@ -1213,7 +1238,12 @@ class TestSessionViewModel(
             // 内部处理，异常不影响本地圈速记录）。每出圈顺带 flush 待传队列。
             val newLaps = updatedSession.completedLaps.drop(currentSession.completedLaps.size)
             viewModelScope.launch {
-                newLaps.forEach { runCatching { lapUploadOrchestrator.onLapCompleted(it) } }
+                newLaps.forEach { lap ->
+                    lap.evidence?.let { evidence ->
+                        runCatching { telemetryRepository.writeLapEvidence(lap.sessionId, lap.lapIndex, evidence) }
+                    }
+                    runCatching { lapUploadOrchestrator.onLapCompleted(lap) }
+                }
                 runCatching { lapUploadOrchestrator.flush() }
             }
         }

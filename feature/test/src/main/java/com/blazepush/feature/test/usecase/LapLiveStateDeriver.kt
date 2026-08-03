@@ -112,7 +112,14 @@ object LapLiveStateDeriver {
         }
 
         val lastLapTimeMs = lapDurations.lastOrNull()
-        val bestLapTimeMs = lapDurations.minOrNull()
+        val completed = session?.completedLaps.orEmpty()
+        val bestLapTimeMs = if (completed.isEmpty()) {
+            // Compatibility for transient/debug sessions that only expose crossings.
+            lapDurations.minOrNull()
+        } else {
+            completed.filter { it.qualityDecision.eligibility.personalBest }
+                .minOfOrNull { it.durationMillis }
+        }
 
         val currentLapNumber = max(1, session?.currentLapIndex ?: 0)
 
