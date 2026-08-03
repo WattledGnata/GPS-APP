@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,12 +49,14 @@ class BluetoothDataSource(
         private const val RECONNECT_MAX_DELAY_MS = 30_000L
     }
 
-    private val scope = CoroutineScope(dispatcher + SupervisorJob())
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val scope = CoroutineScope(dispatcher.limitedParallelism(1) + SupervisorJob())
     private var connectionCollectJob: Job? = null
 
     // 自动重连状态（ble-auto-reconnect spec R1/R2）
     private var lastRequestedAddress: String? = null
     private var userInitiatedDisconnect = false
+    private var futureAutoReconnectAllowed = false
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
     private var connectionIntentToken = 0L
@@ -95,6 +98,7 @@ class BluetoothDataSource(
                 (attemptInFlight ||
                     _connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED))
             ) {
+                futureAutoReconnectAllowed = true
                 Log.d(TAG, "coalesce duplicate connect target=$deviceAddress state=${_connectionState.value}")
                 return
             }
@@ -103,6 +107,7 @@ class BluetoothDataSource(
             attemptInFlight = false
             lastRequestedAddress = deviceAddress
             userInitiatedDisconnect = false
+            futureAutoReconnectAllowed = true
             reconnectAttempt = 0
             reconnectJob?.cancel()
             reconnectJob = null
@@ -119,7 +124,7 @@ class BluetoothDataSource(
     fun requestImmediateReconnect(reason: String): Boolean {
         val request = synchronized(orchestrationLock) {
             val address = lastRequestedAddress ?: return false
-            if (userInitiatedDisconnect) return false
+            if (userInitiatedDisconnect || !futureAutoReconnectAllowed) return false
             if (
                 attemptInFlight ||
                 _connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED)
@@ -153,11 +158,10 @@ class BluetoothDataSource(
         }
         connectSetupJob = scope.launch {
             try {
-                synchronized(orchestrationLock) {
-                    if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
-                    beforeConnectAttempt()
-                    if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
-                    onConnectAttempt(deviceAddress)
+                if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
+                beforeConnectAttempt()
+                if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
+                onConnectAttempt(deviceAddress)
                 // A27 切设备前清旧连接（严格顺序，原子化）：
                 // 1. 先 cancel 旧 collectJob，避免旧 bleConnection 终态 state 在新连接
                 //    构造窗口内传导到 _connectionState 与 CONNECTING 竞争
@@ -207,38 +211,14 @@ class BluetoothDataSource(
                         // drop(1):跳过 BleConnection StateFlow 的 replay 初值(新实例恒 DISCONNECTED,
                         // 无信息量)——不跳过会在每次 doConnect 时误调度假重连,1s 后拆掉刚建好的连接
                         stateFlow.drop(1).collect { state ->
-                            if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) {
-                                Log.d(TAG, "ignore state from old attempt=$attemptToken state=$state")
-                                return@collect
-                            }
-                            Log.d(TAG, "BleConnection 状态变化: $state")
-                            _connectionState.value = state
-                            when (state) {
-                                ConnectionState.CONNECTED -> {
-                                    // 连上即复位退避(下次意外断开从 1s 重来,spec R1 Scenario 2)
-                                    // 并取消任何挂起重连(防御残留假重连拆好链)
-                                    synchronized(orchestrationLock) {
-                                        attemptInFlight = false
-                                        reconnectAttempt = 0
-                                        reconnectJob?.cancel()
-                                        reconnectJob = null
-                                    }
-                                }
-                                // 意外断开(远端断/连接超时)→ 调度重连(spec R1)
-                                ConnectionState.DISCONNECTED -> {
-                                    synchronized(orchestrationLock) { attemptInFlight = false }
-                                    invalidateConnectionGeneration(isStale = false)
-                                    maybeScheduleReconnect()
-                                }
-                                else -> { /* CONNECTING/DISCONNECTING 无重连动作 */ }
-                            }
+                            handleConnectionState(intentToken, attemptToken, deviceAddress, state)
                         }
                     }
                 }
 
-                    bleConnection?.connect()
-                    Log.d(TAG, "BleConnection.connect() 调用完成")
-                }
+                if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
+                bleConnection?.connect()
+                Log.d(TAG, "BleConnection.connect() 调用完成")
 
             } catch (e: Exception) {
                 Log.e(TAG, "连接异常", e)
@@ -264,9 +244,58 @@ class BluetoothDataSource(
                 lastRequestedAddress == address
         }
 
+    private fun handleConnectionState(
+        intentToken: Long,
+        attemptToken: Long,
+        address: String,
+        state: ConnectionState,
+    ) {
+        if (!ownsAttempt(intentToken, attemptToken, address)) {
+            Log.d(TAG, "ignore state from old attempt=$attemptToken state=$state")
+            return
+        }
+        Log.d(TAG, "BleConnection 状态变化: $state")
+        _connectionState.value = state
+        when (state) {
+            ConnectionState.CONNECTED -> synchronized(orchestrationLock) {
+                attemptInFlight = false
+                reconnectAttempt = 0
+                reconnectJob?.cancel()
+                reconnectJob = null
+            }
+            ConnectionState.DISCONNECTED -> {
+                synchronized(orchestrationLock) { attemptInFlight = false }
+                invalidateConnectionGeneration(isStale = false)
+                maybeScheduleReconnect()
+            }
+            else -> Unit
+        }
+    }
+
+    internal fun handleActiveConnectionStateForTest(state: ConnectionState) {
+        val snapshot = synchronized(orchestrationLock) {
+            val address = lastRequestedAddress ?: return
+            Triple(connectionIntentToken, activeAttemptToken, address)
+        }
+        handleConnectionState(snapshot.first, snapshot.second, snapshot.third, state)
+    }
+
     /** Manager installs scan cancellation once; every initial/retry attempt crosses this gate. */
     internal fun installBeforeConnectAttempt(hook: () -> Unit) {
         beforeConnectAttempt = hook
+    }
+
+    /**
+     * 遗忘设备只撤销未来自动重连许可；已 CONNECTED GATT 及其 callback ownership 保持。
+     * 这样自然断开仍能发布 DISCONNECTED，但不会再排队重连。
+     */
+    fun forget(deviceAddress: String) {
+        synchronized(orchestrationLock) {
+            if (lastRequestedAddress != deviceAddress) return
+            futureAutoReconnectAllowed = false
+            reconnectJob?.cancel()
+            reconnectJob = null
+        }
     }
 
     /**
@@ -276,7 +305,7 @@ class BluetoothDataSource(
     private fun maybeScheduleReconnect() {
         val schedule = synchronized(orchestrationLock) {
             val address = lastRequestedAddress ?: return
-            if (userInitiatedDisconnect) return
+            if (userInitiatedDisconnect || !futureAutoReconnectAllowed) return
             if (reconnectJob != null) return
             if (_connectionState.value != ConnectionState.DISCONNECTED) return
             val intentToken = connectionIntentToken
@@ -286,6 +315,7 @@ class BluetoothDataSource(
                 val valid = synchronized(orchestrationLock) {
                     if (
                         userInitiatedDisconnect ||
+                        !futureAutoReconnectAllowed ||
                         intentToken != connectionIntentToken ||
                         address != lastRequestedAddress ||
                         _connectionState.value != ConnectionState.DISCONNECTED
@@ -316,6 +346,7 @@ class BluetoothDataSource(
         // 用户意图=想断:取消挂起重连,后续 DISCONNECTED 不再调度(spec R2)
         synchronized(orchestrationLock) {
             userInitiatedDisconnect = true
+            futureAutoReconnectAllowed = false
             connectionIntentToken++
             activeAttemptToken++
             attemptInFlight = false

@@ -105,6 +105,31 @@ class BluetoothDataSourceReconnectTest {
         assertEquals(3, attempts.size)
     }
 
+    @Test
+    fun `forget 保留 active callback ownership 但自然断开后不再重连`() = runTest {
+        val attempts = mutableListOf<String>()
+        val source = BluetoothDataSource(
+            mockContext,
+            mockParser,
+            StandardTestDispatcher(testScheduler),
+            onConnectAttempt = attempts::add,
+        )
+        source.connect("AA:BB:CC:DD:EE:14")
+        runCurrent()
+        source.handleActiveConnectionStateForTest(ConnectionState.CONNECTED)
+
+        source.forget("AA:BB:CC:DD:EE:14")
+        assertEquals("forget 不得把已连接状态直接拆掉", ConnectionState.CONNECTED, source.connectionState.value)
+        source.handleActiveConnectionStateForTest(ConnectionState.DISCONNECTED)
+        assertEquals(ConnectionState.DISCONNECTED, source.connectionState.value)
+        assertEquals(false, source.requestImmediateReconnect("app foreground"))
+
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("自然断开后已遗忘目标不得重连", 1, attempts.size)
+        source.disconnect(); runCurrent()
+    }
+
     private lateinit var mockContext: Context
     private lateinit var mockParser: RaceChronoParser
 

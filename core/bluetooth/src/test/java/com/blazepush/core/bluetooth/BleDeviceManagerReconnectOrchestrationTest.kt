@@ -5,11 +5,12 @@ import com.blazepush.core.domain.model.ConnectionState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.mockito.Mockito.inOrder
+import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
@@ -69,25 +70,61 @@ class BleDeviceManagerReconnectOrchestrationTest {
     }
 
     @Test
-    fun `主动断开后生命周期触发无效且忘记当前目标立即失效`() = runTest {
-        val fixture = fixture(ConnectionState.DISCONNECTED)
+    fun `forget while CONNECTED 保持 GATT 但禁止自然断开后的重连`() = runTest {
+        val fixture = fixture(ConnectionState.CONNECTED)
         fixture.manager.connect("AA:03")
         runCurrent()
+        clearInvocations(fixture.source, fixture.scanner)
+
         fixture.manager.forget("AA:03")
+        verify(fixture.source).forget("AA:03")
+        verify(fixture.source, never()).disconnect()
+
+        fixture.states.value = ConnectionState.DISCONNECTED
         fixture.manager.requestImmediateReconnect("app foreground")
         runCurrent()
 
-        verify(fixture.source).disconnect()
         verify(fixture.source, never()).requestImmediateReconnect("app foreground")
-        assertEquals(emptyList<ScannedDevice>(), fixture.scanResults.value)
     }
 
-    private fun TestScopeFixture.managerState(state: ConnectionState) {
-        states.value = state
+    @Test
+    fun `cold start 在 1 秒前 disconnect 后不连接保存设备也不扫描`() = runTest {
+        val fixture = fixture(
+            state = ConnectionState.DISCONNECTED,
+            autoReconnectOnInit = true,
+            lastDeviceProvider = { "AA:COLD" },
+        )
+        runCurrent()
+        fixture.manager.disconnect()
+        advanceTimeBy(12_000)
+        runCurrent()
+
+        verify(fixture.source, never()).connect("AA:COLD")
+        verify(fixture.scanner, never()).startScan()
+    }
+
+    @Test
+    fun `切设备后旧 cold start job 不得覆盖新目标`() = runTest {
+        val fixture = fixture(
+            state = ConnectionState.DISCONNECTED,
+            autoReconnectOnInit = true,
+            lastDeviceProvider = { "AA:COLD" },
+        )
+        runCurrent()
+        fixture.manager.connect("AA:NEW")
+        runCurrent()
+        advanceTimeBy(12_000)
+        runCurrent()
+
+        verify(fixture.source).connect("AA:NEW")
+        verify(fixture.source, never()).connect("AA:COLD")
+        verify(fixture.scanner, never()).startScan()
     }
 
     private fun kotlinx.coroutines.test.TestScope.fixture(
         state: ConnectionState,
+        autoReconnectOnInit: Boolean = false,
+        lastDeviceProvider: suspend () -> String? = { null },
     ): TestScopeFixture {
         val context = mock(Context::class.java)
         val source = mock(BluetoothDataSource::class.java)
@@ -106,9 +143,11 @@ class BleDeviceManagerReconnectOrchestrationTest {
             manager = BleDeviceManager(
                 context = context,
                 bluetoothDataSource = source,
+                lastDeviceProvider = lastDeviceProvider,
                 scanner = scanner,
                 dispatcher = StandardTestDispatcher(testScheduler),
-                autoReconnectOnInit = false,
+                autoReconnectOnInit = autoReconnectOnInit,
+                scanPermissionGranted = { true },
             ),
         )
     }

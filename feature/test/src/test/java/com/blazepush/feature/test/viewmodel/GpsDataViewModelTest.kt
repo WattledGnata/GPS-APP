@@ -27,6 +27,8 @@ import org.junit.Before
 import org.junit.Test
 import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
+import org.mockito.Mockito.verify
 
 /**
  * 战役 F Round 2 A28 GpsDataViewModelTest：
@@ -41,6 +43,8 @@ class GpsDataViewModelTest {
     private lateinit var gpsDataFlow: MutableStateFlow<GpsData>
     private lateinit var connectionStateFlow: MutableStateFlow<ConnectionState>
     private lateinit var viewModel: GpsDataViewModel
+    private lateinit var bleDeviceManager: BleDeviceManager
+    private lateinit var deviceRepo: BluetoothDeviceRepository
 
     @Before
     fun setUp() {
@@ -55,15 +59,26 @@ class GpsDataViewModelTest {
         doReturn(connectionStateFlow).`when`(repo).connectionState
 
         // ble-device-memory：VM 构造期访问 devicesFlow 做 stateIn，mock 默认 null 会 NPE，必须 stub
-        val deviceRepo = mock(BluetoothDeviceRepository::class.java)
+        deviceRepo = mock(BluetoothDeviceRepository::class.java)
         doReturn(MutableStateFlow(emptyList<BluetoothDeviceModel>())).`when`(deviceRepo).devicesFlow
+        bleDeviceManager = mock(BleDeviceManager::class.java)
 
         viewModel = GpsDataViewModel(
             gpsDataRepository = repo,
-            bleDeviceManager = mock(BleDeviceManager::class.java),
+            bleDeviceManager = bleDeviceManager,
             dataQualityEvaluator = DataQualityEvaluator(),
             bluetoothDeviceRepository = deviceRepo,
         )
+    }
+
+    @Test
+    fun deleteSavedDevice_forgetsFutureReconnect_withoutExplicitDisconnect() = runTest(dispatcher) {
+        viewModel.deleteSavedDevice("AA:FORGET")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify(bleDeviceManager).forget("AA:FORGET")
+        verify(bleDeviceManager, never()).disconnect()
+        verify(deviceRepo).removeDevice("AA:FORGET")
     }
 
     @After

@@ -275,7 +275,9 @@ class GpsDataViewModel(
         }
     }
 
-    /** ble-device-memory：遗忘当前目标时先失效连接意图，再删除保存记录。 */
+    /**
+     * ble-device-memory：删除已保存设备记录，不断开当前连接；仅禁止该目标未来自动重连。
+     */
     fun deleteSavedDevice(address: String) {
         viewModelScope.launch {
             bleDeviceManager.forget(address)
