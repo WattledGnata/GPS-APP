@@ -2,6 +2,7 @@ package com.blazepush.feature.test.usecase
 
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -36,7 +37,7 @@ class LapGpsReadinessDeriverTest {
             LapGpsReadiness.STABILIZING,
             LapGpsReadinessDeriver.derive(
                 ConnectionState.CONNECTED,
-                reliableGps().copy(consecutiveReliableMainFrames = 2),
+                reliableGps().copy(consecutiveReliableMainFrames = 2, isRecoveryStable = false),
             ),
         )
         assertEquals(
@@ -67,5 +68,9 @@ class LapGpsReadinessDeriverTest {
         hdop = 1.2,
         isTimeSynced = true,
         consecutiveReliableMainFrames = 3,
+        requiredReliableMainFrames = 3,
+        reliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 }

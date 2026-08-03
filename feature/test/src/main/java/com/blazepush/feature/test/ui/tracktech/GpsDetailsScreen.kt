@@ -41,8 +41,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.DataQuality
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
@@ -57,6 +57,7 @@ fun GpsDetailsScreen(
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
+    val batteryCapability by gpsViewModel.batteryCapability.collectAsState()
 
     val qualityLabel = when (dataQuality.overall) {
         QualityLevel.EXCELLENT -> "Excellent"
@@ -107,7 +108,11 @@ fun GpsDetailsScreen(
         PositionPanel(gpsData = gpsData)
 
         DetailsSection(title = "DEVICE")
-        DeviceInfoPanel(connectionState = connectionState, gpsData = gpsData)
+        DeviceInfoPanel(
+            connectionState = connectionState,
+            gpsData = gpsData,
+            batteryCapability = batteryCapability,
+        )
 
         Spacer(Modifier.height(24.dp))
     }
@@ -517,7 +522,11 @@ private fun PositionField(label: String, value: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun DeviceInfoPanel(connectionState: ConnectionState, gpsData: GpsData) {
+private fun DeviceInfoPanel(
+    connectionState: ConnectionState,
+    gpsData: GpsData,
+    batteryCapability: BatteryCapabilityState,
+) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     CutCornerPanel(
         modifier = Modifier
@@ -586,10 +595,30 @@ private fun DeviceInfoPanel(connectionState: ConnectionState, gpsData: GpsData) 
                     gpsData.isStale -> "GPS 数据中断"
                     !gpsData.hasMainFrame -> "等待 GPS 数据"
                     gpsData.fixQuality <= 0 || gpsData.satelliteCount <= 0 -> "等待卫星"
-                    gpsData.consecutiveReliableMainFrames < GPS_FIX_RECOVERY_MAIN_FRAMES ->
-                        "GPS 稳定中 ${gpsData.consecutiveReliableMainFrames}/$GPS_FIX_RECOVERY_MAIN_FRAMES"
+                    !gpsData.isRecoveryStable ->
+                        "GPS 稳定中 ${gpsData.consecutiveReliableMainFrames}/${gpsData.requiredReliableMainFrames}" +
+                            " · ${gpsData.reliableMainStableDurationMs}/" +
+                            "${gpsData.requiredReliableMainStableDurationMs}ms"
                     else -> "实时"
                 },
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(TrackTechColors.Border),
+            )
+            DeviceInfoRow(
+                iconContent = {
+                    Icon(
+                        imageVector = Icons.Filled.GraphicEq,
+                        contentDescription = null,
+                        tint = TrackTechColors.Cyan,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                label = "Battery",
+                value = batteryCapability.displayLabel(),
             )
             Box(
                 modifier = Modifier

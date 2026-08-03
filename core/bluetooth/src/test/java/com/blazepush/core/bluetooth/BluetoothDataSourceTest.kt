@@ -3,7 +3,9 @@ package com.blazepush.core.bluetooth
 import android.content.Context
 import android.util.Log
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
+import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -143,6 +145,8 @@ class BluetoothDataSourceTest {
         )
         Mockito.`when`(mockParser.parseGpsTimeData(any(), any())).thenReturn(shortPacketResult)
         setDataFlow(GpsData.Empty.copy(isConnected = true, errorMessage = null))
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(GpsData.Empty)
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
 
         source.handleIncomingData(gpsTimeUuid, ByteArray(2))
 
@@ -325,7 +329,7 @@ class BluetoothDataSourceTest {
         val disconnectIdx = src.indexOf("bleConnection?.disconnect()", connectStart)
         val nullifyBleIdx = src.indexOf("bleConnection = null", connectStart)
         val connectingIdx = src.indexOf("_connectionState.value = ConnectionState.CONNECTING", connectStart)
-        val newBleIdx = src.indexOf("bleConnection = BleConnection(context, deviceAddress)", connectStart)
+        val newBleIdx = src.indexOf("bleConnection = BleConnection(", connectStart)
 
         assertTrue("cancel collectJob 必须存在", cancelIdx > 0)
         assertTrue("nullify collectJob 必须存在", nullifyJobIdx > cancelIdx)
@@ -393,6 +397,7 @@ class BluetoothDataSourceTest {
 
     @Test
     fun valid25HzFrames_propagateDynamicDeadlineAndRequireStableRecovery() {
+        val unsynced = GpsData.Empty.copy(errorMessage = null)
         val valid = GpsData.Empty.copy(
             timestamp = 1_000L,
             satelliteCount = 8,
@@ -401,15 +406,23 @@ class BluetoothDataSourceTest {
             isTimeSynced = true,
             errorMessage = null,
         )
-        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(valid)
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any()))
+            .thenReturn(unsynced, valid)
+        Mockito.`when`(mockParser.parseGpsTimeData(any(), any())).thenAnswer {
+            source.dataFlow.value.copy(isTimeSynced = false, timestamp = Long.MIN_VALUE)
+        }
 
-        repeat(4) { index ->
-            elapsedRealtime = 1_000L + index * 40L
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        source.handleIncomingData(gpsTimeUuid, ByteArray(3))
+        repeat(26) { index ->
+            elapsedRealtime = 1_040L + index * 40L
             source.handleIncomingData(gpsMainUuid, ByteArray(20))
         }
 
         assertEquals(400L, source.dataFlow.value.mainFrameSilenceTimeoutMs)
-        assertEquals(3, source.dataFlow.value.consecutiveReliableMainFrames)
+        assertEquals(26, source.dataFlow.value.requiredReliableMainFrames)
+        assertEquals(26, source.dataFlow.value.consecutiveReliableMainFrames)
+        assertTrue(source.dataFlow.value.isRecoveryStable)
 
         elapsedRealtime += 400L
         source.handleIncomingData(gpsMainUuid, ByteArray(20))
@@ -451,6 +464,16 @@ class BluetoothDataSourceTest {
         Mockito.`when`(mockParser.parseGpsTimeData(any(), any())).thenReturn(
             source.dataFlow.value.copy(isTimeSynced = false, errorMessage = null),
         )
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any())).thenReturn(
+            source.dataFlow.value.copy(errorMessage = null),
+        )
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        setDataFlow(source.dataFlow.value.copy(
+            isStale = true,
+            mainFrameSequence = 7L,
+            mainFrameReceivedAtElapsedRealtimeMs = 900L,
+            mainFrameSilenceTimeoutMs = 400L,
+        ))
 
         source.handleIncomingData(gpsTimeUuid, ByteArray(3))
 
@@ -459,6 +482,93 @@ class BluetoothDataSourceTest {
         assertEquals(400L, source.dataFlow.value.mainFrameSilenceTimeoutMs)
         assertEquals(0, source.dataFlow.value.consecutiveReliableMainFrames)
         assertTrue(source.dataFlow.value.isStale)
+    }
+
+    @Test
+    fun mainThenTimeThenSynchronizedMain_isRequiredBeforeRecoveryCanStart() {
+        val reliableSynced = GpsData.Empty.copy(
+            timestamp = 1_000L,
+            satelliteCount = 8,
+            hdop = 1.0,
+            fixQuality = 1,
+            isTimeSynced = true,
+            errorMessage = null,
+        )
+        Mockito.`when`(mockParser.parseGpsData(any(), any(), any()))
+            .thenReturn(reliableSynced)
+        Mockito.`when`(mockParser.parseGpsTimeData(any(), any())).thenAnswer {
+            source.dataFlow.value.copy(timestamp = Long.MIN_VALUE, isTimeSynced = false)
+        }
+
+        source.handleIncomingData(gpsTimeUuid, ByteArray(3))
+        assertEquals(TimingHandshakeState.WAITING_MAIN, source.dataFlow.value.timingHandshakeState)
+        Mockito.verify(mockParser, Mockito.never()).parseGpsTimeData(any(), any())
+
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        assertEquals(TimingHandshakeState.WAITING_TIME, source.dataFlow.value.timingHandshakeState)
+        assertFalse(source.dataFlow.value.isTimeSynced)
+        assertEquals(Long.MIN_VALUE, source.dataFlow.value.timestamp)
+
+        source.handleIncomingData(gpsTimeUuid, ByteArray(3))
+        assertEquals(
+            TimingHandshakeState.WAITING_SYNCHRONIZED_MAIN,
+            source.dataFlow.value.timingHandshakeState,
+        )
+        assertEquals(0, source.dataFlow.value.consecutiveReliableMainFrames)
+
+        elapsedRealtime += 40L
+        source.handleIncomingData(gpsMainUuid, ByteArray(20))
+        assertEquals(TimingHandshakeState.SYNCHRONIZED, source.dataFlow.value.timingHandshakeState)
+        assertTrue(source.dataFlow.value.isTimeSynced)
+        assertEquals(1, source.dataFlow.value.consecutiveReliableMainFrames)
+        assertFalse("first synchronized Main is evidence, not a stable window", source.dataFlow.value.isRecoveryStable)
+    }
+
+    @Test
+    fun oldGenerationMainTimeAndBatteryCallbacks_areIgnored() {
+        val firstGeneration = source.beginConnectionGeneration()
+        val secondGeneration = source.beginConnectionGeneration()
+        source.handleBatteryCapability(secondGeneration, BatteryCapabilityState.Available(80))
+        val before = source.dataFlow.value
+
+        source.handleIncomingData(firstGeneration, gpsMainUuid, ByteArray(20))
+        source.handleIncomingData(firstGeneration, gpsTimeUuid, ByteArray(3))
+        source.handleBatteryCapability(firstGeneration, BatteryCapabilityState.Failed)
+
+        assertEquals(before, source.dataFlow.value)
+        assertEquals(BatteryCapabilityState.Available(80), source.batteryCapability.value)
+        Mockito.verify(mockParser, Mockito.never()).parseGpsData(any(), any(), any())
+        Mockito.verify(mockParser, Mockito.never()).parseGpsTimeData(any(), any())
+    }
+
+    @Test
+    fun everyBatteryCapabilityState_isIndependentFromTimingData() {
+        val timing = GpsData.Empty.copy(
+            timestamp = 1_000L,
+            isConnected = true,
+            hasMainFrame = true,
+            fixQuality = 1,
+            satelliteCount = 8,
+            hdop = 1.0,
+            isTimeSynced = true,
+            timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
+            consecutiveReliableMainFrames = 3,
+            requiredReliableMainFrames = 3,
+            reliableMainStableDurationMs = 1_000L,
+            isRecoveryStable = true,
+        )
+        setDataFlow(timing)
+        val generation = source.dataFlow.value.connectionGeneration
+
+        listOf(
+            BatteryCapabilityState.Pending,
+            BatteryCapabilityState.Available(0),
+            BatteryCapabilityState.Unsupported,
+            BatteryCapabilityState.Failed,
+        ).forEach { battery ->
+            source.handleBatteryCapability(generation, battery)
+            assertEquals(timing, source.dataFlow.value)
+        }
     }
 
     @Suppress("UNCHECKED_CAST")

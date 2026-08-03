@@ -5,9 +5,6 @@ import com.blazepush.core.domain.CoordTransform
 /** 动态节拍尚未建立时的兜底值，也是 Main 静默判定允许的最大窗口。 */
 const val GPS_MAIN_SILENCE_MAX_TIMEOUT_MS = 1_000L
 
-/** 静默/无 fix 恢复后，连续满足全部硬条件的 Main 帧数量。 */
-const val GPS_FIX_RECOVERY_MAIN_FRAMES = 3
-
 /**
  * GPS数据模型
  * 统一的GPS数据结构，替代原有的BluetoothData
@@ -35,6 +32,11 @@ data class GpsData(
     val hasMainFrame: Boolean = false, // 当前连接代次是否已有可解析的 GPS Main 帧。
     val mainFrameSilenceTimeoutMs: Long = GPS_MAIN_SILENCE_MAX_TIMEOUT_MS, // 当前实测节拍对应的动态 deadline。
     val consecutiveReliableMainFrames: Int = 0, // 静默/无 fix 后连续满足全部计时硬条件的 Main 帧数。
+    val requiredReliableMainFrames: Int = 11, // 由实测 Main cadence + 稳定时长动态计算。
+    val reliableMainStableDurationMs: Long = 0L,
+    val requiredReliableMainStableDurationMs: Long = 1_000L,
+    val isRecoveryStable: Boolean = false, // 帧数与稳定时长双条件均满足。
+    val timingHandshakeState: TimingHandshakeState = TimingHandshakeState.WAITING_MAIN,
 ) {
     /**
      * 将 GPS 坐标 (WGS84) 转换为高德地图坐标 (GCJ-02)

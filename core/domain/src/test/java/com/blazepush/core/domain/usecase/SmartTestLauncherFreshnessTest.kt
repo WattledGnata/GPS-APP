@@ -2,6 +2,7 @@ package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,6 +20,10 @@ class SmartTestLauncherFreshnessTest {
         hasMainFrame = true,
         mainFrameSilenceTimeoutMs = 400L,
         consecutiveReliableMainFrames = 3,
+        requiredReliableMainFrames = 3,
+        reliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 
     @Test
@@ -28,10 +33,10 @@ class SmartTestLauncherFreshnessTest {
     }
 
     @Test
-    fun launchWaitsForThreeReliableRecoveryFrames() {
+    fun launchWaitsForDynamicReliableRecoveryWindow() {
         assertFalse(
             launcher.canLaunch(
-                reliableGps().copy(consecutiveReliableMainFrames = 2),
+                reliableGps().copy(consecutiveReliableMainFrames = 2, isRecoveryStable = false),
                 ConnectionState.CONNECTED,
                 100L,
             ),

@@ -3,6 +3,7 @@ package com.blazepush.feature.test.ui.tracktech
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.model.SignalStrength
 import org.junit.Assert.assertEquals
@@ -36,6 +37,10 @@ class TabGatingPolicyTest {
         hasMainFrame = true,
         isConnected = true,
         consecutiveReliableMainFrames = 3,
+        requiredReliableMainFrames = 3,
+        reliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 
     private fun goodDataQuality(dataAge: Long = 500L): DataQuality = DataQuality(
@@ -170,10 +175,10 @@ class TabGatingPolicyTest {
     }
 
     @Test
-    fun fewerThanThreeReliableRecoveryFrames_cannotEnterTestFlow() {
+    fun incompleteDynamicRecoveryWindow_cannotEnterTestFlow() {
         val readiness = TabGatingPolicy.computeTabReadiness(
             ConnectionState.CONNECTED,
-            goodGpsData().copy(consecutiveReliableMainFrames = 2),
+            goodGpsData().copy(consecutiveReliableMainFrames = 2, isRecoveryStable = false),
             goodDataQuality(),
         )
 

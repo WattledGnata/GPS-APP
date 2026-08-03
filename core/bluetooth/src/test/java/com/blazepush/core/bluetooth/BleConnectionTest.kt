@@ -7,6 +7,8 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.util.Log
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.BleHandshakeState
+import com.blazepush.core.domain.model.GpsChannelSubscriptionState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
@@ -112,6 +114,9 @@ class BleConnectionTest {
         val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
         Mockito.`when`(mockChar.uuid)
             .thenReturn(UUID.fromString("00000003-0000-1000-8000-00805f9b34fb"))
+        handshakeFlow().value = handshakeFlow().value.copy(
+            main = GpsChannelSubscriptionState.SUBSCRIBED,
+        )
 
         repeat(25) { index ->
             elapsedRealtime = (index + 1) * 40L
@@ -171,6 +176,9 @@ class BleConnectionTest {
         val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
         Mockito.`when`(mockChar.uuid)
             .thenReturn(UUID.fromString("00000003-0000-1000-8000-00805f9b34fb"))
+        handshakeFlow().value = handshakeFlow().value.copy(
+            main = GpsChannelSubscriptionState.SUBSCRIBED,
+        )
 
         // 卫星恢复推帧（走 onCharacteristicChanged → handleCharacteristicChange）
         gattCallback().onCharacteristicChanged(mockGatt, mockChar, byteArrayOf(1, 2, 3))
@@ -191,6 +199,9 @@ class BleConnectionTest {
         val mockChar = Mockito.mock(BluetoothGattCharacteristic::class.java)
         Mockito.`when`(mockChar.uuid)
             .thenReturn(UUID.fromString("00000004-0000-1000-8000-00805f9b34fb"))
+        handshakeFlow().value = handshakeFlow().value.copy(
+            time = GpsChannelSubscriptionState.SUBSCRIBED,
+        )
 
         gattCallback().onCharacteristicChanged(mockGatt, mockChar, byteArrayOf(1, 2, 3))
 
@@ -243,6 +254,10 @@ class BleConnectionTest {
     @Suppress("UNCHECKED_CAST")
     private fun staleFlow(): MutableStateFlow<Boolean> =
         getField("_dataStale") as MutableStateFlow<Boolean>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handshakeFlow(): MutableStateFlow<BleHandshakeState> =
+        getField("_handshakeState") as MutableStateFlow<BleHandshakeState>
 
     private fun gattCallback(): BluetoothGattCallback =
         getField("gattCallback") as BluetoothGattCallback

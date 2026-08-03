@@ -1,6 +1,7 @@
 package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,6 +18,10 @@ class GpsFrameValidityTest {
         hasMainFrame = true,
         mainFrameSequence = 1L,
         consecutiveReliableMainFrames = 3,
+        requiredReliableMainFrames = 3,
+        reliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 
     @Test
@@ -44,9 +49,10 @@ class GpsFrameValidityTest {
     }
 
     @Test
-    fun recoveryRequiresThreeConsecutiveReliableMainFrames() {
-        assertFalse(valid().copy(consecutiveReliableMainFrames = 1).isUsableForTiming())
+    fun recoveryRequiresDynamicFramesAndStableDuration() {
+        assertFalse(valid().copy(isRecoveryStable = false).isUsableForTiming())
         assertFalse(valid().copy(consecutiveReliableMainFrames = 2).isUsableForTiming())
+        assertFalse(valid().copy(reliableMainStableDurationMs = 999L).isUsableForTiming())
         assertTrue(valid().copy(consecutiveReliableMainFrames = 3).isUsableForTiming())
     }
 }

@@ -1,6 +1,7 @@
 package com.blazepush.feature.test.viewmodel
 
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -32,6 +33,10 @@ class DebugCaptureFlagsTest {
                 hasMainFrame = true,
                 mainFrameSequence = 2L,
                 consecutiveReliableMainFrames = 3,
+                requiredReliableMainFrames = 3,
+                reliableMainStableDurationMs = 1_000L,
+                isRecoveryStable = true,
+                timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
             ),
         )
 
@@ -52,6 +57,10 @@ class DebugCaptureFlagsTest {
                 hasMainFrame = true,
                 mainFrameSequence = 3L,
                 consecutiveReliableMainFrames = 3,
+                requiredReliableMainFrames = 3,
+                reliableMainStableDurationMs = 1_000L,
+                isRecoveryStable = true,
+                timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
             ),
         )
 

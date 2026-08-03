@@ -2,6 +2,8 @@ package com.blazepush.core.bluetooth
 
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.BatteryCapabilityState
+import com.blazepush.core.domain.model.BleHandshakeState
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -12,6 +14,9 @@ class GpsDataRepository(
 ) {
     val gpsDataFlow: StateFlow<GpsData> = bluetoothDataSource.dataFlow
     val connectionState: StateFlow<ConnectionState> = bluetoothDataSource.connectionState
+    val batteryCapability: StateFlow<BatteryCapabilityState> = bluetoothDataSource.batteryCapability
+    val bleHandshake: StateFlow<BleHandshakeState> = bluetoothDataSource.bleHandshake
+    /** Compatibility only. [batteryCapability] is the source of truth. */
     val batteryPercent: StateFlow<Int?> = bluetoothDataSource.batteryPercent
 
     fun connect(deviceAddress: String) {

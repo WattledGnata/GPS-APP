@@ -2,7 +2,6 @@ package com.blazepush.feature.test.ui.tracktech
 
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 
 /**
@@ -104,7 +103,9 @@ object TabGatingPolicy {
         if (!gpsData.isTimeSynced || gpsData.timestamp == Long.MIN_VALUE) {
             unmet += TabReadinessCondition.TIME_SYNCED
         }
-        if (gpsData.consecutiveReliableMainFrames < GPS_FIX_RECOVERY_MAIN_FRAMES) {
+        if (!gpsData.isRecoveryStable ||
+            gpsData.consecutiveReliableMainFrames < gpsData.requiredReliableMainFrames
+        ) {
             unmet += TabReadinessCondition.GPS_SIGNAL_STABLE
         }
         return TabReadiness(

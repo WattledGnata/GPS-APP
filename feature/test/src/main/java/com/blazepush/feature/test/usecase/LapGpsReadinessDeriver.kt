@@ -1,7 +1,6 @@
 package com.blazepush.feature.test.usecase
 
 import com.blazepush.core.domain.model.ConnectionState
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.hasReliableFixEvidence
 import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
@@ -13,7 +12,8 @@ object LapGpsReadinessDeriver {
 
         !gpsData.hasMainFrame || gpsData.isStale -> LapGpsReadiness.WAITING_MAIN
         !gpsData.hasReliableFixEvidence() -> LapGpsReadiness.ACQUIRING_FIX
-        gpsData.consecutiveReliableMainFrames < GPS_FIX_RECOVERY_MAIN_FRAMES ->
+        !gpsData.isRecoveryStable ||
+            gpsData.consecutiveReliableMainFrames < gpsData.requiredReliableMainFrames ->
             LapGpsReadiness.STABILIZING
 
         else -> LapGpsReadiness.ARMED

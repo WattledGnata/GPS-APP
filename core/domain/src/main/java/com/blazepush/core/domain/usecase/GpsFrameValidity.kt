@@ -1,7 +1,7 @@
 package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.GpsData
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
+import com.blazepush.core.domain.model.TimingHandshakeState
 
 /** 单帧具备可靠定位证据，但尚不包含恢复连续帧门槛。 */
 fun GpsData.hasReliableFixEvidence(): Boolean =
@@ -11,6 +11,7 @@ fun GpsData.hasReliableFixEvidence(): Boolean =
         fixQuality > 0 &&
         satelliteCount >= 6 &&
         hdop > 0.0 && hdop < 2.0 &&
+        timingHandshakeState == TimingHandshakeState.SYNCHRONIZED &&
         isTimeSynced &&
         timestamp != Long.MIN_VALUE
 
@@ -19,4 +20,6 @@ fun GpsData.hasReliableFixEvidence(): Boolean =
  */
 fun GpsData.isUsableForTiming(): Boolean =
     hasReliableFixEvidence() &&
-        consecutiveReliableMainFrames >= GPS_FIX_RECOVERY_MAIN_FRAMES
+        isRecoveryStable &&
+        consecutiveReliableMainFrames >= requiredReliableMainFrames &&
+        reliableMainStableDurationMs >= requiredReliableMainStableDurationMs

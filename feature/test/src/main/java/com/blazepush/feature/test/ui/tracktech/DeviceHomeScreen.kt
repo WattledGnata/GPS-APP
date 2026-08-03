@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.data.model.displayName
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
@@ -113,7 +114,7 @@ fun DeviceHomeScreen(
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
-    val batteryPercent by gpsViewModel.batteryPercent.collectAsState()
+    val batteryCapability by gpsViewModel.batteryCapability.collectAsState()
     // ble-device-memory：已保存设备（入口 subtitle + 管理 sheet）
     val savedDevices by gpsViewModel.savedDevices.collectAsState()
 
@@ -221,7 +222,7 @@ fun DeviceHomeScreen(
             onDisconnectClick = {
                 gpsViewModel.disconnect()
             },
-            batteryPercent = batteryPercent,
+            batteryCapability = batteryCapability,
         )
 
         Column(
@@ -384,7 +385,7 @@ private fun ConnectedDeviceCard(
     deviceName: String,
     onScanClick: () -> Unit,
     onDisconnectClick: () -> Unit,
-    batteryPercent: Int? = null,
+    batteryCapability: BatteryCapabilityState = BatteryCapabilityState.Pending,
 ) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     val statusText = when {
@@ -436,9 +437,9 @@ private fun ConnectedDeviceCard(
                 )
             }
             // 电量指示器：仅已连接时显示
-            if (batteryPercent != null || isConnected) {
+            if (isConnected || batteryCapability is BatteryCapabilityState.Available) {
                 Spacer(Modifier.height(10.dp))
-                BatteryIndicator(batteryPercent = batteryPercent)
+                BatteryIndicator(batteryCapability = batteryCapability)
             }
             Spacer(Modifier.height(14.dp))
             Row(
@@ -494,8 +495,7 @@ private fun ConnectedDeviceCard(
 
 /**
  * 外接 GPS 设备电量指示器。
- * - 有值：电池图标（按百分比映射 7 档）+ Mechanical 百分比数字 + "%"
- * - null 且已连接（设备无电量服务）：灰色 BatteryUnknown + "N/A"
+ * Pending / Available / Unsupported / Failed 四态绝不折叠。
  *
  * 图标映射：>=95=BatteryFull, >=80=Battery6Bar, >=60=Battery5Bar,
  *           >=40=Battery4Bar, >=20=Battery3Bar, >=10=Battery2Bar,
@@ -503,7 +503,8 @@ private fun ConnectedDeviceCard(
  * 颜色：>20% 白色，<=20% TrackTechColors.Red，N/A 灰色
  */
 @Composable
-private fun BatteryIndicator(batteryPercent: Int?) {
+private fun BatteryIndicator(batteryCapability: BatteryCapabilityState) {
+    val batteryPercent = (batteryCapability as? BatteryCapabilityState.Available)?.percent
     val (icon, tint) = when (batteryPercent) {
         null -> Icons.Filled.BatteryUnknown to TrackTechColors.TextMuted
         in 95..100 -> Icons.Filled.BatteryFull to TrackTechColors.TextPrimary
@@ -520,7 +521,12 @@ private fun BatteryIndicator(batteryPercent: Int?) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = icon,
-            contentDescription = if (batteryPercent != null) "Battery $batteryPercent%" else "Battery unknown",
+            contentDescription = when (batteryCapability) {
+                BatteryCapabilityState.Pending -> "Battery pending"
+                is BatteryCapabilityState.Available -> "Battery ${batteryCapability.percent}%"
+                BatteryCapabilityState.Unsupported -> "Battery unsupported"
+                BatteryCapabilityState.Failed -> "Battery failed"
+            },
             tint = tint,
             modifier = Modifier.size(18.dp),
         )
@@ -535,11 +541,9 @@ private fun BatteryIndicator(batteryPercent: Int?) {
             )
         } else {
             Text(
-                text = "N/A",
-                style = TrackTechTypography.ScoreSmall,
+                text = batteryCapability.displayLabel(),
+                style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }

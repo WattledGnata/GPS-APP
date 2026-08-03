@@ -1,7 +1,6 @@
 package com.blazepush.core.domain.usecase
 
 import com.blazepush.core.domain.model.ConnectionState
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
 import com.blazepush.core.domain.model.GpsData
 
 /**
@@ -101,11 +100,10 @@ class SmartTestLauncher {
             LaunchCondition(
                 id = "gps_stability",
                 name = "GPS稳定性",
-                description = "连续 $GPS_FIX_RECOVERY_MAIN_FRAMES 帧定位可靠",
-                isMet = gpsData.consecutiveReliableMainFrames >= GPS_FIX_RECOVERY_MAIN_FRAMES,
-                icon = if (
-                    gpsData.consecutiveReliableMainFrames >= GPS_FIX_RECOVERY_MAIN_FRAMES
-                ) {
+                description = "连续 ${gpsData.requiredReliableMainFrames} 帧且稳定至少 " +
+                    "${gpsData.requiredReliableMainStableDurationMs}ms",
+                isMet = gpsData.isRecoveryStable,
+                icon = if (gpsData.isRecoveryStable) {
                     ConditionIcon.CHECKED
                 } else {
                     ConditionIcon.WAITING

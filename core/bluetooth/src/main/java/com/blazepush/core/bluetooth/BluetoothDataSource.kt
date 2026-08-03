@@ -10,8 +10,11 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import com.blazepush.core.bluetooth.parser.RaceChronoParser
-import com.blazepush.core.domain.model.GPS_FIX_RECOVERY_MAIN_FRAMES
+import com.blazepush.core.domain.model.BatteryCapabilityState
+import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
+import com.blazepush.core.domain.usecase.GpsRecoveryStabilityTracker
 import com.blazepush.core.domain.usecase.hasReliableFixEvidence
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +28,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 
 /**
  * 蓝牙数据源 - 唯一的GPS数据发射点
@@ -68,7 +74,8 @@ class BluetoothDataSource(
     private var activeConnectionGeneration = 0L
     private var mainFrameSequence = 0L
     private val mainFrameCadenceTracker = MainFrameCadenceTracker()
-    private var consecutiveReliableMainFrames = 0
+    private val recoveryStabilityTracker = GpsRecoveryStabilityTracker()
+    private var timingHandshakeState = TimingHandshakeState.WAITING_MAIN
 
     // 唯一的数据输出口
     private val _dataFlow = MutableStateFlow(GpsData.Empty)
@@ -78,10 +85,18 @@ class BluetoothDataSource(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    // 外接 GPS 设备电量百分比（null = 无此服务 / 未读到）
+    // Battery capability 是唯一真相源；percent 仅为旧消费者兼容派生流。
     @Suppress("PropertyName")
-    private val _batteryPercent = MutableStateFlow<Int?>(null)
-    val batteryPercent: StateFlow<Int?> = _batteryPercent.asStateFlow()
+    private val _batteryCapability = MutableStateFlow<BatteryCapabilityState>(
+        BatteryCapabilityState.Pending,
+    )
+    val batteryCapability: StateFlow<BatteryCapabilityState> = _batteryCapability.asStateFlow()
+    val batteryPercent: StateFlow<Int?> = batteryCapability
+        .map { (it as? BatteryCapabilityState.Available)?.percent }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    private val _bleHandshake = MutableStateFlow(BleHandshakeState())
+    val bleHandshake: StateFlow<BleHandshakeState> = _bleHandshake.asStateFlow()
 
     private var bleConnection: BleConnection? = null
 
@@ -179,9 +194,14 @@ class BluetoothDataSource(
                 _connectionState.value = ConnectionState.CONNECTING
                 Log.d(TAG, "状态设置为 CONNECTING，创建 BleConnection")
 
-                bleConnection = BleConnection(context, deviceAddress) { uuid, rawData ->
-                    handleIncomingData(generation, uuid, rawData)
-                }
+                bleConnection = BleConnection(
+                    context = context,
+                    deviceAddress = deviceAddress,
+                    connectionGeneration = generation,
+                    onDataReceived = { uuid, rawData ->
+                        handleIncomingData(generation, uuid, rawData)
+                    },
+                )
 
                 // 在单独的协程中监听 BleConnection 的状态变化
                 bleConnection?.connectionState?.let { stateFlow ->
@@ -191,8 +211,13 @@ class BluetoothDataSource(
                         // cancel，不破 A27 cleanup 严格顺序契约（connectionCollectJob 单点取消即清干净）。
                         launch {
                             bleConnection?.dataStale?.collect { stale ->
-                                if (stale) consecutiveReliableMainFrames = 0
+                                if (stale) recoveryStabilityTracker.reset(generation)
                                 val current = _dataFlow.value
+                                val stability = if (stale) {
+                                    recoveryStabilityTracker.emptySnapshot()
+                                } else {
+                                    null
+                                }
                                 _dataFlow.value = current.copy(
                                     isStale = stale,
                                     consecutiveReliableMainFrames = if (stale) {
@@ -200,12 +225,28 @@ class BluetoothDataSource(
                                     } else {
                                         current.consecutiveReliableMainFrames
                                     },
+                                    requiredReliableMainFrames = stability?.requiredReliableFrames
+                                        ?: current.requiredReliableMainFrames,
+                                    reliableMainStableDurationMs = stability?.stableDurationMs
+                                        ?: current.reliableMainStableDurationMs,
+                                    requiredReliableMainStableDurationMs =
+                                        stability?.requiredStableDurationMs
+                                            ?: current.requiredReliableMainStableDurationMs,
+                                    isRecoveryStable = stability?.isStable
+                                        ?: current.isRecoveryStable,
                                 )
                             }
                         }
                         launch {
-                            bleConnection?.batteryPercent?.collect { pct ->
-                                _batteryPercent.value = pct
+                            bleConnection?.batteryCapability?.collect { state ->
+                                handleBatteryCapability(generation, state)
+                            }
+                        }
+                        launch {
+                            bleConnection?.handshakeState?.collect { state ->
+                                if (generation == activeConnectionGeneration) {
+                                    _bleHandshake.value = state
+                                }
                             }
                         }
                         // drop(1):跳过 BleConnection StateFlow 的 replay 初值(新实例恒 DISCONNECTED,
@@ -363,7 +404,7 @@ class BluetoothDataSource(
             bleConnection = null
             _connectionState.value = ConnectionState.DISCONNECTED
             invalidateConnectionGeneration(isStale = false)
-            _batteryPercent.value = null
+            _batteryCapability.value = BatteryCapabilityState.Pending
         }
     }
 
@@ -394,6 +435,9 @@ class BluetoothDataSource(
             return
         }
         val isMainFrame = uuid.toString() == "00000003-0000-1000-8000-00805f9b34fb"
+        val isTimeFrame = uuid.toString() == "00000004-0000-1000-8000-00805f9b34fb"
+        // Time-before-Main cannot establish this generation's baseline.
+        if (isTimeFrame && timingHandshakeState == TimingHandshakeState.WAITING_MAIN) return
         val parseResult: com.blazepush.core.domain.model.GpsData? = when (uuid.toString()) {
             "00000003-0000-1000-8000-00805f9b34fb" -> parser.parseGpsData(rawData, _dataFlow.value)
             "00000004-0000-1000-8000-00805f9b34fb" -> parser.parseGpsTimeData(rawData, _dataFlow.value)
@@ -402,16 +446,35 @@ class BluetoothDataSource(
         if (parseResult != null) {
             _dataFlow.value = if (isMainFrame && parseResult.errorMessage == null) {
                 val receivedAt = elapsedRealtimeMs()
-                val previous = _dataFlow.value
-                if (previous.hasMainFrame) {
-                    val gapMs = receivedAt - previous.mainFrameReceivedAtElapsedRealtimeMs
-                    if (gapMs !in 0..<previous.mainFrameSilenceTimeoutMs) {
-                        consecutiveReliableMainFrames = 0
-                    }
-                }
                 mainFrameCadenceTracker.onMainFrame(receivedAt)
                 mainFrameSequence++
+                timingHandshakeState = when (timingHandshakeState) {
+                    TimingHandshakeState.WAITING_MAIN -> {
+                        // Discard any parser baseline that could have arrived before first Main.
+                        parser.reset()
+                        TimingHandshakeState.WAITING_TIME
+                    }
+                    TimingHandshakeState.WAITING_SYNCHRONIZED_MAIN -> {
+                        if (parseResult.isTimeSynced) {
+                            TimingHandshakeState.SYNCHRONIZED
+                        } else {
+                            TimingHandshakeState.WAITING_SYNCHRONIZED_MAIN
+                        }
+                    }
+                    TimingHandshakeState.SYNCHRONIZED -> {
+                        if (parseResult.isTimeSynced) {
+                            TimingHandshakeState.SYNCHRONIZED
+                        } else {
+                            TimingHandshakeState.WAITING_TIME
+                        }
+                    }
+                    TimingHandshakeState.WAITING_TIME -> TimingHandshakeState.WAITING_TIME
+                }
+                val protocolAligned = timingHandshakeState == TimingHandshakeState.SYNCHRONIZED &&
+                    parseResult.isTimeSynced
                 val current = parseResult.copy(
+                    timestamp = if (protocolAligned) parseResult.timestamp else Long.MIN_VALUE,
+                    isTimeSynced = protocolAligned,
                     isConnected = true,
                     errorMessage = null,
                     isStale = false,
@@ -421,15 +484,24 @@ class BluetoothDataSource(
                     hasMainFrame = true,
                     mainFrameSilenceTimeoutMs = mainFrameCadenceTracker.currentSilenceTimeoutMs(),
                     consecutiveReliableMainFrames = 0,
+                    timingHandshakeState = timingHandshakeState,
                 )
-                consecutiveReliableMainFrames = if (current.hasReliableFixEvidence()) {
-                    minOf(consecutiveReliableMainFrames + 1, GPS_FIX_RECOVERY_MAIN_FRAMES)
-                } else {
-                    0
-                }
-                current.copy(consecutiveReliableMainFrames = consecutiveReliableMainFrames)
+                val stability = recoveryStabilityTracker.onMainFrame(
+                    connectionGeneration = generation,
+                    receivedAtElapsedRealtimeMs = receivedAt,
+                    isReliable = current.hasReliableFixEvidence(),
+                    maximumGapMs = current.mainFrameSilenceTimeoutMs,
+                )
+                current.copy(
+                    consecutiveReliableMainFrames = stability.consecutiveReliableFrames,
+                    requiredReliableMainFrames = stability.requiredReliableFrames,
+                    reliableMainStableDurationMs = stability.stableDurationMs,
+                    requiredReliableMainStableDurationMs = stability.requiredStableDurationMs,
+                    isRecoveryStable = stability.isStable,
+                )
             } else if (isMainFrame) {
-                consecutiveReliableMainFrames = 0
+                recoveryStabilityTracker.reset(generation)
+                val stability = recoveryStabilityTracker.emptySnapshot()
                 // 主包解析失败不能沿用前一个可用位置的 freshness 身份。
                 parseResult.copy(
                     isConnected = false,
@@ -439,10 +511,22 @@ class BluetoothDataSource(
                     connectionGeneration = generation,
                     hasMainFrame = false,
                     consecutiveReliableMainFrames = 0,
+                    requiredReliableMainFrames = stability.requiredReliableFrames,
+                    reliableMainStableDurationMs = 0L,
+                    requiredReliableMainStableDurationMs = stability.requiredStableDurationMs,
+                    isRecoveryStable = false,
+                    timingHandshakeState = timingHandshakeState,
                 )
             } else {
                 // GPS Time 包不是 Main 帧：不递增 sequence，不刷新接收时刻，不清 stale。
                 val current = _dataFlow.value
+                timingHandshakeState = if (parseResult.errorMessage == null) {
+                    TimingHandshakeState.WAITING_SYNCHRONIZED_MAIN
+                } else {
+                    TimingHandshakeState.WAITING_TIME
+                }
+                recoveryStabilityTracker.reset(generation)
+                val stability = recoveryStabilityTracker.emptySnapshot()
                 parseResult.copy(
                     isConnected = if (parseResult.errorMessage != null) {
                         false
@@ -456,10 +540,26 @@ class BluetoothDataSource(
                     hasMainFrame = current.hasMainFrame,
                     isStale = current.isStale,
                     mainFrameSilenceTimeoutMs = current.mainFrameSilenceTimeoutMs,
-                    consecutiveReliableMainFrames = current.consecutiveReliableMainFrames,
+                    consecutiveReliableMainFrames = 0,
+                    requiredReliableMainFrames = stability.requiredReliableFrames,
+                    reliableMainStableDurationMs = 0L,
+                    requiredReliableMainStableDurationMs = stability.requiredStableDurationMs,
+                    isRecoveryStable = false,
+                    timingHandshakeState = timingHandshakeState,
                 )
             }
         }
+    }
+
+    internal fun handleBatteryCapability(
+        generation: Long,
+        state: BatteryCapabilityState,
+    ) {
+        if (generation != activeConnectionGeneration) {
+            Log.d(TAG, "ignore battery from old generation=$generation active=$activeConnectionGeneration")
+            return
+        }
+        _batteryCapability.value = state
     }
 
     /** 开始一个新 GATT 代次，立即废弃所有上一代位置与 parser 时间基准。 */
@@ -472,11 +572,18 @@ class BluetoothDataSource(
         activeConnectionGeneration++
         mainFrameSequence = 0L
         mainFrameCadenceTracker.reset()
-        consecutiveReliableMainFrames = 0
+        recoveryStabilityTracker.reset(activeConnectionGeneration)
+        timingHandshakeState = TimingHandshakeState.WAITING_MAIN
         parser.reset()
+        _batteryCapability.value = BatteryCapabilityState.Pending
+        _bleHandshake.value = BleHandshakeState(connectionGeneration = activeConnectionGeneration)
+        val stability = recoveryStabilityTracker.emptySnapshot()
         _dataFlow.value = GpsData.Empty.copy(
             connectionGeneration = activeConnectionGeneration,
             isStale = isStale,
+            requiredReliableMainFrames = stability.requiredReliableFrames,
+            requiredReliableMainStableDurationMs = stability.requiredStableDurationMs,
+            timingHandshakeState = timingHandshakeState,
         )
     }
 }

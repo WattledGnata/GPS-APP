@@ -13,6 +13,8 @@ import com.blazepush.core.data.model.BluetoothDeviceModel
 import com.blazepush.core.data.model.displayName
 import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.BatteryCapabilityState
+import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.DataStats
 import com.blazepush.core.domain.model.GpsData
@@ -81,7 +83,21 @@ class GpsDataViewModel(
             initialValue = emptyList()
         )
 
-    // 外接 GPS 设备电量百分比（null = 无电量能力 / 未读到）
+    val batteryCapability: StateFlow<BatteryCapabilityState> = gpsDataRepository.batteryCapability
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = BatteryCapabilityState.Pending,
+        )
+
+    val bleHandshake: StateFlow<BleHandshakeState> = gpsDataRepository.bleHandshake
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = BleHandshakeState(),
+        )
+
+    // 兼容旧 UI/调用方；唯一真相源是 batteryCapability。
     val batteryPercent: StateFlow<Int?> = gpsDataRepository.batteryPercent
         .stateIn(
             scope = viewModelScope,
@@ -123,6 +139,22 @@ class GpsDataViewModel(
         viewModelScope.launch {
             connectionState.collect { state ->
                 FileLogger.d("BleLiveness", "connectionState -> $state")
+            }
+        }
+
+        viewModelScope.launch {
+            bleHandshake.collect { state ->
+                FileLogger.d(
+                    "BleHandshake",
+                    "gen=${state.connectionGeneration} stage=${state.stage} " +
+                        "main=${state.main} time=${state.time}",
+                )
+            }
+        }
+
+        viewModelScope.launch {
+            batteryCapability.collect { state ->
+                FileLogger.d("BleBattery", "capability=$state")
             }
         }
 

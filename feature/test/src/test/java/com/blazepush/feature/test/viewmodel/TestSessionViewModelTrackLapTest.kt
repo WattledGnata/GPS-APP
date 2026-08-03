@@ -3,6 +3,7 @@ package com.blazepush.feature.test.viewmodel
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.TimingHandshakeState
 import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.usecase.CalculateResultUseCase
 import com.blazepush.core.domain.usecase.GpsDataFilter
@@ -198,6 +199,7 @@ class TestSessionViewModelTrackLapTest {
                     connectionGeneration = 2L,
                     mainFrameSequence = 5L,
                     consecutiveReliableMainFrames = 2,
+                    isRecoveryStable = false,
                 ),
                 emptyGpsSample().copy(
                     timestamp = 1_200L,
@@ -656,6 +658,10 @@ class TestSessionViewModelTrackLapTest {
             mainFrameReceivedAtElapsedRealtimeMs = mainFrameReceivedAtElapsedRealtimeMs,
             mainFrameSilenceTimeoutMs = mainFrameSilenceTimeoutMs,
             consecutiveReliableMainFrames = consecutiveReliableMainFrames,
+            requiredReliableMainFrames = 3,
+            reliableMainStableDurationMs = if (consecutiveReliableMainFrames >= 3) 1_000L else 0L,
+            isRecoveryStable = consecutiveReliableMainFrames >= 3,
+            timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
         )
     }
 
@@ -699,6 +705,10 @@ class TestSessionViewModelTrackLapTest {
         mainFrameSequence = 1L,
         mainFrameReceivedAtElapsedRealtimeMs = 1L,
         consecutiveReliableMainFrames = 3,
+        requiredReliableMainFrames = 3,
+        reliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 
     // ==================== v2 (fix-laptime-clock-source-integrity) ====================

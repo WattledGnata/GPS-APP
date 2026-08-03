@@ -11,6 +11,8 @@ import com.blazepush.core.bluetooth.GpsDataRepository
 import com.blazepush.core.data.model.BluetoothDeviceModel
 import com.blazepush.core.data.repository.BluetoothDeviceRepository
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.BatteryCapabilityState
+import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
@@ -57,6 +59,10 @@ class GpsDataViewModelTest {
         val repo = mock(GpsDataRepository::class.java)
         doReturn(gpsDataFlow).`when`(repo).gpsDataFlow
         doReturn(connectionStateFlow).`when`(repo).connectionState
+        doReturn(MutableStateFlow<BatteryCapabilityState>(BatteryCapabilityState.Pending))
+            .`when`(repo).batteryCapability
+        doReturn(MutableStateFlow(BleHandshakeState())).`when`(repo).bleHandshake
+        doReturn(MutableStateFlow<Int?>(null)).`when`(repo).batteryPercent
 
         // ble-device-memory：VM 构造期访问 devicesFlow 做 stateIn，mock 默认 null 会 NPE，必须 stub
         deviceRepo = mock(BluetoothDeviceRepository::class.java)

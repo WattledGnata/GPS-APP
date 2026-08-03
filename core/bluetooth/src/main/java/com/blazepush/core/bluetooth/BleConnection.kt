@@ -17,7 +17,11 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.blazepush.core.domain.model.BatteryCapabilityState
+import com.blazepush.core.domain.model.BleHandshakeStage
+import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.core.domain.model.GpsChannelSubscriptionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -43,6 +47,7 @@ import java.util.UUID
 class BleConnection(
     private val context: Context,
     private val deviceAddress: String,
+    private val connectionGeneration: Long = 0L,
     private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
     private val onDataReceived: (UUID, ByteArray) -> Unit,
 ) {
@@ -94,11 +99,18 @@ class BleConnection(
     private val _dataStale = MutableStateFlow(false)
     val dataStale: StateFlow<Boolean> = _dataStale.asStateFlow()
 
-    // 外接 GPS 设备电量百分比（null = 无此服务 / 未读到 / 非法值）。
-    // 连接后由 Battery Service (0x180F) 的 Battery Level (0x2A19) 特征提供。
+    // Battery capability 是唯一真相源；Pending/Unsupported/Failed 不再折叠成 null。
     @Suppress("PropertyName")
-    private val _batteryPercent = MutableStateFlow<Int?>(null)
-    val batteryPercent: StateFlow<Int?> = _batteryPercent.asStateFlow()
+    private val _batteryCapability = MutableStateFlow<BatteryCapabilityState>(
+        BatteryCapabilityState.Pending,
+    )
+    val batteryCapability: StateFlow<BatteryCapabilityState> = _batteryCapability.asStateFlow()
+
+    @Suppress("PropertyName")
+    private val _handshakeState = MutableStateFlow(
+        BleHandshakeState(connectionGeneration = connectionGeneration),
+    )
+    val handshakeState: StateFlow<BleHandshakeState> = _handshakeState.asStateFlow()
 
     // 数据接收时间记录
     @Volatile
@@ -110,6 +122,9 @@ class BleConnection(
     // 待启用的通知队列
     private val pendingCharacteristics = mutableListOf<BluetoothGattCharacteristic>()
     private var isWritingDescriptor = false
+    private var activeDescriptorUuid: UUID? = null
+    private var batterySetupStarted = false
+    private var batteryNotificationsSubscribed = false
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -152,9 +167,12 @@ class BleConnection(
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                     val mtuRequested = gatt.requestMtu(31)
                     Log.d(TAG, "Requesting MTU=31, result: $mtuRequested")
+                    if (!mtuRequested) enableNotificationsSequentially(gatt)
                 } else {
                     enableNotificationsSequentially(gatt)
                 }
+            } else {
+                failGpsHandshake(gatt, null)
             }
         }
 
@@ -169,42 +187,36 @@ class BleConnection(
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            Log.d(TAG, "onDescriptorWrite: status=$status, uuid=${descriptor.characteristic?.uuid}")
+            val characteristicUuid = descriptor.characteristic?.uuid
+            Log.d(TAG, "onDescriptorWrite: status=$status, uuid=$characteristicUuid")
+            if (characteristicUuid == null || characteristicUuid != activeDescriptorUuid) {
+                Log.d(TAG, "ignore out-of-order descriptor callback uuid=$characteristicUuid")
+                return
+            }
             isWritingDescriptor = false
-
-            // Battery Level CCCD 写完毕 → 读取当前电量
-            if (status == BluetoothGatt.GATT_SUCCESS &&
-                descriptor.characteristic?.uuid == BATTERY_LEVEL_UUID
-            ) {
-                descriptor.characteristic?.let { gatt.readCharacteristic(it) }
-            }
-
-            // 继续处理下一个 GPS 特征
-            processNextDescriptor(gatt)
-
-            // GPS 通知全部启用完成 → 追加 Battery Service 发现
-            if (pendingCharacteristics.isEmpty() && !isWritingDescriptor &&
-                _connectionState.value != ConnectionState.CONNECTED
-            ) {
-                setupBattery(gatt)
-            }
-
-            // 握手完成即判定已连接（不再依赖"收到第一帧数据"）：
-            // 所有通知 CCCD 都写完（无 pending + 当前没在写）→ BLE 链路 + notify 已就绪 → CONNECTED。
-            // 适配"无 GPS fix 不主动推数据"的设备（如 blazepush-peter，GPS 模块无卫星不输出）：
-            // 否则室内卫星=0 时永远等不到数据帧 → connect() 连接超时 → 转圈重连。
-            // 有数据后照常走 onCharacteristicChanged 更新 lastDataTime + 数据流超时监控。
-            if (pendingCharacteristics.isEmpty() && !isWritingDescriptor &&
-                _connectionState.value != ConnectionState.CONNECTED
-            ) {
-                Log.d(TAG, "所有通知启用完成，握手成功 → 判定已连接（不等数据帧）")
-                _connectionState.value = ConnectionState.CONNECTED
-                // 握手完成即开始数据新鲜度监控：冷启动无 fix（设备无卫星不推帧）时，
-                // 按设备 Main 节拍计算 deadline，最迟 1 秒置 dataStale=true 而非拆链。
-                // 收到首帧后由 handleCharacteristicChange 重置窗口（ble-connection-liveness spec R1）。
-                mainFrameCadenceTracker.reset()
-                lastDataTime = elapsedRealtimeMs()
-                startDataWatchdog()
+            activeDescriptorUuid = null
+            when (characteristicUuid) {
+                GPS_MAIN_UUID, GPS_TIME_UUID -> {
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        failGpsHandshake(gatt, characteristicUuid)
+                        return
+                    }
+                    markGpsChannelSubscribed(checkNotNull(characteristicUuid))
+                    processNextDescriptor(gatt)
+                }
+                BATTERY_LEVEL_UUID -> {
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        _batteryCapability.value = BatteryCapabilityState.Failed
+                    } else {
+                        batteryNotificationsSubscribed = true
+                        val characteristic = descriptor.characteristic
+                        if (characteristic == null || !gatt.readCharacteristic(characteristic)) {
+                            _batteryCapability.value = BatteryCapabilityState.Failed
+                        }
+                    }
+                    finishHandshake()
+                }
+                else -> Unit
             }
         }
 
@@ -230,14 +242,15 @@ class BleConnection(
             value: ByteArray,
             status: Int
         ) {
-            if (status == BluetoothGatt.GATT_SUCCESS &&
-                characteristic.uuid == BATTERY_LEVEL_UUID
-            ) {
-                val percent = parseBatteryPercent(value)
-                if (percent != null) {
-                    _batteryPercent.value = percent
-                    Log.d(TAG, "Battery level read: $percent%")
+            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val percent = if (status == BluetoothGatt.GATT_SUCCESS) {
+                    parseBatteryPercent(value)
+                } else {
+                    null
                 }
+                _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
+                    ?: BatteryCapabilityState.Failed
+                if (percent != null) Log.d(TAG, "Battery level read: $percent%")
             }
         }
 
@@ -247,26 +260,34 @@ class BleConnection(
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (status == BluetoothGatt.GATT_SUCCESS &&
-                characteristic.uuid == BATTERY_LEVEL_UUID
-            ) {
-                val percent = parseBatteryPercent(characteristic.value)
-                if (percent != null) {
-                    _batteryPercent.value = percent
-                    Log.d(TAG, "Battery level read (deprecated): $percent%")
+            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val percent = if (status == BluetoothGatt.GATT_SUCCESS) {
+                    parseBatteryPercent(characteristic.value)
+                } else {
+                    null
                 }
+                _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
+                    ?: BatteryCapabilityState.Failed
+                if (percent != null) Log.d(TAG, "Battery level read (deprecated): $percent%")
             }
         }
 
         private fun handleCharacteristicChange(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             // Battery Level 通知：独立处理，不进入 RaceChronoParser 数据流
             if (characteristic.uuid == BATTERY_LEVEL_UUID) {
+                if (!batteryNotificationsSubscribed) return
                 val percent = parseBatteryPercent(value)
-                if (percent != null) {
-                    _batteryPercent.value = percent
-                }
+                _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
+                    ?: BatteryCapabilityState.Failed
                 return
             }
+
+            if (characteristic.uuid == GPS_MAIN_UUID &&
+                _handshakeState.value.main != GpsChannelSubscriptionState.SUBSCRIBED
+            ) return
+            if (characteristic.uuid == GPS_TIME_UUID &&
+                _handshakeState.value.time != GpsChannelSubscriptionState.SUBSCRIBED
+            ) return
 
             logReceivedData(characteristic.uuid, value)
             onDataReceived(characteristic.uuid, value)
@@ -279,12 +300,6 @@ class BleConnection(
                 mainFrameCadenceTracker.onMainFrame(receivedAt)
                 _dataStale.value = false
                 mainFrameSignal.trySend(Unit)
-            }
-
-            // 收到数据就认为连接成功
-            if (_connectionState.value != ConnectionState.CONNECTED) {
-                Log.d(TAG, "收到数据，连接成功")
-                _connectionState.value = ConnectionState.CONNECTED
             }
 
         }
@@ -338,11 +353,17 @@ class BleConnection(
         val service = gatt.getService(SERVICE_UUID)
         if (service == null) {
             Log.e(TAG, "Service not found: $SERVICE_UUID")
+            failGpsHandshake(gatt, null)
             return
         }
 
         pendingCharacteristics.clear()
         isWritingDescriptor = false
+        activeDescriptorUuid = null
+        batterySetupStarted = false
+        batteryNotificationsSubscribed = false
+        _batteryCapability.value = BatteryCapabilityState.Pending
+        _handshakeState.value = BleHandshakeState(connectionGeneration = connectionGeneration)
 
         // 收集需要启用的特征
         listOf(GPS_MAIN_UUID, GPS_TIME_UUID).forEach { charUuid ->
@@ -350,7 +371,9 @@ class BleConnection(
             if (characteristic != null) {
                 pendingCharacteristics.add(characteristic)
             } else {
-                Log.w(TAG, "Characteristic not found: $charUuid")
+                Log.e(TAG, "Mandatory GPS characteristic not found: $charUuid")
+                failGpsHandshake(gatt, charUuid)
+                return
             }
         }
 
@@ -362,7 +385,12 @@ class BleConnection(
      * 处理下一个描述符写操作
      */
     private fun processNextDescriptor(gatt: BluetoothGatt) {
-        if (isWritingDescriptor || pendingCharacteristics.isEmpty()) {
+        if (isWritingDescriptor) {
+            return
+        }
+        if (pendingCharacteristics.isEmpty()) {
+            markGpsChannelsReady()
+            setupBattery(gatt)
             return
         }
 
@@ -370,25 +398,26 @@ class BleConnection(
         val success = gatt.setCharacteristicNotification(characteristic, true)
         if (!success) {
             Log.e(TAG, "Failed to enable notifications for ${characteristic.uuid}")
-            // 继续下一个
-            processNextDescriptor(gatt)
+            failGpsHandshake(gatt, characteristic.uuid)
             return
         }
 
         val descriptor = characteristic.getDescriptor(CCCD_UUID)
         if (descriptor == null) {
             Log.e(TAG, "CCCD not found for ${characteristic.uuid}")
-            processNextDescriptor(gatt)
+            failGpsHandshake(gatt, characteristic.uuid)
             return
         }
 
         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         isWritingDescriptor = true
+        activeDescriptorUuid = characteristic.uuid
         val writeSuccess = gatt.writeDescriptor(descriptor)
         if (!writeSuccess) {
             Log.e(TAG, "Failed to write descriptor for ${characteristic.uuid}")
             isWritingDescriptor = false
-            processNextDescriptor(gatt)
+            activeDescriptorUuid = null
+            failGpsHandshake(gatt, characteristic.uuid)
             return
         }
 
@@ -401,14 +430,21 @@ class BleConnection(
      * 优先订阅 Notify/Indicate；仅支持 READ 时主动读一次。
      */
     private fun setupBattery(gatt: BluetoothGatt) {
+        if (batterySetupStarted) return
+        batterySetupStarted = true
+        _handshakeState.value = _handshakeState.value.copy(stage = BleHandshakeStage.PROBING_BATTERY)
         val service = gatt.getService(BATTERY_SERVICE_UUID)
         if (service == null) {
             Log.d(TAG, "Battery Service (0x180F) not found — device has no battery reporting")
+            _batteryCapability.value = BatteryCapabilityState.Unsupported
+            finishHandshake()
             return
         }
         val characteristic = service.getCharacteristic(BATTERY_LEVEL_UUID)
         if (characteristic == null) {
             Log.d(TAG, "Battery Level (0x2A19) not found")
+            _batteryCapability.value = BatteryCapabilityState.Unsupported
+            finishHandshake()
             return
         }
 
@@ -421,13 +457,15 @@ class BleConnection(
             val enabled = gatt.setCharacteristicNotification(characteristic, true)
             if (!enabled) {
                 Log.e(TAG, "Failed to enable Battery Level notification")
-                gatt.readCharacteristic(characteristic)
+                _batteryCapability.value = BatteryCapabilityState.Failed
+                finishHandshake()
                 return
             }
             val cccd = characteristic.getDescriptor(CCCD_UUID)
             if (cccd == null) {
-                Log.w(TAG, "CCCD not found for Battery Level — fallback to read")
-                gatt.readCharacteristic(characteristic)
+                Log.w(TAG, "CCCD not found for Battery Level")
+                _batteryCapability.value = BatteryCapabilityState.Failed
+                finishHandshake()
                 return
             }
             cccd.value = if (supportsNotify) {
@@ -435,15 +473,69 @@ class BleConnection(
             } else {
                 BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
             }
+            isWritingDescriptor = true
+            activeDescriptorUuid = BATTERY_LEVEL_UUID
             val writeSuccess = gatt.writeDescriptor(cccd)
             if (!writeSuccess) {
-                Log.e(TAG, "Failed to write Battery CCCD — fallback to read")
-                gatt.readCharacteristic(characteristic)
+                Log.e(TAG, "Failed to write Battery CCCD")
+                isWritingDescriptor = false
+                activeDescriptorUuid = null
+                _batteryCapability.value = BatteryCapabilityState.Failed
+                finishHandshake()
             }
         } else {
             Log.d(TAG, "Battery Level: no notify/indicate — read once")
-            gatt.readCharacteristic(characteristic)
+            if (!gatt.readCharacteristic(characteristic)) {
+                _batteryCapability.value = BatteryCapabilityState.Failed
+            }
+            finishHandshake()
         }
+    }
+
+    private fun markGpsChannelSubscribed(uuid: UUID) {
+        _handshakeState.value = when (uuid) {
+            GPS_MAIN_UUID -> _handshakeState.value.copy(
+                stage = BleHandshakeStage.PENDING_TIME,
+                main = GpsChannelSubscriptionState.SUBSCRIBED,
+            )
+            GPS_TIME_UUID -> _handshakeState.value.copy(
+                stage = BleHandshakeStage.PROBING_BATTERY,
+                time = GpsChannelSubscriptionState.SUBSCRIBED,
+            )
+            else -> _handshakeState.value
+        }
+    }
+
+    private fun failGpsHandshake(gatt: BluetoothGatt, uuid: UUID?) {
+        _handshakeState.value = _handshakeState.value.copy(
+            stage = BleHandshakeStage.FAILED,
+            main = if (uuid == null || uuid == GPS_MAIN_UUID) {
+                GpsChannelSubscriptionState.FAILED
+            } else {
+                _handshakeState.value.main
+            },
+            time = if (uuid == null || uuid == GPS_TIME_UUID) {
+                GpsChannelSubscriptionState.FAILED
+            } else {
+                _handshakeState.value.time
+            },
+        )
+        _connectionState.value = ConnectionState.DISCONNECTED
+        gatt.disconnect()
+    }
+
+    private fun finishHandshake() {
+        _handshakeState.value = _handshakeState.value.copy(stage = BleHandshakeStage.COMPLETE)
+        markGpsChannelsReady()
+    }
+
+    private fun markGpsChannelsReady() {
+        if (_connectionState.value == ConnectionState.CONNECTED) return
+        Log.d(TAG, "Main/Time 订阅完成 → 判定已连接；Battery 继续串行探测")
+        _connectionState.value = ConnectionState.CONNECTED
+        mainFrameCadenceTracker.reset()
+        lastDataTime = elapsedRealtimeMs()
+        startDataWatchdog()
     }
 
     private fun startDataWatchdog() {
@@ -491,7 +583,10 @@ class BleConnection(
         mainFrameCadenceTracker.reset()
         pendingCharacteristics.clear()
         isWritingDescriptor = false
+        activeDescriptorUuid = null
         lastDataTime = 0L
-        _batteryPercent.value = null
+        _batteryCapability.value = BatteryCapabilityState.Pending
+        batterySetupStarted = false
+        batteryNotificationsSubscribed = false
     }
 }
