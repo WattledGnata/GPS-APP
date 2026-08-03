@@ -245,8 +245,9 @@ class BinaryPerftestTelemetryRoundTripTest {
      * 在 TestSessionViewModel.kt 内 grep：
      *   (1) `filteredData.timestamp - (anchorTs|activeTestStartTs)` 命中数 == 0（修复后归零）
      *   (2) `frame.timestamp - anchorTs` 命中数 == 0（修复后归零）
-     *   正向 (3) `currentTimeMillis() - sessionStartTs` 命中数 == 3
-     *     （A round bridgeGpsToLapTiming + 本 round startTest preTrigger + 本 round processFilteredData）
+     *   正向 (3) `currentTimeMillis() - sessionStartTs` 命中数 == 4
+     *     （A round bridgeGpsToLapTiming + 本 round startTest preTrigger + 本 round processFilteredData
+     *      + 2026-08-02 Debug Capture telemetry 写样本路径）
      */
     @Test
     fun `case E - clock domain single-source grep gate in TestSessionViewModel`() {
@@ -270,9 +271,10 @@ class BinaryPerftestTelemetryRoundTripTest {
         val correctPattern = Regex("""System\.currentTimeMillis\(\)\s*-\s*sessionStartTs""")
         val correctMatches = correctPattern.findAll(source).map { it.value }.toList()
         assertEquals(
-            "正向 anchor 同源公式应命中 3 处（A round bridgeGpsToLapTiming + 本 round startTest preTrigger 回填 + 本 round processFilteredData）；" +
+            "正向 anchor 同源公式应命中 4 处（A round bridgeGpsToLapTiming + 本 round startTest preTrigger 回填 + " +
+                "本 round processFilteredData + 2026-08-02 Debug Capture telemetry 写样本路径）；" +
                 "实际命中：${correctMatches.size}",
-            3,
+            4,
             correctMatches.size,
         )
     }
