@@ -3,6 +3,7 @@ package com.blazepush
 import android.app.Application
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -25,6 +26,8 @@ import com.blazepush.feature.test.di.utilsModule
 import com.blazepush.feature.test.di.viewModelModule
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.diagnostic.DiagnosticEvidenceRecorder
+import com.blazepush.feature.test.diagnostic.AppForegroundStateTracker
+import com.blazepush.feature.test.diagnostic.AppProcessState
 import com.blazepush.feature.test.livetiming.LapUploadTrigger
 import com.blazepush.feature.test.recording.CameraRecordingEngine
 import kotlinx.coroutines.CoroutineScope
@@ -51,32 +54,25 @@ class BlazePushApplication : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallbackRegistered = false
-    private var startedActivityCount = 0
+    private val appForegroundState = AppForegroundStateTracker()
     private var bluetoothReceiverRegistered = false
 
     private val foregroundCallbacks = object : ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
-            if (startedActivityCount++ == 0) {
-                diagnosticEvidence.updateAppLifecycle("FOREGROUND")
+            val transition = appForegroundState.onActivityStarted()
+            transition?.let(diagnosticEvidence::updateAppLifecycle)
+            if (transition == AppProcessState.FOREGROUND) {
                 requestImmediateBleReconnect("app foreground")
             }
         }
         override fun onActivityStopped(activity: Activity) {
-            if (--startedActivityCount == 0) diagnosticEvidence.updateAppLifecycle("BACKGROUND")
+            appForegroundState.onActivityStopped()?.let(diagnosticEvidence::updateAppLifecycle)
         }
-        override fun onActivityCreated(activity: Activity, state: Bundle?) {
-            diagnosticEvidence.updateAppLifecycle("ACTIVITY_CREATED")
-        }
-        override fun onActivityResumed(activity: Activity) {
-            diagnosticEvidence.updateAppLifecycle("RESUMED")
-        }
-        override fun onActivityPaused(activity: Activity) {
-            diagnosticEvidence.updateAppLifecycle("PAUSED")
-        }
+        override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
         override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
-        override fun onActivityDestroyed(activity: Activity) {
-            diagnosticEvidence.updateAppLifecycle("ACTIVITY_DESTROYED")
-        }
+        override fun onActivityDestroyed(activity: Activity) = Unit
     }
 
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
@@ -167,16 +163,56 @@ class BlazePushApplication : Application() {
     }
 
     private fun startDiagnosticEvidenceCollection() {
-        val koin = GlobalContext.get()
-        val gpsRepository = koin.get<GpsDataRepository>()
-        val cameraRecordingEngine = koin.get<CameraRecordingEngine>()
-        appScope.launch { gpsRepository.connectionState.collect(diagnosticEvidence::updateConnection) }
-        appScope.launch { gpsRepository.bleHandshake.collect(diagnosticEvidence::updateHandshake) }
-        appScope.launch { gpsRepository.gpsDataFlow.collect(diagnosticEvidence::updateGps) }
-        appScope.launch { gpsRepository.batteryCapability.collect(diagnosticEvidence::updateBattery) }
-        appScope.launch {
-            cameraRecordingEngine.recordingState.collect(diagnosticEvidence::updateCamera)
+        initializeBluetoothAdapterEvidence()
+        val koin = runCatching { GlobalContext.get() }.getOrElse {
+            FileLogger.e("DiagnosticEvidence", "Koin unavailable; state collectors disabled", it)
+            startDiagnosticSnapshotLoop()
+            return
         }
+        runCatching { koin.get<GpsDataRepository>() }
+            .onSuccess { gpsRepository ->
+                collectDiagnosticFlow("BLE state") {
+                    gpsRepository.connectionState.collect(diagnosticEvidence::updateConnection)
+                }
+                collectDiagnosticFlow("BLE handshake") {
+                    gpsRepository.bleHandshake.collect(diagnosticEvidence::updateHandshake)
+                }
+                collectDiagnosticFlow("GPS Main") {
+                    gpsRepository.gpsDataFlow.collect(diagnosticEvidence::updateGps)
+                }
+                collectDiagnosticFlow("Battery") {
+                    gpsRepository.batteryCapability.collect(diagnosticEvidence::updateBattery)
+                }
+            }
+            .onFailure { FileLogger.e("DiagnosticEvidence", "GPS repository unavailable", it) }
+        runCatching { koin.get<CameraRecordingEngine>() }
+            .onSuccess { cameraRecordingEngine ->
+                collectDiagnosticFlow("Camera") {
+                    cameraRecordingEngine.recordingState.collect(diagnosticEvidence::updateCamera)
+                }
+            }
+            .onFailure { FileLogger.e("DiagnosticEvidence", "Camera engine unavailable", it) }
+        startDiagnosticSnapshotLoop()
+    }
+
+    private fun initializeBluetoothAdapterEvidence() {
+        val label = initialBluetoothAdapterLabel {
+            getSystemService(BluetoothManager::class.java)?.adapter?.state
+        }
+        diagnosticEvidence.updateBluetoothAdapter(label)
+        if (label == "UNKNOWN" || label == "UNAVAILABLE") {
+            FileLogger.d("DiagnosticEvidence", "initial Bluetooth adapter=$label")
+        }
+    }
+
+    private fun collectDiagnosticFlow(name: String, collect: suspend () -> Unit) {
+        appScope.launch {
+            runCatching { collect() }
+                .onFailure { FileLogger.e("DiagnosticEvidence", "$name collector stopped", it) }
+        }
+    }
+
+    private fun startDiagnosticSnapshotLoop() {
         appScope.launch {
             while (true) {
                 FileLogger.d(
@@ -186,14 +222,6 @@ class BlazePushApplication : Application() {
                 delay(DIAGNOSTIC_SNAPSHOT_INTERVAL_MS)
             }
         }
-    }
-
-    private fun bluetoothAdapterStateLabel(state: Int): String = when (state) {
-        BluetoothAdapter.STATE_OFF -> "OFF"
-        BluetoothAdapter.STATE_TURNING_ON -> "TURNING_ON"
-        BluetoothAdapter.STATE_ON -> "ON"
-        BluetoothAdapter.STATE_TURNING_OFF -> "TURNING_OFF"
-        else -> "UNKNOWN($state)"
     }
 
     private fun recoverIncompleteLapSessions() {

@@ -73,7 +73,7 @@ class DiagnosticRecoveryMatrixTest {
     @Test
     fun forceKillBoundary_startsNewProcessEvidenceWithoutInventingRecovery() {
         val beforeKill = DiagnosticEvidenceRecorder(0L)
-        beforeKill.updateAppLifecycle("BACKGROUND")
+        beforeKill.updateAppLifecycle(AppProcessState.BACKGROUND)
         beforeKill.updateGps(main(generation = 5, sequence = 99, receivedAt = 4_000L))
 
         val afterRestart = DiagnosticEvidenceRecorder(10_000L)
@@ -116,10 +116,25 @@ class DiagnosticRecoveryMatrixTest {
             assertTrue(recorder.snapshot(3_000L).contains(expected))
         }
         val evidence = recorder.snapshot(3_000L)
-        assertTrue(evidence.contains("main=SUBSCRIBED,time=SUBSCRIBED"))
+        assertTrue(evidence.contains("handshake(gen=3,stage=COMPLETE,main=SUBSCRIBED,time=SUBSCRIBED)"))
         assertTrue(evidence.contains("timingGate=SYNCHRONIZED"))
         assertTrue(evidence.contains("recovery=11/11,stableMs=1000/1000,gate=true"))
         assertTrue(evidence.contains("sats=9,fix=1,hdop=0.8"))
+    }
+
+    @Test
+    fun applicationForegroundCounting_isNotOverwrittenByUnrelatedActivityDestroy() {
+        val tracker = AppForegroundStateTracker()
+        val recorder = DiagnosticEvidenceRecorder(0L)
+
+        tracker.onActivityStarted()?.let(recorder::updateAppLifecycle)
+        tracker.onActivityStarted()?.let(recorder::updateAppLifecycle)
+        tracker.onActivityStopped()?.let(recorder::updateAppLifecycle)
+        assertTrue(recorder.snapshot(1L).contains("app=FOREGROUND"))
+
+        tracker.onActivityStopped()?.let(recorder::updateAppLifecycle)
+        assertTrue(recorder.snapshot(2L).contains("app=BACKGROUND"))
+        assertTrue(tracker.onActivityStopped() == null)
     }
 
     private fun main(generation: Long, sequence: Long, receivedAt: Long): GpsData = GpsData.Empty.copy(

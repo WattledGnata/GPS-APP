@@ -14,6 +14,29 @@ enum class ColdStartObservationPhase {
     MAIN_OBSERVED,
 }
 
+enum class AppProcessState {
+    PROCESS_CREATED,
+    FOREGROUND,
+    BACKGROUND,
+}
+
+/** Application foreground semantics based only on the number of started activities. */
+class AppForegroundStateTracker {
+    private var startedActivityCount = 0
+
+    fun onActivityStarted(): AppProcessState? {
+        val wasBackground = startedActivityCount == 0
+        startedActivityCount++
+        return if (wasBackground) AppProcessState.FOREGROUND else null
+    }
+
+    fun onActivityStopped(): AppProcessState? {
+        if (startedActivityCount == 0) return null
+        startedActivityCount--
+        return if (startedActivityCount == 0) AppProcessState.BACKGROUND else null
+    }
+}
+
 /** Makes the 2-3 minute cold-start observation window deterministic under a virtual clock. */
 data class ColdStartObservationPolicy(
     val extendedWaitAfterMs: Long = 120_000L,
@@ -42,7 +65,7 @@ class DiagnosticEvidenceRecorder(
     private val processStartedAtElapsedMs: Long,
     private val coldStartPolicy: ColdStartObservationPolicy = ColdStartObservationPolicy(),
 ) {
-    private var appLifecycle = "PROCESS_CREATED"
+    private var appLifecycle = AppProcessState.PROCESS_CREATED
     private var bluetoothAdapter = "UNKNOWN"
     private var connectionState = ConnectionState.DISCONNECTED
     private var handshake = BleHandshakeState()
@@ -52,7 +75,7 @@ class DiagnosticEvidenceRecorder(
     private var hasObservedMain = false
 
     @Synchronized
-    fun updateAppLifecycle(value: String) {
+    fun updateAppLifecycle(value: AppProcessState) {
         appLifecycle = value
     }
 
@@ -116,7 +139,8 @@ class DiagnosticEvidenceRecorder(
         return "app=$appLifecycle processAgeMs=$processAgeMs coldStart=$coldStart " +
             "adapter=$bluetoothAdapter ble=$connectionState gen=${gpsData.connectionGeneration} " +
             "seq=${gpsData.mainFrameSequence} " +
-            "handshake(stage=${handshake.stage},main=${handshake.main},time=${handshake.time}) " +
+            "handshake(gen=${handshake.connectionGeneration},stage=${handshake.stage}," +
+            "main=${handshake.main},time=${handshake.time}) " +
             "timingGate=${gpsData.timingHandshakeState} " +
             "main(has=${gpsData.hasMainFrame},stale=${gpsData.isStale},rxAgeMs=$rxAge," +
             "deadlineMs=${gpsData.mainFrameSilenceTimeoutMs},recovery=" +
