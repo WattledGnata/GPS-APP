@@ -30,6 +30,81 @@ import org.mockito.Mockito
 @OptIn(ExperimentalCoroutinesApi::class)
 class BluetoothDataSourceReconnectTest {
 
+    @Test
+    fun `P0-2 退避精确为 1 2 4 8 16 30 秒且之后恒 30 秒`() {
+        val source = BluetoothDataSource(mockContext, mockParser)
+        assertEquals(
+            listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L, 30_000L),
+            (0..7).map(source::reconnectDelayMs),
+        )
+    }
+
+    @Test
+    fun `P0-2 多个 immediate trigger 合并为单一 connect attempt`() = runTest {
+        val attempts = mutableListOf<String>()
+        val source = BluetoothDataSource(
+            mockContext,
+            mockParser,
+            StandardTestDispatcher(testScheduler),
+            onConnectAttempt = attempts::add,
+        )
+
+        source.connect("AA:BB:CC:DD:EE:10")
+        source.requestImmediateReconnect("foreground")
+        source.requestImmediateReconnect("lap session")
+        source.requestImmediateReconnect("bluetooth enabled")
+        runCurrent()
+
+        assertEquals(listOf("AA:BB:CC:DD:EE:10"), attempts)
+        source.disconnect(); runCurrent()
+    }
+
+    @Test
+    fun `P0-2 immediate 安全抢占 30 秒退避且旧 job 不产生额外 attempt`() = runTest {
+        val attempts = mutableListOf<String>()
+        val source = BluetoothDataSource(
+            mockContext,
+            mockParser,
+            StandardTestDispatcher(testScheduler),
+            onConnectAttempt = attempts::add,
+        )
+        source.connect("AA:BB:CC:DD:EE:11")
+        runCurrent()
+        listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L).forEach {
+            advanceTimeBy(it); runCurrent()
+        }
+        assertEquals(6, attempts.size)
+
+        source.requestImmediateReconnect("foreground")
+        runCurrent()
+        assertEquals(7, attempts.size)
+        advanceTimeBy(29_999); runCurrent()
+        assertEquals("新 attempt 的 30s delay 前不得有旧 job 醒来", 7, attempts.size)
+        advanceTimeBy(2); runCurrent()
+        assertEquals("30s 时只能有新 attempt 自己的一个重试", 8, attempts.size)
+
+        source.disconnect(); runCurrent()
+    }
+
+    @Test
+    fun `P0-2 切设备和主动断开使旧目标及旧 delay 失效`() = runTest {
+        val attempts = mutableListOf<String>()
+        val source = BluetoothDataSource(
+            mockContext,
+            mockParser,
+            StandardTestDispatcher(testScheduler),
+            onConnectAttempt = attempts::add,
+        )
+        source.connect("AA:BB:CC:DD:EE:12"); runCurrent()
+        source.connect("AA:BB:CC:DD:EE:13"); runCurrent()
+        advanceTimeBy(1_001); runCurrent()
+
+        assertEquals(listOf("AA:BB:CC:DD:EE:12", "AA:BB:CC:DD:EE:13", "AA:BB:CC:DD:EE:13"), attempts)
+        source.disconnect(); runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(3, attempts.size)
+    }
+
     private lateinit var mockContext: Context
     private lateinit var mockParser: RaceChronoParser
 

@@ -9,7 +9,9 @@ import com.blazepush.core.domain.model.ConnectionState
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -24,15 +26,17 @@ class BleDeviceManager(
     // ble-device-memory round（design Decision 1）：Koin 闭包注入设备记忆能力，
     // core/bluetooth 不依赖 core/data（模块图不动）；默认 null 保持既有构造兼容。
     private val lastDeviceProvider: (suspend () -> String?)? = null,
-    private val onDeviceConnected: (suspend (address: String, name: String?) -> Unit)? = null
+    private val onDeviceConnected: (suspend (address: String, name: String?) -> Unit)? = null,
+    private val scanner: BleScanner = BleDeviceScanner(context),
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    autoReconnectOnInit: Boolean = true,
 ) {
     companion object {
         private const val TAG = "BleDeviceManager"
         private const val RECONNECT_TIMEOUT_MS = 10000L // 10秒重连超时
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val scanner = BleDeviceScanner(context)
+    private val scope = CoroutineScope(dispatcher + SupervisorJob())
 
     // 连接状态 (代理自BluetoothDataSource)
     val connectionState = bluetoothDataSource.connectionState
@@ -44,6 +48,9 @@ class BleDeviceManager(
     val scanResults = scanner.scanResults
 
     private var autoReconnectInProgress = false
+    private var targetResolutionJob: Job? = null
+    @Volatile private var connectionIntentEnabled = true
+    @Volatile private var currentTargetAddress: String? = null
 
     // ble-device-memory（design Decision 2）：最后一次经 manager 发起的连接意图（address + 扫描广播名）。
     // 仅 connect() 设置/覆盖，首次 CONNECTED 落库后清空；不在 DISCONNECTED 清——
@@ -52,6 +59,7 @@ class BleDeviceManager(
     private var pendingPersist: Pair<String, String?>? = null
 
     init {
+        bluetoothDataSource.installBeforeConnectAttempt { scanner.stopScan() }
         // ble-device-memory：首次 CONNECTED 时把 pending 设备经闭包落库（FileLogger 由 feature 层闭包侧落）
         scope.launch {
             connectionState.collect { state ->
@@ -68,8 +76,17 @@ class BleDeviceManager(
                 }
             }
         }
+        scope.launch {
+            scanResults.collect { devices ->
+                val target = currentTargetAddress ?: return@collect
+                if (connectionIntentEnabled && devices.any { it.address == target }) {
+                    stopScan()
+                    bluetoothDataSource.requestImmediateReconnect("scan target discovered")
+                }
+            }
+        }
         // 自动重连上次设备
-        autoReconnectLastDevice()
+        if (autoReconnectOnInit) autoReconnectLastDevice()
     }
 
     /**
@@ -135,6 +152,10 @@ class BleDeviceManager(
      * 开始扫描设备
      */
     fun startScan() {
+        if (connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED)) {
+            Log.d(TAG, "skip scan while state=${connectionState.value}")
+            return
+        }
         if (!PermissionChecker.hasAllRequiredPermissions(context)) {
             Log.e(TAG, "缺少必需的权限")
             return
@@ -157,6 +178,8 @@ class BleDeviceManager(
      */
     fun connect(deviceAddress: String, deviceName: String? = null) {
         Log.d(TAG, "connect() called with address: $deviceAddress")
+        connectionIntentEnabled = true
+        currentTargetAddress = deviceAddress
         // ble-device-memory（design Decision 2）：记连接意图，CONNECTED 后经 onDeviceConnected 落库
         pendingPersist = deviceAddress to deviceName
         scope.launch {
@@ -178,7 +201,32 @@ class BleDeviceManager(
      * 断开当前连接
      */
     fun disconnect() {
+        connectionIntentEnabled = false
+        currentTargetAddress = null
+        pendingPersist = null
+        targetResolutionJob?.cancel()
+        stopScan()
         bluetoothDataSource.disconnect()
+    }
+
+    /** Lifecycle, lap-session and Bluetooth-adapter signals converge here. */
+    fun requestImmediateReconnect(reason: String) {
+        if (!connectionIntentEnabled) return
+        stopScan()
+        if (bluetoothDataSource.requestImmediateReconnect(reason)) return
+        if (connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED)) return
+        if (currentTargetAddress != null || targetResolutionJob?.isActive == true) return
+        targetResolutionJob = scope.launch {
+            val saved = lastDeviceProvider?.invoke()
+            if (connectionIntentEnabled && saved != null && currentTargetAddress == null) {
+                connect(saved)
+            }
+        }
+    }
+
+    /** Forgetting the active/target device invalidates it before storage deletion completes. */
+    fun forget(deviceAddress: String) {
+        if (currentTargetAddress == deviceAddress) disconnect()
     }
 
     /**

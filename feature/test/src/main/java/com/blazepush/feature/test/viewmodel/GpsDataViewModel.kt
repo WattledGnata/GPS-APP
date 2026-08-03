@@ -213,18 +213,14 @@ class GpsDataViewModel(
      * 连接GPS设备
      */
     fun connect(deviceAddress: String) {
-        viewModelScope.launch {
-            gpsDataRepository.connect(deviceAddress)
-        }
+        bleDeviceManager.connect(deviceAddress)
     }
 
     /**
      * 断开当前连接
      */
     fun disconnect() {
-        viewModelScope.launch {
-            gpsDataRepository.disconnect()
-        }
+        bleDeviceManager.disconnect()
     }
 
     /**
@@ -279,11 +275,10 @@ class GpsDataViewModel(
         }
     }
 
-    /**
-     * ble-device-memory：删除已保存设备记录（不断开当前连接——spec 锁此语义）。
-     */
+    /** ble-device-memory：遗忘当前目标时先失效连接意图，再删除保存记录。 */
     fun deleteSavedDevice(address: String) {
         viewModelScope.launch {
+            bleDeviceManager.forget(address)
             bluetoothDeviceRepository.removeDevice(address)
             FileLogger.d("BleDeviceMemory", "record deleted addr=$address")
         }

@@ -692,6 +692,8 @@ class TestSessionViewModel(
     fun selectLapDebugMode(config: LapRunConfig) {
         val track = trackCatalog.getTrack(config.trackId) ?: return
 
+        bleDeviceManager.requestImmediateReconnect("lap session entered")
+
         _currentMode.value = TestMode.LapDebug
         _lapRunConfig.value = config
         _lapSession.value = createLapSession(track.id)
@@ -718,6 +720,7 @@ class TestSessionViewModel(
     }
 
     fun startDebugCaptureMode() {
+        bleDeviceManager.requestImmediateReconnect("lap session running")
         _currentMode.value = TestMode.DebugCapture
         _lapRunConfig.value = null
         _lapSession.value = null

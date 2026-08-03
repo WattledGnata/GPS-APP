@@ -1,9 +1,17 @@
 package com.blazepush
 
 import android.app.Application
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Bundle
+import androidx.core.content.ContextCompat
+import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.IncompleteLapSessionRecoveryCoordinator
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.feature.test.di.bluetoothModule
@@ -36,6 +44,34 @@ class BlazePushApplication : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallbackRegistered = false
+    private var startedActivityCount = 0
+    private var bluetoothReceiverRegistered = false
+
+    private val foregroundCallbacks = object : ActivityLifecycleCallbacks {
+        override fun onActivityStarted(activity: Activity) {
+            if (startedActivityCount++ == 0) {
+                requestImmediateBleReconnect("app foreground")
+            }
+        }
+        override fun onActivityStopped(activity: Activity) { startedActivityCount-- }
+        override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (
+                intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED &&
+                intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) ==
+                BluetoothAdapter.STATE_ON
+            ) {
+                requestImmediateBleReconnect("bluetooth enabled")
+            }
+        }
+    }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -71,6 +107,15 @@ class BlazePushApplication : Application() {
                 },
             )
         }
+
+        registerActivityLifecycleCallbacks(foregroundCallbacks)
+        ContextCompat.registerReceiver(
+            this,
+            bluetoothStateReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        bluetoothReceiverRegistered = true
 
         // cleanup-perftest-telemetry-session-orphan round：存量 PERFORMANCE_TEST 孤儿行
         // 一次性 sweep（幂等，cascade 修复后理论恒 0）。失败不得影响 app 启动。
@@ -148,7 +193,16 @@ class BlazePushApplication : Application() {
         }
     }
 
+    private fun requestImmediateBleReconnect(reason: String) {
+        runCatching { GlobalContext.get().get<BleDeviceManager>().requestImmediateReconnect(reason) }
+            .onFailure { FileLogger.e("BleReconnect", "immediate trigger failed reason=$reason", it) }
+    }
+
     override fun onTerminate() {
+        unregisterActivityLifecycleCallbacks(foregroundCallbacks)
+        if (bluetoothReceiverRegistered) {
+            runCatching { unregisterReceiver(bluetoothStateReceiver) }
+        }
         if (networkCallbackRegistered) {
             runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
         }

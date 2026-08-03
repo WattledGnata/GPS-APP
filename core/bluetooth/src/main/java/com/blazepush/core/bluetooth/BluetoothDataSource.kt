@@ -15,6 +15,7 @@ import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.usecase.hasReliableFixEvidence
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +40,7 @@ class BluetoothDataSource(
     private val parser: RaceChronoParser,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
+    private val onConnectAttempt: (String) -> Unit = {},
 ) {
     companion object {
         private const val TAG = "BluetoothDataSource"
@@ -54,6 +56,12 @@ class BluetoothDataSource(
     private var userInitiatedDisconnect = false
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
+    private var connectionIntentToken = 0L
+    private var activeAttemptToken = 0L
+    private var connectSetupJob: Job? = null
+    private var attemptInFlight = false
+    private val orchestrationLock = Any()
+    private var beforeConnectAttempt: () -> Unit = {}
     private var activeConnectionGeneration = 0L
     private var mainFrameSequence = 0L
     private val mainFrameCadenceTracker = MainFrameCadenceTracker()
@@ -80,21 +88,76 @@ class BluetoothDataSource(
      */
     fun connect(deviceAddress: String) {
         Log.d(TAG, "connect() called with address: $deviceAddress")
-        lastRequestedAddress = deviceAddress
-        userInitiatedDisconnect = false
-        reconnectAttempt = 0
-        reconnectJob?.cancel()
-        reconnectJob = null
-        doConnect(deviceAddress)
+        val intentToken = synchronized(orchestrationLock) {
+            if (
+                lastRequestedAddress == deviceAddress &&
+                !userInitiatedDisconnect &&
+                (attemptInFlight ||
+                    _connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED))
+            ) {
+                Log.d(TAG, "coalesce duplicate connect target=$deviceAddress state=${_connectionState.value}")
+                return
+            }
+            connectionIntentToken++
+            activeAttemptToken++
+            attemptInFlight = false
+            lastRequestedAddress = deviceAddress
+            userInitiatedDisconnect = false
+            reconnectAttempt = 0
+            reconnectJob?.cancel()
+            reconnectJob = null
+            connectSetupJob?.cancel()
+            connectionIntentToken
+        }
+        doConnect(deviceAddress, intentToken)
+    }
+
+    /**
+     * 前台/lap session/扫描命中/蓝牙重开共用的立即重试入口。
+     * 仅抢占等待中的退避；已有 CONNECTING/CONNECTED attempt 时合并为 no-op。
+     */
+    fun requestImmediateReconnect(reason: String): Boolean {
+        val request = synchronized(orchestrationLock) {
+            val address = lastRequestedAddress ?: return false
+            if (userInitiatedDisconnect) return false
+            if (
+                attemptInFlight ||
+                _connectionState.value in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED)
+            ) {
+                Log.d(TAG, "coalesce immediate trigger=$reason state=${_connectionState.value}")
+                return false
+            }
+            reconnectJob?.cancel()
+            reconnectJob = null
+            address to connectionIntentToken
+        }
+        Log.d(TAG, "immediate reconnect trigger=$reason target=${request.first}")
+        doConnect(request.first, request.second)
+        return true
     }
 
     /**
      * 实际连接路径（A27 清理顺序不变）。重连路径直接走此函数,**不**复位
      * reconnectAttempt——否则退避退化为恒 1s 高频 connectGatt（design Decision 4）。
      */
-    private fun doConnect(deviceAddress: String) {
-        scope.launch {
+    private fun doConnect(deviceAddress: String, intentToken: Long) {
+        val attemptToken = synchronized(orchestrationLock) {
+            if (
+                intentToken != connectionIntentToken ||
+                userInitiatedDisconnect ||
+                lastRequestedAddress != deviceAddress ||
+                attemptInFlight
+            ) return
+            attemptInFlight = true
+            ++activeAttemptToken
+        }
+        connectSetupJob = scope.launch {
             try {
+                synchronized(orchestrationLock) {
+                    if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
+                    beforeConnectAttempt()
+                    if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
+                    onConnectAttempt(deviceAddress)
                 // A27 切设备前清旧连接（严格顺序，原子化）：
                 // 1. 先 cancel 旧 collectJob，避免旧 bleConnection 终态 state 在新连接
                 //    构造窗口内传导到 _connectionState 与 CONNECTING 竞争
@@ -104,6 +167,8 @@ class BluetoothDataSource(
                 connectionCollectJob = null
                 bleConnection?.disconnect()
                 bleConnection = null
+
+                if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) return@launch
 
                 val generation = beginConnectionGeneration()
 
@@ -142,18 +207,26 @@ class BluetoothDataSource(
                         // drop(1):跳过 BleConnection StateFlow 的 replay 初值(新实例恒 DISCONNECTED,
                         // 无信息量)——不跳过会在每次 doConnect 时误调度假重连,1s 后拆掉刚建好的连接
                         stateFlow.drop(1).collect { state ->
+                            if (!ownsAttempt(intentToken, attemptToken, deviceAddress)) {
+                                Log.d(TAG, "ignore state from old attempt=$attemptToken state=$state")
+                                return@collect
+                            }
                             Log.d(TAG, "BleConnection 状态变化: $state")
                             _connectionState.value = state
                             when (state) {
                                 ConnectionState.CONNECTED -> {
                                     // 连上即复位退避(下次意外断开从 1s 重来,spec R1 Scenario 2)
                                     // 并取消任何挂起重连(防御残留假重连拆好链)
-                                    reconnectAttempt = 0
-                                    reconnectJob?.cancel()
-                                    reconnectJob = null
+                                    synchronized(orchestrationLock) {
+                                        attemptInFlight = false
+                                        reconnectAttempt = 0
+                                        reconnectJob?.cancel()
+                                        reconnectJob = null
+                                    }
                                 }
                                 // 意外断开(远端断/连接超时)→ 调度重连(spec R1)
                                 ConnectionState.DISCONNECTED -> {
+                                    synchronized(orchestrationLock) { attemptInFlight = false }
                                     invalidateConnectionGeneration(isStale = false)
                                     maybeScheduleReconnect()
                                 }
@@ -163,8 +236,9 @@ class BluetoothDataSource(
                     }
                 }
 
-                bleConnection?.connect()
-                Log.d(TAG, "BleConnection.connect() 调用完成")
+                    bleConnection?.connect()
+                    Log.d(TAG, "BleConnection.connect() 调用完成")
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "连接异常", e)
@@ -174,9 +248,25 @@ class BluetoothDataSource(
                     errorMessage = e.message
                 )
                 // 异常分支不经 collect 传导(直接赋值),需显式调度重连(design Risks 竞态条款)
-                maybeScheduleReconnect()
+                if (ownsAttempt(intentToken, attemptToken, deviceAddress)) {
+                    synchronized(orchestrationLock) { attemptInFlight = false }
+                    maybeScheduleReconnect()
+                }
             }
         }
+    }
+
+    private fun ownsAttempt(intentToken: Long, attemptToken: Long, address: String): Boolean =
+        synchronized(orchestrationLock) {
+            intentToken == connectionIntentToken &&
+                attemptToken == activeAttemptToken &&
+                !userInitiatedDisconnect &&
+                lastRequestedAddress == address
+        }
+
+    /** Manager installs scan cancellation once; every initial/retry attempt crosses this gate. */
+    internal fun installBeforeConnectAttempt(hook: () -> Unit) {
+        beforeConnectAttempt = hook
     }
 
     /**
@@ -184,24 +274,57 @@ class BluetoothDataSource(
      * guard:用户主动断开 / 无连接历史 / 已有挂起重连 → 不调度。
      */
     private fun maybeScheduleReconnect() {
-        val address = lastRequestedAddress ?: return
-        if (userInitiatedDisconnect) return
-        if (reconnectJob?.isActive == true) return
-        val delayMs = minOf(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS shl reconnectAttempt)
-        Log.d(TAG, "意外断开,${delayMs}ms 后第 ${reconnectAttempt + 1} 次自动重连 $address")
-        reconnectJob = scope.launch {
-            delay(delayMs)
-            if (userInitiatedDisconnect) return@launch // delay 期间用户断开,作废
-            reconnectAttempt = minOf(reconnectAttempt + 1, 30) // 防 shl 溢出,30 次后恒封顶
-            doConnect(address)
+        val schedule = synchronized(orchestrationLock) {
+            val address = lastRequestedAddress ?: return
+            if (userInitiatedDisconnect) return
+            if (reconnectJob != null) return
+            if (_connectionState.value != ConnectionState.DISCONNECTED) return
+            val intentToken = connectionIntentToken
+            val delayMs = reconnectDelayMs(reconnectAttempt)
+            val job = scope.launch(start = CoroutineStart.LAZY) {
+                delay(delayMs)
+                val valid = synchronized(orchestrationLock) {
+                    if (
+                        userInitiatedDisconnect ||
+                        intentToken != connectionIntentToken ||
+                        address != lastRequestedAddress ||
+                        _connectionState.value != ConnectionState.DISCONNECTED
+                    ) {
+                        false
+                    } else {
+                        reconnectJob = null
+                        reconnectAttempt = minOf(reconnectAttempt + 1, 30)
+                        true
+                    }
+                }
+                if (!valid) return@launch
+                doConnect(address, intentToken)
+            }
+            reconnectJob = job
+            Triple(job, address, delayMs)
         }
+        Log.d(TAG, "意外断开,${schedule.third}ms 后第 ${reconnectAttempt + 1} 次自动重连 ${schedule.second}")
+        schedule.first.start()
+    }
+
+    internal fun reconnectDelayMs(attempt: Int): Long {
+        val exponent = attempt.coerceIn(0, 5)
+        return minOf(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS shl exponent)
     }
 
     fun disconnect() {
         // 用户意图=想断:取消挂起重连,后续 DISCONNECTED 不再调度(spec R2)
-        userInitiatedDisconnect = true
-        reconnectJob?.cancel()
-        reconnectJob = null
+        synchronized(orchestrationLock) {
+            userInitiatedDisconnect = true
+            connectionIntentToken++
+            activeAttemptToken++
+            attemptInFlight = false
+            reconnectJob?.cancel()
+            reconnectJob = null
+            connectSetupJob?.cancel()
+            connectSetupJob = null
+            lastRequestedAddress = null
+        }
         scope.launch {
             connectionCollectJob?.cancel()
             connectionCollectJob = null

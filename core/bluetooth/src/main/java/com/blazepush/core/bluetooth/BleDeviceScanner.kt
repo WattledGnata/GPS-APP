@@ -24,7 +24,7 @@ import java.util.UUID
  */
 class BleDeviceScanner(
     private val context: Context
-) {
+) : BleScanner {
     companion object {
         private const val TAG = "BleDeviceScanner"
         private val SERVICE_UUID: UUID = UUID.fromString("00001ff8-0000-1000-8000-00805f9b34fb")
@@ -36,11 +36,11 @@ class BleDeviceScanner(
 
     // 扫描结果
     private val _scanResults = MutableStateFlow<List<ScannedDevice>>(emptyList())
-    val scanResults: StateFlow<List<ScannedDevice>> = _scanResults.asStateFlow()
+    override val scanResults: StateFlow<List<ScannedDevice>> = _scanResults.asStateFlow()
 
     // 扫描状态
     private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+    override val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
     private val bluetoothManager: BluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -53,7 +53,7 @@ class BleDeviceScanner(
     /**
      * 开始扫描BLE设备
      */
-    fun startScan() {
+    override fun startScan() {
         if (!PermissionChecker.hasScanPermission(context)) {
             Log.e(TAG, "缺少扫描权限")
             return
@@ -94,7 +94,7 @@ class BleDeviceScanner(
     /**
      * 停止扫描
      */
-    fun stopScan() {
+    override fun stopScan() {
         if (!_isScanning.value) {
             return
         }
@@ -193,7 +193,7 @@ class BleDeviceScanner(
     /**
      * 清理资源
      */
-    fun cleanup() {
+    override fun cleanup() {
         stopScan()
         deviceCache.clear()
     }
