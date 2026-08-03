@@ -350,6 +350,9 @@ class TestSessionViewModel(
     private val lapSessionMutex = Mutex()
     private var lapSessionGeneration = 0L
     private var lapSessionStartJob: Job? = null
+    private val lapTelemetryFlushScheduler = LapTelemetryFlushScheduler(viewModelScope) { sessionId ->
+        telemetryRepository.flush(sessionId)
+    }
 
     /**
      * 返回当前 active lap session id（录制引擎在 startRecording 时调用，读取当前关联的 session）。
@@ -797,6 +800,7 @@ class TestSessionViewModel(
     }
 
     private fun endActiveLapSession() {
+        lapTelemetryFlushScheduler.cancel()
         // 同步摘掉旧 id，避免立即重进/换赛道时新状态覆盖后丢失旧 Session 收尾。
         val sessionId = activeLapSessionId
         activeLapSessionId = null
@@ -860,6 +864,7 @@ class TestSessionViewModel(
         val totalDurationMs = startTs?.let { System.currentTimeMillis() - it } ?: 0L
 
         val sessionId = lapSessionMutex.withLock {
+            lapTelemetryFlushScheduler.cancel()
             val current = activeLapSessionId
             // 先关闭入口，再做 IO：REC await 与 END 交错时，后续的无挂起复核必定失败。
             isLapRecording = false
@@ -1202,12 +1207,8 @@ class TestSessionViewModel(
         _lapSession.value = updatedSession
         _latestLapRecords.value = updatedSession.completedLaps
 
-        // 4.2：检测圈速完成，5 秒后触发 settle flush
+        // 4.2：检测圈速完成并触发上报；telemetry flush 在下方每个可靠起终点 crossing 入库后调度。
         if (updatedSession.completedLaps.size > currentSession.completedLaps.size) {
-            viewModelScope.launch {
-                delay(5_000L)
-                telemetryRepository.flush()
-            }
             // livetiming-lap-upload：新完成的圈实时上报（旁路副作用；前置/失败由 orchestrator
             // 内部处理，异常不影响本地圈速记录）。每出圈顺带 flush 待传队列。
             val newLaps = updatedSession.completedLaps.drop(currentSession.completedLaps.size)
@@ -1253,6 +1254,11 @@ class TestSessionViewModel(
                             directionScore = crossing.directionScore,
                         )
                     )
+                    if (crossing.accepted &&
+                        crossing.gateType == com.blazepush.feature.test.model.track.TimingGateType.StartFinish
+                    ) {
+                        lapTelemetryFlushScheduler.schedule(lapSessionId)
+                    }
                 }
             }
         }

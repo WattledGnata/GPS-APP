@@ -7,6 +7,7 @@ package com.blazepush.core.data.repository
 import android.content.Context
 import android.util.Log
 import com.blazepush.core.data.local.binary.BinaryTelemetryWriter
+import com.blazepush.core.data.local.binary.BinaryTelemetryRecovery
 import com.blazepush.core.data.local.binary.LapTelemetryReader
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.data.local.dao.CrossingEventDao
@@ -24,9 +25,12 @@ import com.blazepush.core.domain.model.SessionVideoStats
 import com.blazepush.core.domain.model.TelemetrySessionType
 import com.blazepush.core.domain.model.VideoSegment
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
@@ -44,7 +48,9 @@ class TelemetryRepository(
     private val crossingDao: CrossingEventDao,
     // video-segment-schema round ②a：视频段一对多 DAO（attach append + 全段 cascade）
     private val videoSegmentDao: VideoSegmentDao,
+    private val telemetryIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    enum class FlushResult { FLUSHED, ALREADY_DURABLE, SESSION_CHANGED, NO_ACTIVE_SESSION }
     data class RecoveredLapSession(
         val sessionId: String,
         val lapCount: Int,
@@ -77,6 +83,9 @@ class TelemetryRepository(
     private var activeSessionType: TelemetrySessionType = TelemetrySessionType.PERFORMANCE_TEST
     // persist-session-summary-fields round 加：endSession 时需要 binary 文件路径扫 sample 派生 topSpeedKmh
     private var activeFilePath: String? = null
+    private val flushMutex = Mutex()
+    private var activeWriteSequence = 0L
+    private var durableWriteSequence = 0L
     // fix-lap-binary-ts-hygiene round 加：与 header.startTs / entity.startTs 同源的 active session 起点真壁钟，
     // 供 bridgeGpsToLapTiming 计算 sample.tsDeltaMs 的 anchor（不再用 lapAnchorTs，避免 anchor 错位）。
     // public get + private set 实现"对外只读、内部 startSession 时赋值 / endSession 时清空"语义。
@@ -122,6 +131,9 @@ class TelemetryRepository(
         activeSessionType = type
         activeFilePath = file.absolutePath
         activeSessionStartTs = startTs
+        activeWriteSequence = 0L
+        // Header creation has not crossed a force() boundary yet.
+        durableWriteSequence = -1L
         return sessionId
     }
 
@@ -129,7 +141,10 @@ class TelemetryRepository(
      * 提交一帧 sample 到 active writer 队列。
      */
     suspend fun writeSample(sample: TelemetrySample) {
-        activeWriter?.write(sample)
+        flushMutex.withLock {
+            activeWriter?.write(sample) ?: return@withLock
+            activeWriteSequence++
+        }
     }
 
     /**
@@ -154,8 +169,21 @@ class TelemetryRepository(
     /**
      * 主动 flush：等待 active writer header 回写 + force 刷盘后返回。
      */
-    suspend fun flush() {
-        activeWriter?.flush()
+    suspend fun flush(expectedSessionId: String? = activeSessionId): FlushResult {
+        if (expectedSessionId == null) return FlushResult.NO_ACTIVE_SESSION
+        return withContext(telemetryIoDispatcher) {
+            flushMutex.withLock {
+                if (activeSessionId != expectedSessionId) return@withLock FlushResult.SESSION_CHANGED
+                val writer = activeWriter ?: return@withLock FlushResult.NO_ACTIVE_SESSION
+                val targetSequence = activeWriteSequence
+                if (durableWriteSequence >= targetSequence) {
+                    return@withLock FlushResult.ALREADY_DURABLE
+                }
+                writer.flush()
+                durableWriteSequence = targetSequence
+                FlushResult.FLUSHED
+            }
+        }
     }
 
     /**
@@ -182,13 +210,19 @@ class TelemetryRepository(
      * @date 2026-05-01
      */
     suspend fun endSession(sessionId: String) {
-        val writer = activeWriter ?: return
-        val filePath = activeFilePath
-        writer.close()
-        activeWriter = null
-        activeSessionId = null
-        activeFilePath = null
-        activeSessionStartTs = null
+        val filePath = flushMutex.withLock {
+            if (activeSessionId != sessionId) return
+            val writer = activeWriter ?: return
+            val path = activeFilePath
+            withContext(telemetryIoDispatcher) { writer.close() }
+            activeWriter = null
+            activeSessionId = null
+            activeFilePath = null
+            activeSessionStartTs = null
+            activeWriteSequence = 0L
+            durableWriteSequence = 0L
+            path
+        }
         val endTs = System.currentTimeMillis()
 
         // 正常结束与冷启动恢复共享 persisted evidence 口径，防两个入口的圈数/最佳圈漂移。
@@ -223,6 +257,10 @@ class TelemetryRepository(
                     ?: error("session disappeared")
                 // 查询候选后可能被其他正常收尾路径闭环；写前二次确认保证幂等。
                 if (current.endTs > current.startTs) return@runCatching null
+
+                current.binaryFilePath.takeIf { it.isNotBlank() }?.let {
+                    BinaryTelemetryRecovery.repair(it)
+                }
 
                 val evidence = derivePersistedLapEvidence(
                     sessionId = current.sessionId,

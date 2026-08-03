@@ -171,6 +171,37 @@ class TelemetryRepositoryTest {
         assertEquals(expected.toLong(), file.length())
     }
 
+    @Test
+    fun `flush completion updates header and duplicate flush is deduplicated`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        repo.writeSample(
+            TelemetrySample(40L, 39.9, 116.4, 80.0, 90.0)
+        )
+
+        assertEquals(TelemetryRepository.FlushResult.FLUSHED, repo.flush(sessionId))
+        val entity = requireNotNull(fakeSessionDao.queryBySessionId(sessionId))
+        val header = java.io.RandomAccessFile(entity.binaryFilePath, "r").use { raf ->
+            val bytes = ByteArray(com.blazepush.core.data.local.binary.GpsBinaryFormat.HEADER_SIZE)
+            raf.readFully(bytes)
+            com.blazepush.core.data.local.binary.GpsBinaryFormat.decodeHeader(bytes)
+        }
+        assertEquals(1, header.sampleCount)
+        assertEquals(TelemetryRepository.FlushResult.ALREADY_DURABLE, repo.flush(sessionId))
+        repo.endSession(sessionId)
+    }
+
+    @Test
+    fun `delayed flush from old session cannot flush new writer`() = runTest {
+        val oldSession = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        repo.endSession(oldSession)
+        val newSession = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        repo.writeSample(TelemetrySample(40L, 39.9, 116.4, 80.0, null))
+
+        assertEquals(TelemetryRepository.FlushResult.SESSION_CHANGED, repo.flush(oldSession))
+        assertEquals(TelemetryRepository.FlushResult.FLUSHED, repo.flush(newSession))
+        repo.endSession(newSession)
+    }
+
     // --- Fake DAO 实现 ---
 
     private class FakeTelemetrySessionDao : TelemetrySessionDao {

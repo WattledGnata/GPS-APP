@@ -42,6 +42,24 @@ class LapsHomeStartPolicyTest {
     }
 
     @Test
+    fun `quick start previous track creates a fresh lap mode attempt`() {
+        val track = requireNotNull(PresetTrackCatalog().getTrack("preset-tfic-lpcc"))
+        val calls = mutableListOf<String>()
+
+        quickStartPreviousTrack(
+            track = track,
+            selectTrack = { calls += "select:${it.id}" },
+            selectLapDebugMode = { calls += "start:$it" },
+            navigateToLapLive = { calls += "navigate" },
+        )
+
+        assertEquals(
+            listOf("select:${track.id}", "start:${track.id}", "navigate"),
+            calls,
+        )
+    }
+
+    @Test
     fun `START action delegates directly without tab readiness gate`() {
         val source = readSource()
         val startAction = source.substringAfter("title = \"START LAP SESSION\"")

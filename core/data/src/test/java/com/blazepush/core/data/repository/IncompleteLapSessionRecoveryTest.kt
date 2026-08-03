@@ -7,6 +7,10 @@ import com.blazepush.core.data.local.dao.VideoSegmentDao
 import com.blazepush.core.data.local.entity.CrossingEventEntity
 import com.blazepush.core.data.local.entity.TelemetrySessionEntity
 import com.blazepush.core.data.local.entity.VideoSegmentEntity
+import com.blazepush.core.data.local.binary.GpsBinaryFormat
+import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
+import com.blazepush.core.domain.model.TelemetrySample
+import com.blazepush.core.domain.model.TelemetrySessionType
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.flowOf
@@ -16,6 +20,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.mockito.Mockito.mock
+import java.io.File
+import java.io.RandomAccessFile
 
 class IncompleteLapSessionRecoveryTest {
 
@@ -150,6 +156,40 @@ class IncompleteLapSessionRecoveryTest {
         assertEquals(1, sessions.updateSummaryCalls)
         assertEquals(1, sessions.maxConcurrentQueries)
         assertEquals(5_000L, requireNotNull(sessions.queryBySessionId("current-process")).endTs)
+    }
+
+    @Test
+    fun `cold start repairs durable sample prefix before closing interrupted session`() = runTest {
+        val file = File.createTempFile("interrupted_lap", ".bin")
+        try {
+            RandomAccessFile(file, "rw").use { raf ->
+                raf.write(GpsBinaryFormat.encodeHeader(TelemetrySessionType.LAP_SESSION, 0, 1_000L, 1_000L))
+                repeat(2) { index ->
+                    raf.write(
+                        GpsBinaryFormat.encodeSample(
+                            TelemetrySample(index * 40L, 30.0, 104.0, 90.0, null)
+                        )
+                    )
+                }
+                raf.write(ByteArray(7) { 1 })
+                raf.channel.force(true)
+            }
+            val sessions = FakeSessionDao()
+            sessions.insert(incompleteSession("crashed", 1_000L, file.absolutePath))
+
+            val report = repository(sessions, FakeCrossingDao(), FakeVideoDao())
+                .recoverIncompleteLapSessions(processStartedAtMs = 5_000L, recoveryNowMs = 10_000L)
+
+            assertEquals(listOf("crashed"), report.recovered.map { it.sessionId })
+            assertEquals(2, PerformanceTestTelemetryReader.read(file.absolutePath).size)
+            assertEquals(
+                (GpsBinaryFormat.HEADER_SIZE + 2 * GpsBinaryFormat.SAMPLE_SIZE).toLong(),
+                file.length(),
+            )
+            assertEquals(1_040L, requireNotNull(sessions.queryBySessionId("crashed")).endTs)
+        } finally {
+            file.delete()
+        }
     }
 
     private fun repository(

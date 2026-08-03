@@ -75,6 +75,8 @@ fun LapsHomeScreen(
     )
 
     val currentTrackLabel = currentTrack?.name?.zh ?: "—"
+    val lastTrack = recentTrackIds.firstOrNull()
+        ?.let { id -> availableTracks.firstOrNull { it.id == id } }
 
     Column(
         modifier = modifier
@@ -134,6 +136,22 @@ fun LapsHomeScreen(
                     )
                 },
             )
+            if (lastTrack != null) {
+                SecondaryActionPanel(
+                    title = "QUICK START · ${lastTrack.name.zh}",
+                    subtitle = "上一赛道 · 新 Session",
+                    leadingIcon = Icons.Filled.Flag,
+                    accentColor = TrackTechColors.Purple,
+                    onClick = {
+                        quickStartPreviousTrack(
+                            track = lastTrack,
+                            selectTrack = testSessionViewModel::selectTrack,
+                            selectLapDebugMode = testSessionViewModel::selectLapDebugMode,
+                            navigateToLapLive = { navController.navigate("lap_live") },
+                        )
+                    },
+                )
+            }
             SecondaryActionPanel(
                 title = "CHANGE TRACK",
                 subtitle = "切换计时赛道",
@@ -240,6 +258,17 @@ internal fun startLapSession(
     selectLapDebugMode(track.id)
     navigateToLapLive()
     return true
+}
+
+internal fun quickStartPreviousTrack(
+    track: Track,
+    selectTrack: (Track) -> Unit,
+    selectLapDebugMode: (String) -> Unit,
+    navigateToLapLive: () -> Unit,
+) {
+    selectTrack(track)
+    selectLapDebugMode(track.id)
+    navigateToLapLive()
 }
 
 @Composable

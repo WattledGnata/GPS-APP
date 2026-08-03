@@ -30,12 +30,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
 import com.blazepush.feature.test.ui.theme.NeonTheme
 import com.blazepush.feature.test.ui.tracktech.TrackTechAppShell
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.koin.android.ext.android.get
 
 class MainActivity : ComponentActivity() {
+
+    override fun onStop() {
+        super.onStop()
+        // Independent short-lived IO job: Activity destruction must not cancel the durability boundary.
+        CoroutineScope(Dispatchers.IO).launch {
+            get<TelemetryRepository>().flush()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
