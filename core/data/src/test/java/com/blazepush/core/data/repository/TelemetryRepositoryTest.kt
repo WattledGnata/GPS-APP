@@ -8,10 +8,15 @@ import com.blazepush.core.data.local.entity.TelemetrySessionEntity
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySessionType
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.Mockito.mock
@@ -200,6 +205,68 @@ class TelemetryRepositoryTest {
         assertEquals(TelemetryRepository.FlushResult.SESSION_CHANGED, repo.flush(oldSession))
         assertEquals(TelemetryRepository.FlushResult.FLUSHED, repo.flush(newSession))
         repo.endSession(newSession)
+    }
+
+    @Test
+    fun `suspended old flush cannot mark a newly published session durable`() = runTest {
+        val oldFlushEntered = CompletableDeferred<Unit>()
+        val allowOldFlushToFinish = CompletableDeferred<Unit>()
+        var flushCalls = 0
+        val controlledRepo = TelemetryRepository(
+            context,
+            fakeSessionDao,
+            fakeCrossingDao,
+            FakeVideoSegmentDao(),
+            flushWriter = { writer ->
+                flushCalls++
+                if (flushCalls == 1) {
+                    oldFlushEntered.complete(Unit)
+                    allowOldFlushToFinish.await()
+                }
+                writer.flush()
+            },
+        )
+        val oldSession = controlledRepo.startSession(TelemetrySessionType.LAP_SESSION)
+        controlledRepo.writeSample(TelemetrySample(40L, 39.9, 116.4, 80.0, null))
+
+        val oldFlush = async { controlledRepo.flush(oldSession) }
+        oldFlushEntered.await()
+        val oldEnd = launch { controlledRepo.endSession(oldSession) }
+        yield() // Queue endSession on the shared mutex before the next publication.
+        val newStart = async { controlledRepo.startSession(TelemetrySessionType.LAP_SESSION) }
+        yield()
+        assertEquals(false, oldEnd.isCompleted)
+        assertEquals(false, newStart.isCompleted)
+
+        allowOldFlushToFinish.complete(Unit)
+        assertEquals(TelemetryRepository.FlushResult.FLUSHED, oldFlush.await())
+        oldEnd.join()
+        val newSession = newStart.await()
+        controlledRepo.writeSample(TelemetrySample(40L, 30.0, 104.0, 100.0, null))
+
+        assertEquals(TelemetryRepository.FlushResult.FLUSHED, controlledRepo.flush(newSession))
+        assertEquals(2, flushCalls)
+        val newEntity = requireNotNull(fakeSessionDao.queryBySessionId(newSession))
+        val newHeader = java.io.RandomAccessFile(newEntity.binaryFilePath, "r").use { raf ->
+            val bytes = ByteArray(com.blazepush.core.data.local.binary.GpsBinaryFormat.HEADER_SIZE)
+            raf.readFully(bytes)
+            com.blazepush.core.data.local.binary.GpsBinaryFormat.decodeHeader(bytes)
+        }
+        assertEquals(1, newHeader.sampleCount)
+        controlledRepo.endSession(newSession)
+    }
+
+    @Test
+    fun `starting over an active writer fails closed without replacing it`() = runTest {
+        val oldSession = repo.startSession(TelemetrySessionType.LAP_SESSION)
+
+        val secondStart = runCatching { repo.startSession(TelemetrySessionType.LAP_SESSION) }
+
+        assertTrue(secondStart.exceptionOrNull()?.message?.contains("Cannot replace") == true)
+        assertEquals(1, fakeSessionDao.queryAll().size)
+        repo.writeSample(TelemetrySample(40L, 30.0, 104.0, 90.0, null))
+        assertEquals(TelemetryRepository.FlushResult.FLUSHED, repo.flush(oldSession))
+        repo.endSession(oldSession)
     }
 
     // --- Fake DAO 实现 ---

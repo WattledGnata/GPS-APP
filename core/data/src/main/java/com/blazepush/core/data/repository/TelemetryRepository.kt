@@ -49,6 +49,7 @@ class TelemetryRepository(
     // video-segment-schema round ②a：视频段一对多 DAO（attach append + 全段 cascade）
     private val videoSegmentDao: VideoSegmentDao,
     private val telemetryIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val flushWriter: suspend (BinaryTelemetryWriter) -> Unit = { writer -> writer.flush() },
 ) {
     enum class FlushResult { FLUSHED, ALREADY_DURABLE, SESSION_CHANGED, NO_ACTIVE_SESSION }
     data class RecoveredLapSession(
@@ -126,14 +127,29 @@ class TelemetryRepository(
 
         val writer = BinaryTelemetryWriter()
         writer.open(file.absolutePath, type, startTs)
-        activeWriter = writer
-        activeSessionId = sessionId
-        activeSessionType = type
-        activeFilePath = file.absolutePath
-        activeSessionStartTs = startTs
-        activeWriteSequence = 0L
-        // Header creation has not crossed a force() boundary yet.
-        durableWriteSequence = -1L
+        val published = flushMutex.withLock {
+            if (activeWriter != null) {
+                false
+            } else {
+                activeWriter = writer
+                activeSessionId = sessionId
+                activeSessionType = type
+                activeFilePath = file.absolutePath
+                activeSessionStartTs = startTs
+                activeWriteSequence = 0L
+                // Header creation has not crossed a force() boundary yet.
+                durableWriteSequence = -1L
+                true
+            }
+        }
+        if (!published) {
+            // Existing callers end the active session before starting another. Fail closed instead
+            // of silently replacing/leaking its writer if that contract is violated concurrently.
+            withContext(telemetryIoDispatcher) { writer.close() }
+            sessionDao.deleteSession(entity)
+            file.delete()
+            error("Cannot replace an active telemetry session")
+        }
         return sessionId
     }
 
@@ -169,17 +185,21 @@ class TelemetryRepository(
     /**
      * 主动 flush：等待 active writer header 回写 + force 刷盘后返回。
      */
-    suspend fun flush(expectedSessionId: String? = activeSessionId): FlushResult {
-        if (expectedSessionId == null) return FlushResult.NO_ACTIVE_SESSION
+    suspend fun flush(expectedSessionId: String? = null): FlushResult {
         return withContext(telemetryIoDispatcher) {
             flushMutex.withLock {
-                if (activeSessionId != expectedSessionId) return@withLock FlushResult.SESSION_CHANGED
+                val sessionId = expectedSessionId ?: activeSessionId
+                    ?: return@withLock FlushResult.NO_ACTIVE_SESSION
+                if (activeSessionId != sessionId) return@withLock FlushResult.SESSION_CHANGED
                 val writer = activeWriter ?: return@withLock FlushResult.NO_ACTIVE_SESSION
                 val targetSequence = activeWriteSequence
                 if (durableWriteSequence >= targetSequence) {
                     return@withLock FlushResult.ALREADY_DURABLE
                 }
-                writer.flush()
+                flushWriter(writer)
+                if (activeSessionId != sessionId || activeWriter !== writer) {
+                    return@withLock FlushResult.SESSION_CHANGED
+                }
                 durableWriteSequence = targetSequence
                 FlushResult.FLUSHED
             }
