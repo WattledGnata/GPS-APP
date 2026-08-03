@@ -1,7 +1,6 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,11 +32,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.ui.tracktech.format.formatDate
@@ -56,18 +53,12 @@ fun LapsHomeScreen(
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
-    val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
     val recentTrackIds by testSessionViewModel.recentTrackIds.collectAsState()
     val bestLapForCurrent by testSessionViewModel.bestLapForCurrentTrack.collectAsState()
     var showSelectTrackSheet by remember { mutableStateOf(false) }
-
-    val readiness = remember(connectionState, gpsData, dataQuality) {
-        TabGatingPolicy.computeTabReadiness(connectionState, gpsData, dataQuality)
-    }
-    val context = LocalContext.current
 
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT ||
         dataQuality.overall == QualityLevel.GOOD
@@ -136,23 +127,11 @@ fun LapsHomeScreen(
                 subtitle = "BEGIN TIMING",
                 leadingIcon = Icons.Filled.Flag,
                 onClick = {
-                    if (readiness.canEnterTestFlow) {
-                        val track = testSessionViewModel.currentSelectedTrack.value
-                        if (track != null) {
-                            testSessionViewModel.selectLapDebugMode(track.id)
-                            navController.navigate("lap_live")
-                        }
-                    } else {
-                        Toast.makeText(
-                            context,
-                            "Connect a GPS device first",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                        onTabSelected(TabIndex.Device)
-                        if (connectionState == ConnectionState.DISCONNECTED) {
-                            TrackTechEventBus.requestShowScanSheet()
-                        }
-                    }
+                    startLapSession(
+                        track = testSessionViewModel.currentSelectedTrack.value,
+                        selectLapDebugMode = testSessionViewModel::selectLapDebugMode,
+                        navigateToLapLive = { navController.navigate("lap_live") },
+                    )
                 },
             )
             SecondaryActionPanel(
@@ -245,6 +224,22 @@ fun LapsHomeScreen(
             // title 走默认值「设置计时赛道」—— 钉死 Laps "动作"语义
         )
     }
+}
+
+/**
+ * Laps START policy: a selected track is the only entry prerequisite.
+ * GPS readiness remains observable on the home/live UI and gates timing samples, not session
+ * creation or navigation.
+ */
+internal fun startLapSession(
+    track: Track?,
+    selectLapDebugMode: (String) -> Unit,
+    navigateToLapLive: () -> Unit,
+): Boolean {
+    if (track == null) return false
+    selectLapDebugMode(track.id)
+    navigateToLapLive()
+    return true
 }
 
 @Composable
