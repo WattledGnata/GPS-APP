@@ -1,9 +1,13 @@
 package com.blazepush
 // @IgnoreFormatCheck
 
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,8 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
@@ -100,8 +108,10 @@ private fun PermissionRequestScreen(
     onAllGranted: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var pendingPermissions by remember(permissions) { mutableStateOf(permissions) }
+    var showSettingsAction by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -110,15 +120,42 @@ private fun PermissionRequestScreen(
             PermissionRequestOutcome.AllGranted -> onAllGranted()
             is PermissionRequestOutcome.MissingPermissions -> {
                 pendingPermissions = outcome.permissions
-                Toast.makeText(context, "仍缺少权限，请继续授权", Toast.LENGTH_LONG).show()
+                val activity = context as? Activity
+                showSettingsAction = activity != null && outcome.permissions.any {
+                    !activity.shouldShowRequestPermissionRationale(it)
+                }
+                val message = if (showSettingsAction) {
+                    "系统已不再弹出授权窗口，请到应用设置开启权限"
+                } else {
+                    "仍缺少权限，请继续授权"
+                }
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    LaunchedEffect(pendingPermissions) {
-        if (pendingPermissions.isNotEmpty()) {
+    LaunchedEffect(pendingPermissions, showSettingsAction) {
+        if (pendingPermissions.isNotEmpty() && !showSettingsAction) {
             permissionLauncher.launch(pendingPermissions.toTypedArray())
         }
+    }
+
+    // 从应用设置返回时自动复检，不要求用户再次杀进程或反复点按钮。
+    DisposableEffect(lifecycleOwner, showSettingsAction) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && showSettingsAction) {
+                val stillMissing = pendingPermissions.filter {
+                    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+                }
+                if (stillMissing.isEmpty()) {
+                    onAllGranted()
+                } else {
+                    pendingPermissions = stillMissing
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Column(
@@ -142,8 +179,22 @@ private fun PermissionRequestScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Button(onClick = { permissionLauncher.launch(pendingPermissions.toTypedArray()) }) {
-            Text("继续授权")
+        Button(onClick = {
+            if (showSettingsAction) {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        },
+                    )
+                }.onFailure {
+                    Toast.makeText(context, "无法打开系统设置，请手动为 BlazePush 开启权限", Toast.LENGTH_LONG).show()
+                }
+            } else {
+                permissionLauncher.launch(pendingPermissions.toTypedArray())
+            }
+        }) {
+            Text(if (showSettingsAction) "打开应用设置" else "继续授权")
         }
     }
 }

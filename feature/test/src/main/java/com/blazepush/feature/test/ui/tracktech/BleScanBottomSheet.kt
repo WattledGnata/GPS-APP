@@ -73,6 +73,7 @@ fun BleScanBottomSheet(
     visible: Boolean,
     onDismiss: () -> Unit,
     gpsViewModel: GpsDataViewModel,
+    onScanAgain: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (!visible) return
@@ -195,7 +196,7 @@ fun BleScanBottomSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = !isScanning) { gpsViewModel.startScan() }
+                    .clickable(enabled = !isScanning, onClick = onScanAgain)
                     .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,

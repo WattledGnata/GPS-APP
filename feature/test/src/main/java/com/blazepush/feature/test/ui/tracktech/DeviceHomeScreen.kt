@@ -1,6 +1,17 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -49,12 +61,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavController
 import com.blazepush.core.data.model.displayName
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.core.domain.permission.PermissionRequestOutcome
+import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
 import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import kotlinx.coroutines.flow.first
@@ -120,6 +139,73 @@ fun DeviceHomeScreen(
 
     var showSheet by remember { mutableStateOf(false) }
     var showSavedDevicesSheet by remember { mutableStateOf(false) }
+    var showBluetoothSettingsDialog by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val activity = context.findActivity()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val requiredBluetoothPermissions = remember {
+        RequiredBluetoothPermissions.forSdk(Build.VERSION.SDK_INT)
+    }
+    var pendingScanAfterPermission by remember { mutableStateOf(false) }
+    var pendingPermissionRequest by remember { mutableStateOf(emptyList<String>()) }
+
+    fun hasAllBluetoothPermissions(): Boolean = requiredBluetoothPermissions.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun startScanNow() {
+        pendingScanAfterPermission = false
+        showSheet = true
+        gpsViewModel.startScan()
+    }
+
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        when (val outcome = PermissionRequestOutcome.from(pendingPermissionRequest, result)) {
+            PermissionRequestOutcome.AllGranted -> startScanNow()
+            is PermissionRequestOutcome.MissingPermissions -> {
+                val permanentlyDenied = activity != null && outcome.permissions.any {
+                    !activity.shouldShowRequestPermissionRationale(it)
+                }
+                if (permanentlyDenied) {
+                    showBluetoothSettingsDialog = true
+                } else {
+                    pendingScanAfterPermission = false
+                    Toast.makeText(context, "需要蓝牙和位置权限才能扫描 GPS 设备", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    val requestScan: () -> Unit = {
+        val missingPermissions = requiredBluetoothPermissions.filter {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingPermissions.isEmpty()) {
+            startScanNow()
+        } else {
+            pendingScanAfterPermission = true
+            pendingPermissionRequest = missingPermissions
+            bluetoothPermissionLauncher.launch(missingPermissions.toTypedArray())
+        }
+    }
+
+    // 从系统设置返回时复检；若用户已补齐权限，直接完成刚才被拦住的扫描动作。
+    DisposableEffect(lifecycleOwner, pendingScanAfterPermission) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                pendingScanAfterPermission &&
+                hasAllBluetoothPermissions()
+            ) {
+                showBluetoothSettingsDialog = false
+                startScanNow()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // 首开车手名引导（first-launch-driver-prompt capability）：仅首次启动弹一次。
     // 弹出即置 flag（不论用户选哪个 / 是否真设名），保证只弹一次。
@@ -152,8 +238,7 @@ fun DeviceHomeScreen(
     // 改由 Shell 持有 pending state，本页组合后消费并 reset。
     LaunchedEffect(pendingShowScanSheet) {
         if (pendingShowScanSheet) {
-            showSheet = true
-            gpsViewModel.startScan()
+            requestScan()
             onPendingShowScanSheetConsumed()
         }
     }
@@ -215,10 +300,7 @@ fun DeviceHomeScreen(
             connectionState = connectionState,
             isTestReady = gpsData.isTestReady,
             deviceName = connectedDeviceName ?: "No device",
-            onScanClick = {
-                showSheet = true
-                gpsViewModel.startScan()
-            },
+            onScanClick = requestScan,
             onDisconnectClick = {
                 gpsViewModel.disconnect()
             },
@@ -266,7 +348,39 @@ fun DeviceHomeScreen(
         visible = showSheet,
         onDismiss = { showSheet = false },
         gpsViewModel = gpsViewModel,
+        onScanAgain = requestScan,
     )
+
+    if (showBluetoothSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showBluetoothSettingsDialog = false
+                pendingScanAfterPermission = false
+            },
+            title = { Text("需要蓝牙权限") },
+            text = { Text("系统已不再弹出授权窗口。请到应用设置中开启“附近设备”和位置权限，返回后会自动继续扫描。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            },
+                        )
+                    }.onFailure {
+                        pendingScanAfterPermission = false
+                        Toast.makeText(context, "无法打开系统设置，请手动为 BlazePush 开启蓝牙权限", Toast.LENGTH_LONG).show()
+                    }
+                }) { Text("打开设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showBluetoothSettingsDialog = false
+                    pendingScanAfterPermission = false
+                }) { Text("取消") }
+            },
+        )
+    }
 
     // ble-device-memory（design Decision 5）：已保存设备管理 sheet
     SavedDevicesSheet(
@@ -274,6 +388,12 @@ fun DeviceHomeScreen(
         onDismiss = { showSavedDevicesSheet = false },
         gpsViewModel = gpsViewModel,
     )
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
