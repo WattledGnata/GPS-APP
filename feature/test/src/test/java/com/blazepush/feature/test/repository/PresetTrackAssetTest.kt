@@ -23,6 +23,36 @@ class PresetTrackAssetTest {
         )
     }
 
+    @Test
+    fun ningboVectorDrawableExistsAndContainsOnlyLocalTrackTechGeometry() {
+        val drawable = File(projectRoot(), "feature/test/src/main/res/drawable/track_preview_ningbo.xml")
+        assertTrue("NIC vector drawable must exist at ${drawable.absolutePath}", drawable.exists())
+
+        val xml = drawable.readText()
+        assertTrue(xml.contains("#FF67E8F9"))
+        assertTrue(xml.contains("android:strokeLineCap=\"round\""))
+        assertTrue(xml.contains("android:strokeLineJoin=\"round\""))
+        assertTrue(xml.contains("android:pathData="))
+        assertTrue(!xml.contains("51gt3", ignoreCase = true))
+        val withoutAndroidNamespace = xml.replace("http://schemas.android.com/apk/res/android", "")
+        assertTrue(!withoutAndroidNamespace.contains("http://") && !withoutAndroidNamespace.contains("https://"))
+    }
+
+    @Test
+    fun v1AutoworldVectorDrawableExistsAndContainsOnlyLocalTrackTechGeometry() {
+        val drawable = File(projectRoot(), "feature/test/src/main/res/drawable/track_preview_v1_autoworld.xml")
+        assertTrue("V1 Autoworld vector drawable must exist at ${drawable.absolutePath}", drawable.exists())
+
+        val xml = drawable.readText()
+        assertTrue(xml.contains("#FF67E8F9"))
+        assertTrue(xml.contains("android:strokeLineCap=\"round\""))
+        assertTrue(xml.contains("android:strokeLineJoin=\"round\""))
+        assertTrue(xml.contains("android:pathData="))
+        assertTrue(!xml.contains("51gt3", ignoreCase = true))
+        val withoutAndroidNamespace = xml.replace("http://schemas.android.com/apk/res/android", "")
+        assertTrue(!withoutAndroidNamespace.contains("http://") && !withoutAndroidNamespace.contains("https://"))
+    }
+
     private fun projectRoot(): File {
         val classesDir = File(javaClass.protectionDomain.codeSource.location.toURI())
         val userDir = File(System.getProperty("user.dir"))
