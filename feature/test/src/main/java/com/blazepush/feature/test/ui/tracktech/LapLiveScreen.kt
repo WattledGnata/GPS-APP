@@ -57,6 +57,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,6 +119,7 @@ fun LapLiveScreen(
     sessionViewModel: TestSessionViewModel = koinViewModel(),
     recordingEngine: CameraRecordingEngine = koinInject(),
     recordingPrefsRepository: RecordingPreferencesRepository = koinInject(),
+    autoStartRecording: Boolean = false,
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -194,12 +196,19 @@ fun LapLiveScreen(
     var savingVideo by remember { mutableStateOf(false) }
     // REC 先 await Session Room 持久化。END 必须先 join 这个短任务，避免“结束后才启动 CameraX”。
     var recordingStartJob by remember { mutableStateOf<Job?>(null) }
+    // Navigation intent is consumed once. Saveable state prevents rotation/recomposition from replaying REC.
+    var autoStartPending by rememberSaveable(autoStartRecording) { mutableStateOf(autoStartRecording) }
+    var autoStartAttempted by rememberSaveable { mutableStateOf(false) }
+    var autoStartFailureReported by rememberSaveable { mutableStateOf(false) }
+    var cameraBindingReady by remember { mutableStateOf(false) }
+    var cameraBindCallbackGeneration by remember { mutableLongStateOf(0L) }
     val trackName = if (isDebugCapture) "DEBUG 自由采集" else track?.name?.zh ?: "—"
 
     // camera-preview-in-laplivescreen round v2（横滑独立预览页返工）：
     // 页 0 = 纯 HUD（驾驶页，绝不开相机），页 1 = 相机取景页（仅在该页 current 时才绑相机 = 省电省热）。
     // hasCamera 降级 gate 查一次；cameraPermissionGranted 由懒请求 launcher 回填。
     var hasCamera by remember { mutableStateOf(false) }
+    var cameraAvailabilityResolved by remember { mutableStateOf(false) }
     var cameraPermissionGranted by remember {
         mutableStateOf(
             RequiredCameraPermissions.forSdk(Build.VERSION.SDK_INT).all {
@@ -213,6 +222,7 @@ fun LapLiveScreen(
     LaunchedEffect(Unit) {
         CameraAvailability.hasCamera(context) { available ->
             hasCamera = available
+            cameraAvailabilityResolved = true
             FileLogger.d("CamPreview", "hasCamera=$available")
         }
     }
@@ -231,6 +241,10 @@ fun LapLiveScreen(
             }
             is PermissionRequestOutcome.MissingPermissions -> {
                 cameraPermissionGranted = false
+                if (autoStartPending) {
+                    autoStartPending = false
+                    autoStartAttempted = true
+                }
                 FileLogger.d("CamPreview", "permission MissingPermissions → cameraPermissionGranted=false")
                 val activity = context.findActivity()
                 // 永久拒绝（!shouldShowRequestPermissionRationale）→ 引导跳 app 设置页（spec MUST 3）。
@@ -269,9 +283,9 @@ fun LapLiveScreen(
     }
 
     // 横滑到预览页（settledPage==1）且有相机但未授权 → 懒请求一次（spec MUST 进预览页懒请求）。
-    LaunchedEffect(pagerState.settledPage, hasCamera, cameraPermissionGranted) {
+    LaunchedEffect(pagerState.settledPage, hasCamera, cameraPermissionGranted, autoStartPending) {
         FileLogger.d("CamPreview", "settledPage=${pagerState.settledPage} hasCamera=$hasCamera granted=$cameraPermissionGranted")
-        if (pagerState.settledPage == 1 && hasCamera && !cameraPermissionGranted) {
+        if ((pagerState.settledPage == 1 || autoStartPending) && hasCamera && !cameraPermissionGranted) {
             FileLogger.d("CamPreview", "entered preview page without permission → lazy request")
             cameraPermissionLauncher.launch(requestedCameraPermissions.toTypedArray())
         }
@@ -288,22 +302,84 @@ fun LapLiveScreen(
     // （此时 await 已 resume、即将 popBackStack，unbind 安全）。
     val isRecordingActive = recordingState is RecordingState.Starting ||
         recordingState is RecordingState.Recording || recordingState is RecordingState.Stopping
-    val shouldBind = (pagerState.settledPage == 1 || isRecordingActive) && hasCamera && cameraPermissionGranted
+    val shouldBind = (pagerState.settledPage == 1 || isRecordingActive || autoStartPending) &&
+        hasCamera && cameraPermissionGranted
     // recording-params-config-screen round：key 加 recordingConfig → 用户改参数返回时 config 变 → 重跑 effect →
     // 引擎 boundConfig != config → rebind 应用新参数（design Decision 7）。同 config 抖动仍幂等不 rebind。
     LaunchedEffect(shouldBind, recordingConfig) {
+        val callbackGeneration = ++cameraBindCallbackGeneration
+        cameraBindingReady = false
         if (shouldBind) {
             FileLogger.d(
                 "CamRec",
                 "bind: shouldBind=true settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive config=$recordingConfig → 绑定 camera（screen lifecycle）",
             )
-            recordingEngine.bind(screenLifecycleOwner, context, recordingConfig)
+            recordingEngine.bind(screenLifecycleOwner, context, recordingConfig) { ready ->
+                if (isCurrentAutoBindCallback(callbackGeneration, cameraBindCallbackGeneration)) {
+                    cameraBindingReady = ready
+                    if (!ready && autoStartPending) {
+                        autoStartPending = false
+                        autoStartAttempted = true
+                    }
+                }
+            }
         } else {
             FileLogger.d(
                 "CamRec",
                 "unbind: shouldBind=false settledPage=${pagerState.settledPage} isRecordingActive=$isRecordingActive hasCamera=$hasCamera granted=$cameraPermissionGranted",
             )
             recordingEngine.unbind(context, reason = "shouldBind=false settledPage=${pagerState.settledPage}")
+        }
+    }
+
+    // WP2: one-shot asynchronous auto REC. START/navigation already happened; every failure below is
+    // recording-only feedback and never ends or gates the lap Session/timing flow.
+    LaunchedEffect(
+        autoStartPending,
+        cameraAvailabilityResolved,
+        hasCamera,
+        cameraPermissionGranted,
+        cameraBindingReady,
+        isRecordingActive,
+    ) {
+        if (autoStartPending && cameraAvailabilityResolved && !hasCamera) {
+            autoStartPending = false
+            autoStartAttempted = true
+            Toast.makeText(context, R.string.record_this_session_camera_unavailable, Toast.LENGTH_LONG).show()
+        } else if (autoStartPending && isRecordingActive) {
+            // Manual REC won the race; consume the same Session intent and never replay it after STOP.
+            autoStartPending = false
+            autoStartAttempted = true
+        } else if (
+            shouldAttemptAutoRecording(
+                requested = autoStartPending,
+                cameraAvailabilityResolved = cameraAvailabilityResolved,
+                hasCamera = hasCamera,
+                permissionGranted = cameraPermissionGranted,
+                cameraBindingReady = cameraBindingReady,
+                recordingActive = isRecordingActive,
+                alreadyAttempted = autoStartAttempted,
+            )
+        ) {
+            val sessionId = sessionViewModel.prepareActiveLapSessionForRecording()
+            if (sessionId == null || !sessionViewModel.isActiveLapSession(sessionId)) {
+                autoStartPending = false
+                autoStartAttempted = true
+                FileLogger.e("CamRec", "auto REC fail closed: lap session 未激活/已结束，计时继续")
+                Toast.makeText(context, R.string.record_this_session_start_failed, Toast.LENGTH_LONG).show()
+                autoStartFailureReported = true
+            } else {
+                autoStartPending = false
+                autoStartAttempted = true
+                recordingEngine.startRecording(context, sessionId)
+            }
+        }
+    }
+
+    LaunchedEffect(recordingState, autoStartAttempted, autoStartFailureReported) {
+        if (autoStartAttempted && !autoStartFailureReported && recordingState is RecordingState.Error) {
+            autoStartFailureReported = true
+            Toast.makeText(context, R.string.record_this_session_start_failed, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -441,6 +517,20 @@ fun LapLiveScreen(
         }
     }
 }
+
+internal fun shouldAttemptAutoRecording(
+    requested: Boolean,
+    cameraAvailabilityResolved: Boolean,
+    hasCamera: Boolean,
+    permissionGranted: Boolean,
+    cameraBindingReady: Boolean,
+    recordingActive: Boolean,
+    alreadyAttempted: Boolean,
+): Boolean = requested && cameraAvailabilityResolved && hasCamera && permissionGranted &&
+    cameraBindingReady && !recordingActive && !alreadyAttempted
+
+internal fun isCurrentAutoBindCallback(callbackGeneration: Long, currentGeneration: Long): Boolean =
+    callbackGeneration == currentGeneration
 
 /**
  * 页 0 = 纯 HUD 驾驶页（top strip / abnormal banner 或 Lap2x2Dashboard / HOLD TO END）。

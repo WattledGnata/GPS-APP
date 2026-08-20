@@ -10,8 +10,8 @@
     <string name="screen_records">记录</string>
     <string name="action_help">帮助</string>
     <string name="action_settings">设置</string>
-    <string name="action_start_lap_session">开始圈速 Session</string>
-    <string name="action_begin_timing">开始计时</string>
+    <string name="action_start_lap_session">开始计圈</string>
+    <string name="action_begin_timing">立即创建 Session；GPS 就绪后自动计时</string>
     <string name="action_change_track">更换赛道</string>
     <string name="action_change_track_detail">切换计时赛道</string>
     <string name="action_quick_start">快速开始 · %1$s</string>
@@ -49,6 +49,23 @@
     <string name="quality_weak_signal">信号较弱</string>
     <string name="quality_no_signal">无信号</string>
     <string name="speed_status_ready">就绪</string>
+
+    <string name="label_current_track">当前赛道</string>
+    <string name="label_no_track_selected">未选择赛道</string>
+    <string name="track_select_prompt">点击选择计时赛道</string>
+    <string name="track_summary">%1$.3f km · %2$d 个计时门</string>
+    <string name="record_this_session_title">本次录像</string>
+    <string name="record_this_session_off_detail">仅本次 Session · 默认关闭</string>
+    <string name="record_this_session_on_detail">已开启 · 进入后异步启动，不影响计时</string>
+    <string name="record_this_session_permission_denied">未获得相机和麦克风权限，本次录像保持关闭</string>
+    <string name="record_this_session_camera_unavailable">没有可用相机，本次录像保持关闭</string>
+    <string name="record_this_session_start_failed">录像未能启动，圈速 Session 与计时继续</string>
+    <string name="toggle_on">开启</string>
+    <string name="toggle_off">关闭</string>
+    <string name="last_session_title">上一次 SESSION</string>
+    <string name="last_session_empty">当前赛道还没有已完成的 Session</string>
+    <string name="last_session_summary">%1$d 圈 · 最佳 %2$s</string>
+    <string name="action_run_again">再跑一次</string>
 
     <string name="gps_readiness_waiting_device_title">连接 GPS 设备</string>
     <string name="gps_readiness_waiting_device_detail">BLE 未连接，请先扫描并连接设备</string>

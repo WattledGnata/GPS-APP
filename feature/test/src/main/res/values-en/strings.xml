@@ -10,8 +10,8 @@
     <string name="screen_records">Records</string>
     <string name="action_help">Help</string>
     <string name="action_settings">Settings</string>
-    <string name="action_start_lap_session">START LAP SESSION</string>
-    <string name="action_begin_timing">BEGIN TIMING</string>
+    <string name="action_start_lap_session">START LAPPING</string>
+    <string name="action_begin_timing">Creates the Session now; timing arms when GPS is ready</string>
     <string name="action_change_track">CHANGE TRACK</string>
     <string name="action_change_track_detail">Switch timing track</string>
     <string name="action_quick_start">QUICK START · %1$s</string>
@@ -49,6 +49,23 @@
     <string name="quality_weak_signal">Weak signal</string>
     <string name="quality_no_signal">No signal</string>
     <string name="speed_status_ready">Ready</string>
+
+    <string name="label_current_track">CURRENT TRACK</string>
+    <string name="label_no_track_selected">NO TRACK SELECTED</string>
+    <string name="track_select_prompt">Tap to select a timing track</string>
+    <string name="track_summary">%1$.3f km · %2$d timing gates</string>
+    <string name="record_this_session_title">RECORD THIS SESSION</string>
+    <string name="record_this_session_off_detail">This Session only · Off by default</string>
+    <string name="record_this_session_on_detail">On · Starts asynchronously without blocking timing</string>
+    <string name="record_this_session_permission_denied">Camera and microphone permission not granted; recording stays off</string>
+    <string name="record_this_session_camera_unavailable">No camera is available; recording stays off</string>
+    <string name="record_this_session_start_failed">Recording could not start; the Lap Session and timing continue</string>
+    <string name="toggle_on">ON</string>
+    <string name="toggle_off">OFF</string>
+    <string name="last_session_title">LAST SESSION</string>
+    <string name="last_session_empty">No completed Session for this track yet</string>
+    <string name="last_session_summary">%1$d laps · Best %2$s</string>
+    <string name="action_run_again">RUN AGAIN</string>
 
     <string name="gps_readiness_waiting_device_title">CONNECT GPS DEVICE</string>
     <string name="gps_readiness_waiting_device_detail">BLE disconnected; scan and connect a device</string>

@@ -168,10 +168,19 @@ fun TrackTechAppShell() {
                 composable("settings") {
                     SettingsScreen(navController = navController)
                 }
-                composable("lap_live") {
+                composable(
+                    route = "lap_live?autoRecord={autoRecord}",
+                    arguments = listOf(
+                        navArgument("autoRecord") {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
+                    ),
+                ) { backStackEntry ->
                     LapLiveScreen(
                         navController = navController,
                         sessionViewModel = sessionViewModel,
+                        autoStartRecording = backStackEntry.arguments?.getBoolean("autoRecord") == true,
                     )
                 }
                 composable(

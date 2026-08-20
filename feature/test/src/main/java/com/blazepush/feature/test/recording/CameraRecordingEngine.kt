@@ -102,6 +102,8 @@ class CameraRecordingEngine(
     // Bug B 修复：bind/unbind 幂等守卫，防 isRecording key 抖动触发重复 bind 打断录制。
     private var isBound = false
     private var boundLifecycleOwner: LifecycleOwner? = null
+    // 每次真实 bind / unbind 递增；旧异步 listener 只能回调失败，不得覆盖新请求的句柄。
+    private var bindRequestGeneration = 0L
 
     // recording-params-config-screen round：
     // - boundConfig 记当前生效 config，供 startRecording 读 audioEnabled + 幂等守卫比对（config 变才 rebind）
@@ -160,23 +162,32 @@ class CameraRecordingEngine(
      * @param lifecycleOwner screen 级 LifecycleOwner（Activity lifecycle，非 page Composable）
      * @param context        Application / Activity context
      * @param config         录制配置
+     * @param onReady        true 表示 videoCapture 已赋值可录；false 表示本次 bind 失败或已过期
      */
     @MainThread
     fun bind(
         lifecycleOwner: LifecycleOwner,
         context: Context,
         config: RecordingConfig = RecordingConfig.DEFAULT,
+        onReady: (Boolean) -> Unit = {},
     ) {
         // Bug B 修复：幂等守卫——同一 lifecycleOwner + 同 config 已绑定时直接 no-op，防 isRecording key 抖动重复 bind 打断录制。
         // config 变化（用户改录制参数返回）时不 no-op，落到下方重新 bind 应用新参数（design Decision 7）。
         if (isBound && boundLifecycleOwner === lifecycleOwner && boundConfig == config) {
             FileLogger.d(TAG, "bind: no-op（已绑定同一 lifecycleOwner + 同 config），幂等跳过")
+            onReady(true)
             return
         }
         FileLogger.d(TAG, "bind: lifecycleOwner=${lifecycleOwner::class.simpleName} config=$config isBound=$isBound")
+        val requestGeneration = ++bindRequestGeneration
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
+            if (!isCurrentCameraBindRequest(requestGeneration, bindRequestGeneration)) {
+                FileLogger.d(TAG, "bind: stale callback ignored generation=$requestGeneration current=$bindRequestGeneration")
+                onReady(false)
+                return@addListener
+            }
             val bindResult = runCatching {
                 val cameraProvider = cameraProviderFuture.get()
 
@@ -254,6 +265,7 @@ class CameraRecordingEngine(
                 } else {
                     FileLogger.d(TAG, "bind: Preview+VideoCapture 双 use-case 绑定 OK（surface 待 attachPreviewSurface）")
                 }
+                onReady(true)
             }.onFailure { t ->
                 preview = null
                 videoCapture = null
@@ -264,6 +276,7 @@ class CameraRecordingEngine(
                 val msg = "bind 失败: ${t.message}"
                 _recordingState.value = RecordingState.Error(msg)
                 FileLogger.e(TAG, msg, t)
+                onReady(false)
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -278,6 +291,7 @@ class CameraRecordingEngine(
      */
     @MainThread
     fun unbind(context: Context, reason: String = "省电释放") {
+        bindRequestGeneration++
         // Bug B 修复：幂等守卫——未绑定时直接 no-op，防重复 unbind。
         if (!isBound) {
             FileLogger.d(TAG, "unbind: no-op（未绑定），幂等跳过 reason=$reason")
@@ -783,3 +797,6 @@ class CameraRecordingEngine(
         }
     }
 }
+
+internal fun isCurrentCameraBindRequest(requestGeneration: Long, currentGeneration: Long): Boolean =
+    requestGeneration == currentGeneration
