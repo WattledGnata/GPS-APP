@@ -25,7 +25,6 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Flag
@@ -151,12 +150,6 @@ fun LapsHomeScreen(
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-            )
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                contentDescription = stringResource(R.string.action_help),
-                tint = TrackTechColors.TextSecondary,
-                modifier = Modifier.size(20.dp),
             )
         }
 

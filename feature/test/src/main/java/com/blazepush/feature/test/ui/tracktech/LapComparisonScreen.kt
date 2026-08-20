@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.components.LapSeries
 import com.blazepush.feature.test.ui.components.MultiLapSpeedChart
 import com.blazepush.feature.test.ui.components.nearestSampleByElapsed
@@ -152,7 +154,7 @@ fun LapComparisonScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "SESSION HAS < 2 VALID LAPS",
+                    text = stringResource(R.string.comparison_not_enough_laps),
                     style = TrackTechTypography.ScoreSmall,
                     color = TrackTechColors.TextMuted,
                     maxLines = 1,
@@ -176,7 +178,7 @@ fun LapComparisonScreen(
                     )
                 }
                 item {
-                    ChartCard(title = "SPEED OVERLAY") {
+                    ChartCard(title = stringResource(R.string.comparison_speed_overlay)) {
                         // 降级态（Risk 2）：series.size < 2 时占位，不画图（if/else，不 early-return）。
                         if (series.size < 2) {
                             Box(
@@ -186,7 +188,7 @@ fun LapComparisonScreen(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
-                                    text = "SELECT 2+ LAPS TO COMPARE",
+                                    text = stringResource(R.string.comparison_select_two_hint),
                                     style = TrackTechTypography.ScoreSmall,
                                     color = TrackTechColors.TextMuted,
                                     maxLines = 1,
@@ -206,7 +208,7 @@ fun LapComparisonScreen(
                     }
                 }
                 item {
-                    ChartCard(title = "LEGEND") {
+                    ChartCard(title = stringResource(R.string.comparison_legend)) {
                         LapCompareLegend(
                             series = series,
                             selectableLaps = selectableLaps,
@@ -291,13 +293,13 @@ private fun LapCompareHeader(onBack: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.detail_back),
                 tint = TrackTechColors.TextPrimary,
             )
         }
         Spacer(Modifier.size(12.dp))
         Text(
-            text = "LAP COMPARE",
+            text = stringResource(R.string.comparison_title),
             style = TrackTechTypography.RacingTitleMedium,
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
@@ -342,7 +344,7 @@ private fun LapSelectionChips(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            text = "SELECT 2-4 LAPS",
+            text = stringResource(R.string.comparison_select_range),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.TextSecondary,
             maxLines = 1,
@@ -392,7 +394,7 @@ private fun LapChip(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            text = "Lap ${record.lapNumber}",
+            text = stringResource(R.string.comparison_lap_number, record.lapNumber),
             style = TrackTechTypography.UiTextLabel,
             color = if (isSelected) TrackTechColors.Purple else TrackTechColors.TextSecondary,
             maxLines = 1,
@@ -438,7 +440,7 @@ private fun LapCompareLegend(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Lap ${lap.lapNumber}",
+                    text = stringResource(R.string.comparison_lap_number, lap.lapNumber),
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.TextSecondary,
                     maxLines = 1,

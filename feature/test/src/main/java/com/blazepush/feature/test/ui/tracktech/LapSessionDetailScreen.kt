@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -64,6 +65,7 @@ import com.blazepush.core.domain.model.LapEvidence
 import com.blazepush.core.domain.model.LapReviewProvenance
 import com.blazepush.core.domain.model.SessionVideoStats
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -157,13 +159,13 @@ fun LapSessionDetailScreen(
     if (showDeleteVideoDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteVideoDialog = false },
-            title = { Text("删除本场全部录像?") },
+            title = { Text(stringResource(R.string.confirm_delete_session_video)) },
             text = {
-                Text(
-                    "将删除本场全部 ${videoStats.segmentCount} 段录像，" +
-                        "释放约 ${formatFileSize(videoStats.totalBytes)}。\n\n" +
-                        "圈速、遥测、分段成绩和 Session 记录都会保留。",
-                )
+                Text(stringResource(
+                    R.string.confirm_delete_session_video_message,
+                    videoStats.segmentCount,
+                    formatFileSize(videoStats.totalBytes),
+                ))
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -173,10 +175,10 @@ fun LapSessionDetailScreen(
                         FileLogger.d("VideoStorage", "成绩页删视频 sid=$sessionId，成绩保留")
                         refreshTick++
                     }
-                }) { Text("删除", color = TrackTechColors.Red) }
+                }) { Text(stringResource(R.string.action_delete), color = TrackTechColors.Red) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteVideoDialog = false }) { Text("取消") }
+                TextButton(onClick = { showDeleteVideoDialog = false }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -187,7 +189,7 @@ fun LapSessionDetailScreen(
             .background(TrackTechColors.Background),
     ) {
         DetailHeader(
-            title = "Session",
+            title = stringResource(R.string.detail_session),
             onBack = { navController.popBackStack() },
             showVideoActions = videoStats.hasVideo,
             onDeleteAllVideo = { showDeleteVideoDialog = true },
@@ -339,7 +341,7 @@ private fun DetailHeader(
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.detail_back),
                 tint = TrackTechColors.TextPrimary,
             )
         }
@@ -423,13 +425,13 @@ private fun OverviewSection(
             contentPadding = 16.dp,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OverviewRow(label = "Track", value = trackName)
-            OverviewRow(label = "Session", value = sessionDate)
+            OverviewRow(label = stringResource(R.string.detail_track), value = trackName)
+            OverviewRow(label = stringResource(R.string.detail_session), value = sessionDate)
 
             Spacer(Modifier.height(4.dp))
             if (stackMetrics) {
                 MetricTile(
-                    label = "BEST LAP",
+                    label = stringResource(R.string.records_best_lap),
                     value = formatLapTime(bestLapMs),
                     accentColor = TrackTechColors.Purple,
                     valueSize = MetricSize.Medium,
@@ -437,7 +439,7 @@ private fun OverviewSection(
                     maxValueFontScale = 1.15f,
                 )
                 MetricTile(
-                    label = "TOTAL LAPS",
+                    label = stringResource(R.string.detail_total_laps),
                     value = totalLaps.toString(),
                     accentColor = TrackTechColors.Cyan,
                     valueSize = MetricSize.Medium,
@@ -445,7 +447,7 @@ private fun OverviewSection(
                     maxValueFontScale = 1.15f,
                 )
                 MetricTile(
-                    label = "VALID LAPS",
+                    label = stringResource(R.string.detail_valid_laps),
                     value = validLaps.toString(),
                     accentColor = TrackTechColors.Green,
                     valueSize = MetricSize.Small,
@@ -453,7 +455,7 @@ private fun OverviewSection(
                     maxValueFontScale = 1.15f,
                 )
                 MetricTile(
-                    label = "INVALID LAPS",
+                    label = stringResource(R.string.detail_invalid_laps),
                     value = invalidLaps.toString(),
                     accentColor = TrackTechColors.Red,
                     valueSize = MetricSize.Small,
@@ -464,7 +466,7 @@ private fun OverviewSection(
                 OverviewMetricPair(
                     first = {
                         MetricTile(
-                            label = "BEST LAP",
+                            label = stringResource(R.string.records_best_lap),
                             value = formatLapTime(bestLapMs),
                             accentColor = TrackTechColors.Purple,
                             valueSize = MetricSize.Medium,
@@ -474,7 +476,7 @@ private fun OverviewSection(
                     },
                     second = {
                         MetricTile(
-                            label = "TOTAL LAPS",
+                            label = stringResource(R.string.detail_total_laps),
                             value = totalLaps.toString(),
                             accentColor = TrackTechColors.Cyan,
                             valueSize = MetricSize.Medium,
@@ -486,7 +488,7 @@ private fun OverviewSection(
                 OverviewMetricPair(
                     first = {
                         MetricTile(
-                            label = "VALID LAPS",
+                            label = stringResource(R.string.detail_valid_laps),
                             value = validLaps.toString(),
                             accentColor = TrackTechColors.Green,
                             valueSize = MetricSize.Small,
@@ -496,7 +498,7 @@ private fun OverviewSection(
                     },
                     second = {
                         MetricTile(
-                            label = "INVALID LAPS",
+                            label = stringResource(R.string.detail_invalid_laps),
                             value = invalidLaps.toString(),
                             accentColor = TrackTechColors.Red,
                             valueSize = MetricSize.Small,
@@ -511,7 +513,7 @@ private fun OverviewSection(
             // session.topSpeedKmh 由 endSession 时 binary 全扫派生（persist-session-summary-fields），
             // null 表示旧数据或无 GPS 速度记录，降级显示 "--"。
             MetricTile(
-                label = "TOP SPEED",
+                label = stringResource(R.string.detail_top_speed),
                 value = topSpeedKmh?.let { "%.1f".format(it) } ?: "--",
                 unit = if (topSpeedKmh != null) "km/h" else null,
                 modifier = Modifier.fillMaxWidth(),
@@ -523,19 +525,23 @@ private fun OverviewSection(
             Spacer(Modifier.height(4.dp))
             // 辅助信息（Duration / Distance）用 row 风格 label-value
             OverviewRow(
-                label = "Duration",
+                label = stringResource(R.string.detail_duration),
                 value = durationMs?.let(::formatDuration) ?: "--",
             )
             OverviewRow(
-                label = "Distance",
+                label = stringResource(R.string.detail_distance),
                 value = distanceKm?.let { "%.2f km".format(it) } ?: "--",
             )
             OverviewRow(
-                label = "Video",
+                label = stringResource(R.string.detail_video),
                 value = if (videoStats.hasVideo) {
-                    "${videoStats.segmentCount} segments · ${formatFileSize(videoStats.totalBytes)}"
+                    stringResource(
+                        R.string.detail_video_segments,
+                        videoStats.segmentCount,
+                        formatFileSize(videoStats.totalBytes),
+                    )
                 } else {
-                    "Not attached"
+                    stringResource(R.string.detail_video_not_attached)
                 },
             )
             }
@@ -616,7 +622,7 @@ private fun CompareEntry(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "COMPARE LAPS",
+            text = stringResource(R.string.detail_compare_laps),
             style = TrackTechTypography.UiTextLabel,
             color = labelColor,
             maxLines = 1,
@@ -637,7 +643,7 @@ private fun CompareEntry(
 @Composable
 private fun LapRecordsHeader() {
     Text(
-        text = "Lap Records",
+        text = stringResource(R.string.detail_lap_records),
         style = TrackTechTypography.UiTextLabel,
         color = TrackTechColors.Cyan,
         maxLines = 1,
@@ -648,7 +654,7 @@ private fun LapRecordsHeader() {
 @Composable
 private fun EmptyLapRecordsHint() {
     Text(
-        text = "No completed laps recorded.",
+        text = stringResource(R.string.detail_no_laps),
         style = TrackTechTypography.UiTextSmall,
         color = TrackTechColors.TextMuted,
         maxLines = 1,
@@ -691,7 +697,7 @@ private fun LapRecordRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "Lap ${record.lapNumber}",
+            text = stringResource(R.string.detail_lap_number, record.lapNumber),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.TextSecondary,
             maxLines = 1,
@@ -761,7 +767,7 @@ private fun VideoReplayIcon(onClick: () -> Unit) {
     ) {
         Icon(
             imageVector = Icons.Filled.PlayCircleOutline,
-            contentDescription = "Replay video",
+            contentDescription = stringResource(R.string.action_replay_video),
             tint = TrackTechColors.Cyan.copy(alpha = 0.8f),
             modifier = Modifier.size(20.dp),
         )

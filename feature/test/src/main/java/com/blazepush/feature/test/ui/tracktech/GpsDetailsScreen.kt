@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -45,6 +46,7 @@ import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import org.koin.compose.koinInject
 
@@ -60,10 +62,10 @@ fun GpsDetailsScreen(
     val batteryCapability by gpsViewModel.batteryCapability.collectAsState()
 
     val qualityLabel = when (dataQuality.overall) {
-        QualityLevel.EXCELLENT -> "Excellent"
-        QualityLevel.GOOD -> "Good"
-        QualityLevel.FAIR -> "Fair"
-        QualityLevel.POOR -> "Poor"
+        QualityLevel.EXCELLENT -> stringResource(R.string.label_excellent)
+        QualityLevel.GOOD -> stringResource(R.string.label_good)
+        QualityLevel.FAIR -> stringResource(R.string.label_fair)
+        QualityLevel.POOR -> stringResource(R.string.label_poor)
     }
     val frequencyHz = gpsData.frequency.toInt().coerceAtLeast(0)
     val tabReadiness = TabGatingPolicy.computeTabReadiness(
@@ -98,16 +100,16 @@ fun GpsDetailsScreen(
             hdopOk = hdopOk,
         )
 
-        DetailsSection(title = "SIGNAL")
-        SignalGrid(gpsData = gpsData, qualityLabel = qualityLabel)
+        DetailsSection(title = stringResource(R.string.gps_section_signal))
+        SignalGrid(gpsData = gpsData, qualityLabel = qualityLabel, qualityLevel = dataQuality.overall)
 
-        DetailsSection(title = "DATA STREAM")
+        DetailsSection(title = stringResource(R.string.gps_section_stream))
         DataStreamGrid(frequencyHz = frequencyHz, dataQuality = dataQuality)
 
-        DetailsSection(title = "POSITION")
+        DetailsSection(title = stringResource(R.string.gps_section_position))
         PositionPanel(gpsData = gpsData)
 
-        DetailsSection(title = "DEVICE")
+        DetailsSection(title = stringResource(R.string.gps_section_device))
         DeviceInfoPanel(
             connectionState = connectionState,
             gpsData = gpsData,
@@ -135,14 +137,14 @@ private fun GpsDetailsHeader(isReady: Boolean, onBack: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.detail_back),
                 tint = TrackTechColors.TextPrimary,
                 modifier = Modifier.size(20.dp),
             )
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            text = "GPS Details",
+            text = stringResource(R.string.gps_details_title),
             style = TrackTechTypography.RacingTitleMedium,
             color = TrackTechColors.TextPrimary,
             modifier = Modifier.weight(1f),
@@ -154,7 +156,7 @@ private fun GpsDetailsHeader(isReady: Boolean, onBack: () -> Unit) {
 @Composable
 private fun ReadinessBadge(isReady: Boolean) {
     val color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted
-    val label = if (isReady) "READY" else "NOT READY"
+    val label = if (isReady) stringResource(R.string.state_ready) else stringResource(R.string.state_not_ready)
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
@@ -186,8 +188,8 @@ private fun ReadinessHeroBanner(
     hdopOk: Boolean,
 ) {
     val accent = if (isReady) TrackTechColors.Green else TrackTechColors.Red
-    val heroTitle = if (isReady) "READY TO TEST" else "NOT READY"
-    val heroSub = if (isReady) "All readiness checks passed" else "Some conditions not met"
+    val heroTitle = if (isReady) stringResource(R.string.gps_ready_to_test) else stringResource(R.string.state_not_ready)
+    val heroSub = if (isReady) stringResource(R.string.gps_checks_passed) else stringResource(R.string.gps_checks_failed)
 
     CutCornerPanel(
         modifier = Modifier
@@ -237,9 +239,9 @@ private fun ReadinessHeroBanner(
                 ) {
                     CheckBadge(label = "BLE", ok = bleOk)
                     CheckDivider()
-                    CheckBadge(label = "FRESH", ok = freshOk)
+                    CheckBadge(label = stringResource(R.string.gps_label_fresh), ok = freshOk)
                     CheckDivider()
-                    CheckBadge(label = "SATS", ok = satsOk)
+                    CheckBadge(label = stringResource(R.string.label_satellites), ok = satsOk)
                     CheckDivider()
                     CheckBadge(label = "HDOP", ok = hdopOk)
                 }
@@ -329,7 +331,7 @@ private fun DetailsSection(title: String) {
 }
 
 @Composable
-private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
+private fun SignalGrid(gpsData: GpsData, qualityLabel: String, qualityLevel: QualityLevel) {
     val satsOk = gpsData.satelliteCount >= 6
     val hdopOk = gpsData.hdop > 0.0 && gpsData.hdop < 2.0
     val fixLabel = when (gpsData.fixQuality) {
@@ -337,11 +339,11 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
         2 -> "3D+"
         else -> "3D"
     }
-    val fixStatus = if (gpsData.fixQuality > 0) "Locked" else "No Fix"
-    val qualityColor = when (qualityLabel) {
-        "Excellent", "Good" -> TrackTechColors.Green
-        "Fair" -> TrackTechColors.Cyan
-        else -> TrackTechColors.Red
+    val fixStatus = if (gpsData.fixQuality > 0) stringResource(R.string.state_locked) else stringResource(R.string.state_no_fix)
+    val qualityColor = when (qualityLevel) {
+        QualityLevel.EXCELLENT, QualityLevel.GOOD -> TrackTechColors.Green
+        QualityLevel.FAIR -> TrackTechColors.Cyan
+        QualityLevel.POOR -> TrackTechColors.Red
     }
 
     Column(
@@ -352,10 +354,10 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DetailMetricTile(
-                label = "SATELLITES",
+                label = stringResource(R.string.label_satellites),
                 value = gpsData.satelliteCount.toString(),
                 unit = null,
-                status = if (satsOk) "Good" else "Low",
+                status = if (satsOk) stringResource(R.string.label_good) else stringResource(R.string.label_low),
                 dotColor = if (satsOk) TrackTechColors.Green else TrackTechColors.Red,
                 valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
@@ -364,7 +366,7 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
                 label = "HDOP",
                 value = "%.1f".format(gpsData.hdop),
                 unit = null,
-                status = if (hdopOk) "Good" else "Poor",
+                status = if (hdopOk) stringResource(R.string.label_good) else stringResource(R.string.label_poor),
                 dotColor = if (hdopOk) TrackTechColors.Green else TrackTechColors.Red,
                 valueKind = MetricKind.Mechanical,
                 modifier = Modifier.weight(1f),
@@ -372,7 +374,7 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DetailMetricTile(
-                label = "FIX",
+                label = stringResource(R.string.gps_label_fix),
                 value = fixLabel,
                 unit = null,
                 status = fixStatus,
@@ -380,10 +382,14 @@ private fun SignalGrid(gpsData: GpsData, qualityLabel: String) {
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
-                label = "QUALITY",
+                label = stringResource(R.string.label_quality),
                 value = qualityLabel,
                 unit = null,
-                status = if (qualityLabel == "Good" || qualityLabel == "Excellent") "Stable" else "Unstable",
+                status = if (qualityLevel == QualityLevel.GOOD || qualityLevel == QualityLevel.EXCELLENT) {
+                    stringResource(R.string.state_stable)
+                } else {
+                    stringResource(R.string.state_unstable)
+                },
                 dotColor = qualityColor,
                 valueColor = qualityColor,
                 modifier = Modifier.weight(1f),
@@ -411,8 +417,8 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
         else -> null
     }
     val lastPacketStr = when {
-        freshMs < 1000L -> "Now"
-        freshMs < 60_000L -> "${freshMs / 1000}s ago"
+        freshMs < 1000L -> stringResource(R.string.state_now)
+        freshMs < 60_000L -> stringResource(R.string.state_seconds_ago, freshMs / 1000)
         else -> "—"
     }
 
@@ -424,7 +430,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DetailMetricTile(
-                label = "RATE",
+                label = stringResource(R.string.label_rate),
                 value = frequencyHz.toString(),
                 unit = "Hz",
                 status = null,
@@ -433,7 +439,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
-                label = "FRESH",
+                label = stringResource(R.string.gps_label_fresh),
                 value = freshDisplayStr,
                 unit = freshDisplayUnit,
                 status = null,
@@ -444,7 +450,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DetailMetricTile(
-                label = "DROPPED",
+                label = stringResource(R.string.gps_label_dropped),
                 value = droppedStr,
                 unit = "%",
                 status = null,
@@ -453,7 +459,7 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 modifier = Modifier.weight(1f),
             )
             DetailMetricTile(
-                label = "LAST PACKET",
+                label = stringResource(R.string.gps_label_last_packet),
                 value = lastPacketStr,
                 unit = null,
                 status = null,
@@ -478,24 +484,24 @@ private fun PositionPanel(gpsData: GpsData) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 PositionField(
-                    label = "Latitude",
+                    label = stringResource(R.string.gps_label_latitude),
                     value = "%.5f°".format(gpsData.latitude),
                     modifier = Modifier.weight(1f),
                 )
                 PositionField(
-                    label = "Longitude",
+                    label = stringResource(R.string.gps_label_longitude),
                     value = "%.5f°".format(gpsData.longitude),
                     modifier = Modifier.weight(1f),
                 )
             }
             Row(modifier = Modifier.fillMaxWidth()) {
                 PositionField(
-                    label = "Altitude",
+                    label = stringResource(R.string.gps_label_altitude),
                     value = "${gpsData.altitude.toInt()} m",
                     modifier = Modifier.weight(1f),
                 )
                 PositionField(
-                    label = "Bearing",
+                    label = stringResource(R.string.gps_label_bearing),
                     value = "%03d°".format(gpsData.bearing.toInt()),
                     modifier = Modifier.weight(1f),
                 )
@@ -565,7 +571,7 @@ private fun DeviceInfoPanel(
                         modifier = Modifier.size(18.dp),
                     )
                 },
-                label = "Protocol",
+                label = stringResource(R.string.gps_label_protocol),
                 value = if (isConnected) "RaceChrono BLE" else "—",
             )
             Box(
@@ -588,18 +594,22 @@ private fun DeviceInfoPanel(
                         modifier = Modifier.size(18.dp),
                     )
                 },
-                label = "Signal",
+                label = stringResource(R.string.gps_label_signal),
                 value = when {
                     !isConnected -> "—"
-                    gpsData.isStale && !gpsData.hasMainFrame -> "未收到 GPS 数据"
-                    gpsData.isStale -> "GPS 数据中断"
-                    !gpsData.hasMainFrame -> "等待 GPS 数据"
-                    gpsData.fixQuality <= 0 || gpsData.satelliteCount <= 0 -> "等待卫星"
+                    gpsData.isStale && !gpsData.hasMainFrame -> stringResource(R.string.gps_signal_no_data)
+                    gpsData.isStale -> stringResource(R.string.gps_signal_interrupted)
+                    !gpsData.hasMainFrame -> stringResource(R.string.gps_signal_waiting_data)
+                    gpsData.fixQuality <= 0 || gpsData.satelliteCount <= 0 -> stringResource(R.string.gps_signal_waiting_satellites)
                     !gpsData.isRecoveryStable ->
-                        "GPS 稳定中 ${gpsData.consecutiveReliableMainFrames}/${gpsData.requiredReliableMainFrames}" +
-                            " · ${gpsData.reliableMainStableDurationMs}/" +
-                            "${gpsData.requiredReliableMainStableDurationMs}ms"
-                    else -> "实时"
+                        stringResource(
+                            R.string.gps_signal_stabilizing,
+                            gpsData.consecutiveReliableMainFrames,
+                            gpsData.requiredReliableMainFrames,
+                            gpsData.reliableMainStableDurationMs,
+                            gpsData.requiredReliableMainStableDurationMs,
+                        )
+                    else -> stringResource(R.string.gps_signal_live)
                 },
             )
             Box(
@@ -617,8 +627,13 @@ private fun DeviceInfoPanel(
                         modifier = Modifier.size(18.dp),
                     )
                 },
-                label = "Battery",
-                value = batteryCapability.displayLabel(),
+                label = stringResource(R.string.gps_label_battery),
+                value = when (batteryCapability) {
+                    BatteryCapabilityState.Pending -> stringResource(R.string.device_battery_pending)
+                    is BatteryCapabilityState.Available -> stringResource(R.string.device_battery_percent, batteryCapability.percent)
+                    BatteryCapabilityState.Unsupported -> stringResource(R.string.device_battery_unsupported)
+                    BatteryCapabilityState.Failed -> stringResource(R.string.device_battery_failed)
+                },
             )
             Box(
                 modifier = Modifier
@@ -635,8 +650,8 @@ private fun DeviceInfoPanel(
                         modifier = Modifier.size(18.dp),
                     )
                 },
-                label = "Auto reconnect",
-                value = "On",
+                label = stringResource(R.string.gps_label_auto_reconnect),
+                value = stringResource(R.string.state_on),
             )
         }
     }

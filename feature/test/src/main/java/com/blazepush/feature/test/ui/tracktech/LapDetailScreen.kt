@@ -40,17 +40,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.domain.model.LapTelemetry
 import com.blazepush.core.domain.model.LapConfidencePolicy
+import com.blazepush.core.domain.model.LapConfidence
 import com.blazepush.core.domain.model.LapEvidence
+import com.blazepush.core.domain.model.LapReviewProvenance
 import com.blazepush.core.domain.model.LapTelemetrySample
 import com.blazepush.core.domain.usecase.AccelerationSmoother
 import com.blazepush.core.domain.usecase.GRAVITY_MS2
 import com.blazepush.core.domain.usecase.TimedSpeedSample
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.components.AccelTimeChart
 import com.blazepush.feature.test.ui.components.SectorBar
 import com.blazepush.feature.test.ui.components.SpeedTimeChart
@@ -192,8 +196,20 @@ fun LapDetailScreen(
     ) {
         LapDetailHeader(onBack = { navController.popBackStack() })
         val quality = LapConfidencePolicy.evaluate(lapEvidence)
+        val confidenceLabel = when (quality.confidence) {
+            LapConfidence.Clean -> stringResource(R.string.detail_quality_clean)
+            LapConfidence.Reviewed -> stringResource(R.string.detail_quality_reviewed)
+            LapConfidence.Estimated -> stringResource(R.string.detail_quality_estimated)
+            LapConfidence.Incomplete -> stringResource(R.string.detail_quality_incomplete)
+        }
+        val provenanceLabel = when (quality.provenance) {
+            LapReviewProvenance.AutomaticEvidence -> stringResource(R.string.detail_provenance_automatic)
+            LapReviewProvenance.ManualApproved -> stringResource(R.string.detail_provenance_approved)
+            LapReviewProvenance.ManualRejected -> stringResource(R.string.detail_provenance_rejected)
+            LapReviewProvenance.LegacyUnknown -> stringResource(R.string.detail_provenance_legacy)
+        }
         Text(
-            text = "QUALITY ${quality.confidence.name.uppercase()} · ${quality.provenance.name}",
+            text = stringResource(R.string.detail_quality, confidenceLabel, provenanceLabel),
             style = TrackTechTypography.UiTextSmall,
             color = TrackTechColors.TextSecondary,
             maxLines = 1,
@@ -209,7 +225,7 @@ fun LapDetailScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "NO LAP DATA",
+                    text = stringResource(R.string.detail_no_lap_data),
                     style = TrackTechTypography.ScoreSmall,
                     color = TrackTechColors.TextMuted,
                     maxLines = 1,
@@ -286,7 +302,7 @@ fun LapDetailScreen(
                             },
                     ) {
                         when (panelId) {
-                            LapDetailPanelId.VIDEO -> ChartCard(title = "VIDEO") {
+                            LapDetailPanelId.VIDEO -> ChartCard(title = stringResource(R.string.detail_panel_video)) {
                                 if (videoCtxReady) {
                                     LapVideoPanel(
                                         playbackContext = videoPlaybackContext!!,
@@ -327,7 +343,7 @@ fun LapDetailScreen(
                             }
                             LapDetailPanelId.OVERVIEW ->
                                 LapOverviewSection(lapIndex = lapIndex, telemetry = telemetry)
-                            LapDetailPanelId.SPEED -> ChartCard(title = "SPEED") {
+                            LapDetailPanelId.SPEED -> ChartCard(title = stringResource(R.string.detail_panel_speed)) {
                                 SpeedTimeChart(
                                     samples = telemetry.samples,
                                     cursorAbsoluteTs = cursorAbsoluteTs,
@@ -340,7 +356,7 @@ fun LapDetailScreen(
                                         .height(160.dp),
                                 )
                             }
-                            LapDetailPanelId.ACCEL -> ChartCard(title = "ACCEL G") {
+                            LapDetailPanelId.ACCEL -> ChartCard(title = stringResource(R.string.detail_panel_accel)) {
                                 AccelTimeChart(
                                     samples = accelSamples,
                                     cursorAbsoluteTs = cursorAbsoluteTs,
@@ -353,7 +369,7 @@ fun LapDetailScreen(
                                         .height(160.dp),
                                 )
                             }
-                            LapDetailPanelId.SECTORS -> ChartCard(title = "SECTORS") {
+                            LapDetailPanelId.SECTORS -> ChartCard(title = stringResource(R.string.detail_panel_sectors)) {
                                 SectorBar(
                                     sectorBoundaries = telemetry.sectorBoundaries,
                                     lapStartWallClock = telemetry.lapStartWallClock,
@@ -369,13 +385,13 @@ fun LapDetailScreen(
                                 if (sectorSplits.size >= 2) {
                                     sectorSplits.forEachIndexed { index, splitMs ->
                                         OverviewRow(
-                                            label = "Sector ${index + 1}",
+                                            label = stringResource(R.string.detail_sector, index + 1),
                                             value = formatLapDetailTime(splitMs),
                                         )
                                     }
                                 } else {
                                     Text(
-                                        text = "无 sector 分段",
+                                        text = stringResource(R.string.detail_no_sectors),
                                         style = TrackTechTypography.UiTextLabel,
                                         color = TrackTechColors.TextMuted,
                                         maxLines = 1,
@@ -383,7 +399,7 @@ fun LapDetailScreen(
                                     )
                                 }
                             }
-                            LapDetailPanelId.TRACK -> ChartCard(title = "TRACK") {
+                            LapDetailPanelId.TRACK -> ChartCard(title = stringResource(R.string.detail_panel_track)) {
                                 TrackPolylineMap(
                                     samples = telemetry.samples,
                                     cursorAbsoluteTs = cursorAbsoluteTs,
@@ -440,13 +456,13 @@ private fun LapDetailHeader(onBack: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.detail_back),
                 tint = TrackTechColors.TextPrimary,
             )
         }
         Spacer(Modifier.size(12.dp))
         Text(
-            text = "LAP DETAIL",
+            text = stringResource(R.string.detail_lap_title),
             style = TrackTechTypography.RacingTitleMedium,
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
@@ -472,17 +488,17 @@ private fun LapOverviewSection(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "LAP ${lapIndex + 1}",
+                text = stringResource(R.string.detail_lap_number, lapIndex + 1),
                 style = TrackTechTypography.RacingTitleMedium,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             // 圈时是时间字符串 → Score 字体（V2 约束：MUST NOT Mechanical/DSEG7）
-            OverviewRow(label = "Lap time", value = formatLapDetailTime(telemetry.lapDurationMs))
-            OverviewRow(label = "Track", value = telemetry.trackNameSnapshot ?: "—")
+            OverviewRow(label = stringResource(R.string.detail_lap_time), value = formatLapDetailTime(telemetry.lapDurationMs))
+            OverviewRow(label = stringResource(R.string.detail_track), value = telemetry.trackNameSnapshot ?: "—")
             OverviewRow(
-                label = "Top speed",
+                label = stringResource(R.string.detail_top_speed),
                 value = topSpeedKmh?.let { "%.1f km/h".format(it) } ?: "--",
             )
         }

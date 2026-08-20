@@ -222,12 +222,12 @@ class LapDetailScreenContractTest {
 
         private val REQUIRED_LITERALS = listOf(
             // Visual literals
-            "\"LAP DETAIL\"",
-            "\"NO LAP DATA\"",
-            "\"SPEED\"",
-            "\"ACCEL G\"",
-            "\"SECTORS\"",
-            "\"TRACK\"",
+            "R.string.detail_lap_title",
+            "R.string.detail_no_lap_data",
+            "R.string.detail_panel_speed",
+            "R.string.detail_panel_accel",
+            "R.string.detail_panel_sectors",
+            "R.string.detail_panel_track",
             // 4 组件接线
             "SpeedTimeChart(",
             "AccelTimeChart(",

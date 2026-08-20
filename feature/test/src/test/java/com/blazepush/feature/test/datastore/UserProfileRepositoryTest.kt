@@ -64,16 +64,16 @@ class UserProfileRepositoryTest {
     // livetiming-lap-upload round 新增 key
 
     @Test
-    fun livetimingEnabled_defaultsTrue() = runTest {
+    fun livetimingEnabled_defaultsFalse_untilUserOptsIn() = runTest {
         val repo = UserProfileRepository(dataStore)
-        assertEquals(true, repo.livetimingEnabled.first())
+        assertEquals(false, repo.livetimingEnabled.first())
     }
 
     @Test
     fun setLivetimingEnabled_roundtrip() = runTest {
         val repo = UserProfileRepository(dataStore)
-        repo.setLivetimingEnabled(false)
-        assertEquals(false, repo.livetimingEnabled.first())
+        repo.setLivetimingEnabled(true)
+        assertEquals(true, repo.livetimingEnabled.first())
     }
 
     @Test

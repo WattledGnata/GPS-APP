@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.model.track.GeoPoint
 import com.blazepush.feature.test.overlay.OverlayCanvasPainter
 
@@ -94,7 +96,7 @@ fun TrackThumbnail(
             // 运行时零投影零 drawPath —— 一次性离线生成的矢量资源，直接显示。
             Image(
                 painter = painterResource(id = drawableResId),
-                contentDescription = "Track thumbnail",
+                contentDescription = stringResource(R.string.track_thumbnail_description),
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -102,7 +104,7 @@ fun TrackThumbnail(
             // 状态 2：静态美术图（天府等已配图赛道，视觉不变）
             Image(
                 bitmap = loaded,
-                contentDescription = "Track thumbnail",
+                contentDescription = stringResource(R.string.track_thumbnail_description),
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -137,7 +139,7 @@ private fun FallbackPlaceholder(modifier: Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "NO PREVIEW",
+            text = stringResource(R.string.track_no_preview),
             style = TrackTechTypography.UiTextSmall,
             color = TrackTechColors.TextMuted,
             maxLines = 1,

@@ -27,8 +27,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.model.track.Track
 
 /**
@@ -55,7 +57,7 @@ fun SelectTrackBottomSheet(
     tracks: List<Track>,
     currentTrackId: String?,
     onTrackSelected: (Track) -> Unit,
-    title: String = "设置计时赛道",
+    title: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -71,7 +73,7 @@ fun SelectTrackBottomSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            HeaderRow(title = title, onClose = onDismiss)
+            HeaderRow(title = title ?: stringResource(R.string.select_track_title), onClose = onDismiss)
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -125,7 +127,7 @@ private fun CloseButton(onClose: () -> Unit) {
     ) {
         Icon(
             imageVector = Icons.Filled.Close,
-            contentDescription = "Close",
+            contentDescription = stringResource(R.string.action_close),
             tint = TrackTechColors.Cyan,
             modifier = Modifier.size(18.dp),
         )

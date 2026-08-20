@@ -39,9 +39,9 @@ class UserProfileRepository internal constructor(
         }
     }
 
-    /** livetiming 上报开关（livetiming-lap-upload round）。默认 **开**（缺值 = true）。 */
+    /** livetiming 上报开关。默认关闭，由用户在填写车手名后主动开启。 */
     val livetimingEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
-        prefs[KEY_LIVETIMING_ENABLED] ?: true
+        prefs[KEY_LIVETIMING_ENABLED] ?: false
     }
 
     suspend fun setLivetimingEnabled(enabled: Boolean) {

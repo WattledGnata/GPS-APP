@@ -23,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -52,6 +53,7 @@ class LapUploadOrchestratorTest {
             produceFile = { tmpFolder.newFile("user_profile.preferences_pb") },
         )
         userProfile = UserProfileRepository(dataStore)
+        runBlocking { userProfile.setLivetimingEnabled(true) }
         api = FakeUploadApi()
         dao = FakePendingDao()
     }

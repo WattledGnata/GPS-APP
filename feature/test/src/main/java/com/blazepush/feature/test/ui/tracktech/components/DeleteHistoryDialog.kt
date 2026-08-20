@@ -4,9 +4,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import com.blazepush.feature.test.ui.tracktech.TrackTechColors
 import com.blazepush.feature.test.ui.tracktech.TrackTechTypography
+import com.blazepush.feature.test.R
 
 /**
  * Records 列表行长按删除候选；统一 PERFORMANCE 测试记录与 LAPS 圈速 session 两侧入口
@@ -55,7 +57,7 @@ fun DeleteHistoryDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "删除记录?",
+                text = stringResource(R.string.confirm_delete_record),
                 style = TrackTechTypography.RacingTitleSmall,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -74,7 +76,7 @@ fun DeleteHistoryDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    text = "取消",
+                    text = stringResource(R.string.action_cancel),
                     color = TrackTechColors.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -84,7 +86,7 @@ fun DeleteHistoryDialog(
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
-                    text = "删除",
+                    text = stringResource(R.string.action_delete),
                     color = TrackTechColors.Red,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

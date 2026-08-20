@@ -75,11 +75,9 @@ import com.blazepush.core.domain.model.BatteryCapabilityState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
-import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
-import kotlinx.coroutines.flow.first
 import org.koin.compose.koinInject
 
 private data class HeroState(
@@ -182,33 +180,6 @@ fun DeviceHomeScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 首开车手名引导（first-launch-driver-prompt capability）：仅首次启动弹一次。
-    // 弹出即置 flag（不论用户选哪个 / 是否真设名），保证只弹一次。
-    val userProfileRepository = koinInject<UserProfileRepository>()
-    var showDriverPrompt by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (!userProfileRepository.hasShownDriverNamePrompt.first()) {
-            showDriverPrompt = true
-            userProfileRepository.setDriverNamePromptShown()
-        }
-    }
-    if (showDriverPrompt) {
-        AlertDialog(
-            onDismissRequest = { showDriverPrompt = false },
-            title = { Text("设个车手名？") },
-            text = { Text("livetiming 榜单会用你的车手名展示成绩。要不要现在设一个？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDriverPrompt = false
-                    navController.navigate("settings")
-                }) { Text("去设置") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDriverPrompt = false }) { Text("以后再说") }
-            },
-        )
-    }
-
     // Pager 架构下 Device page 未组合时 SharedFlow(replay=0) 事件会丢失，
     // 改由 Shell 持有 pending state，本页组合后消费并 reset。
     LaunchedEffect(pendingShowScanSheet) {
@@ -266,12 +237,6 @@ fun DeviceHomeScreen(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Icon(
-                imageVector = Icons.Filled.Settings,
-                contentDescription = stringResource(R.string.action_settings),
-                tint = TrackTechColors.TextSecondary,
-                modifier = Modifier.size(20.dp),
-            )
         }
 
         ReadinessHero(hero = hero)
@@ -304,7 +269,12 @@ fun DeviceHomeScreen(
             TrackTechRow(
                 leadingIcon = Icons.Filled.GpsFixed,
                 title = stringResource(R.string.label_gps_details),
-                subtitle = "$qualityLabel · ${gpsData.satelliteCount} sats · ${frequencyHz}Hz",
+                subtitle = stringResource(
+                    R.string.device_satellite_rate,
+                    qualityLabel,
+                    gpsData.satelliteCount,
+                    frequencyHz,
+                ),
                 onClick = { navController.navigate("gps_details") },
             )
             // ble-device-memory（UI 交互细化 §1）：已保存设备管理入口
@@ -312,19 +282,19 @@ fun DeviceHomeScreen(
                 leadingIcon = Icons.Filled.Bluetooth,
                 title = stringResource(R.string.label_saved_devices),
                 subtitle = if (savedDevices.isEmpty()) {
-                    "None yet"
+                    stringResource(R.string.device_saved_none)
                 } else {
                     val latest = savedDevices.filter { it.lastConnectedAtMs != null }
                         .maxByOrNull { it.lastConnectedAtMs!! }
-                    "${savedDevices.size} device${if (savedDevices.size > 1) "s" else ""}" +
+                    stringResource(R.string.device_saved_count, savedDevices.size) +
                         (latest?.let { " · ${it.displayName}" } ?: "")
                 },
                 onClick = { showSavedDevicesSheet = true },
             )
             TrackTechRow(
                 leadingIcon = Icons.Filled.Settings,
-                title = "SETTINGS",
-                subtitle = "车手显示名 · 更多设置",
+                title = stringResource(R.string.action_settings),
+                subtitle = stringResource(R.string.device_settings_detail),
                 onClick = { navController.navigate("settings") },
             )
         }
@@ -633,15 +603,20 @@ private fun BatteryIndicator(batteryCapability: BatteryCapabilityState) {
         else -> Icons.Filled.BatteryUnknown to TrackTechColors.TextMuted
     }
 
+    val batteryLabel = when (batteryCapability) {
+        BatteryCapabilityState.Pending -> stringResource(R.string.device_battery_pending)
+        is BatteryCapabilityState.Available -> stringResource(
+            R.string.device_battery_percent,
+            batteryCapability.percent,
+        )
+        BatteryCapabilityState.Unsupported -> stringResource(R.string.device_battery_unsupported)
+        BatteryCapabilityState.Failed -> stringResource(R.string.device_battery_failed)
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = icon,
-            contentDescription = when (batteryCapability) {
-                BatteryCapabilityState.Pending -> "Battery pending"
-                is BatteryCapabilityState.Available -> "Battery ${batteryCapability.percent}%"
-                BatteryCapabilityState.Unsupported -> "Battery unsupported"
-                BatteryCapabilityState.Failed -> "Battery failed"
-            },
+            contentDescription = batteryLabel,
             tint = tint,
             modifier = Modifier.size(18.dp),
         )
@@ -656,7 +631,7 @@ private fun BatteryIndicator(batteryCapability: BatteryCapabilityState) {
             )
         } else {
             Text(
-                text = batteryCapability.displayLabel(),
+                text = batteryLabel,
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextMuted,
             )

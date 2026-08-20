@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material3.Icon
@@ -105,12 +104,6 @@ fun TestHomeScreen(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                contentDescription = stringResource(R.string.action_help),
-                tint = TrackTechColors.TextSecondary,
-                modifier = Modifier.size(20.dp),
-            )
         }
 
         TrackTechStatusStrip(
@@ -187,7 +180,7 @@ fun TestHomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 MetricTile(
-                    label = "PERSONAL BEST",
+                    label = stringResource(R.string.label_personal_best),
                     value = bestAcc?.let { "%.2f".format(it.totalTime) } ?: "—.—",
                     unit = "s",
                     status = "0-100",
@@ -196,7 +189,7 @@ fun TestHomeScreen(
                     modifier = Modifier.weight(1f),
                 )
                 MetricTile(
-                    label = "LAST RUN",
+                    label = stringResource(R.string.label_last_run),
                     value = lastAcc?.let { "%.2f".format(it.totalTime) } ?: "—.—",
                     unit = "s",
                     status = "0-100",

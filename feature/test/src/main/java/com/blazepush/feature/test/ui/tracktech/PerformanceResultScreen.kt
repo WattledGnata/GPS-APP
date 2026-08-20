@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
@@ -37,6 +38,7 @@ import com.blazepush.core.data.local.entity.TestRecordEntity
 import com.blazepush.core.domain.model.GpsDataPoint
 import com.blazepush.core.domain.model.SpeedSegment
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.components.GForceChart
 import com.blazepush.feature.test.ui.components.SpeedChart
 import com.blazepush.feature.test.viewmodel.TestHistoryViewModel
@@ -145,13 +147,13 @@ private fun PerformanceDetailHeader(onBack: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.detail_back),
                 tint = TrackTechColors.TextPrimary,
             )
         }
         Spacer(Modifier.size(12.dp))
         Text(
-            text = "PERFORMANCE",
+            text = stringResource(R.string.detail_performance),
             style = TrackTechTypography.RacingTitleMedium,
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
@@ -183,7 +185,7 @@ private fun HeroSection(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "TEST TYPE",
+                text = stringResource(R.string.detail_test_type),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -206,8 +208,8 @@ private fun HeroSection(
                 unitColor = TrackTechColors.TextSecondary,
             )
             Spacer(Modifier.height(4.dp))
-            OverviewRow(label = "Date", value = dateLabel)
-            OverviewRow(label = "Device", value = record.deviceName.ifBlank { "—" })
+            OverviewRow(label = stringResource(R.string.detail_date), value = dateLabel)
+            OverviewRow(label = stringResource(R.string.detail_device), value = record.deviceName.ifBlank { "—" })
         }
     }
 }
@@ -218,13 +220,13 @@ private fun MetricRow(
     template: TestTemplate?,
     peakG: PeakGTile,
 ) {
-    val (firstLabel, firstValue, firstUnit) = deriveFirstMetric(record, template)
+    val (firstLabelRes, firstValue, firstUnit) = deriveFirstMetric(record, template)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         MetricTile(
-            label = firstLabel,
+            label = stringResource(firstLabelRes),
             value = firstValue,
             unit = firstUnit,
             modifier = Modifier.weight(1f),
@@ -233,17 +235,17 @@ private fun MetricRow(
             valueKind = MetricKind.Score,
         )
         MetricTile(
-            label = peakG.label,
+            label = stringResource(peakG.labelRes),
             value = peakG.valueText,
             unit = peakG.unit,
-            status = peakG.subtitle,
+            status = if (peakG.isLegacyRecord) stringResource(R.string.detail_legacy_record) else null,
             modifier = Modifier.weight(1f),
             accentColor = TrackTechColors.Red,
             valueSize = MetricSize.Medium,
             valueKind = MetricKind.Score,
         )
         MetricTile(
-            label = "AVG G",
+            label = stringResource(R.string.detail_avg_g),
             value = "%.2f".format(record.avgAcceleration),
             unit = "G",
             modifier = Modifier.weight(1f),
@@ -266,7 +268,7 @@ private fun SpeedCurveCard(dataPoints: List<GpsDataPoint>) {
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "SPEED CURVE",
+                text = stringResource(R.string.records_speed_curve),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -294,7 +296,7 @@ private fun GForceCurveCard(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "G-FORCE",
+                text = stringResource(R.string.detail_g_force),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -313,7 +315,7 @@ private fun GForceCurveCard(
 @Composable
 private fun SpeedSegmentsHeader() {
     Text(
-        text = "SPEED SEGMENTS",
+        text = stringResource(R.string.detail_speed_segments),
         style = TrackTechTypography.UiTextLabel,
         color = TrackTechColors.Cyan,
         maxLines = 1,
@@ -324,7 +326,7 @@ private fun SpeedSegmentsHeader() {
 @Composable
 private fun EmptySegmentsHint() {
     Text(
-        text = "No segment data.",
+        text = stringResource(R.string.detail_no_segments),
         style = TrackTechTypography.UiTextSmall,
         color = TrackTechColors.TextMuted,
         maxLines = 1,
@@ -415,10 +417,10 @@ private fun deriveHeroPrimary(
 private fun deriveFirstMetric(
     record: TestRecordEntity,
     template: TestTemplate?,
-): Triple<String, String, String> = when (template) {
-    is TestTemplate.Braking100To0 -> Triple("TIME", "%.2f".format(record.totalTime), "s")
+): Triple<Int, String, String> = when (template) {
+    is TestTemplate.Braking100To0 -> Triple(R.string.detail_time, "%.2f".format(record.totalTime), "s")
     // Acceleration0To100 + 未知模板都退到 DISTANCE 显示，避免空白
-    else -> Triple("DISTANCE", "%.1f".format(record.totalDistance), "m")
+    else -> Triple(R.string.detail_distance_metric, "%.1f".format(record.totalDistance), "m")
 }
 
 /**
@@ -433,12 +435,12 @@ private fun deriveFirstMetric(
  * `internal` 暴露给 `DerivePeakGTest` 单测断言四个分支（spec.md Requirement 4 全部 scenarios）。
  */
 internal data class PeakGTile(
-    val label: String,
+    val labelRes: Int,
     val valueText: String,
     val unit: String?,
     val gForceChartMaxG: Double,
-    /** V1 record 降级副标，正常分支为 null。spec scenario "100-0 制动存量记录 UI 显式降级 '—'" 锁定。 */
-    val subtitle: String? = null,
+    /** 旧版制动记录缺峰值数据时，UI 显式显示本地化降级副标。 */
+    val isLegacyRecord: Boolean = false,
 )
 
 internal fun derivePeakG(
@@ -446,29 +448,29 @@ internal fun derivePeakG(
     template: TestTemplate?,
 ): PeakGTile = when (template) {
     is TestTemplate.Acceleration0To100 -> PeakGTile(
-        label = "PEAK ACCEL G",
+        labelRes = R.string.detail_peak_accel_g,
         valueText = "%.2f".format(record.maxAcceleration),
         unit = "G",
         gForceChartMaxG = record.maxAcceleration,
     )
     is TestTemplate.Braking100To0 -> if (record.maxDeceleration > 0.0) {
         PeakGTile(
-            label = "PEAK BRAKE G",
+            labelRes = R.string.detail_peak_brake_g,
             valueText = "%.2f".format(record.maxDeceleration),
             unit = "G",
             gForceChartMaxG = record.maxDeceleration,
         )
     } else {
         PeakGTile(
-            label = "PEAK BRAKE G",
+            labelRes = R.string.detail_peak_brake_g,
             valueText = "—",
             unit = null,
             gForceChartMaxG = 0.0,
-            subtitle = "V1 record",
+            isLegacyRecord = true,
         )
     }
     else -> PeakGTile(
-        label = "PEAK G",
+        labelRes = R.string.detail_peak_g,
         valueText = "%.2f".format(record.maxAcceleration),
         unit = "G",
         gForceChartMaxG = record.maxAcceleration,

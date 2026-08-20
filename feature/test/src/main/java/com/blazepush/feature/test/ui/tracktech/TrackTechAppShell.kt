@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -30,6 +31,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.settings.SettingsScreen
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -61,6 +63,7 @@ fun TrackTechAppShell() {
         val showBottomNav = currentRoute == "home"
         val pagerState = rememberPagerState(pageCount = { TabIndex.Count })
         val coroutineScope = rememberCoroutineScope()
+        val context = LocalContext.current
 
         val onTabSelected: (Int) -> Unit = { index ->
             coroutineScope.launch { pagerState.animateScrollToPage(index) }
@@ -84,11 +87,11 @@ fun TrackTechAppShell() {
             LapSessionSaveBus.events.collect { result ->
                 val snackResult = snackbarHostState.showSnackbar(
                     message = if (result.isDebugCapture) {
-                        "自由采集 Session 已保存"
+                        context.getString(R.string.free_capture_saved)
                     } else {
-                        "Lap session saved · ${result.lapCount} laps"
+                        context.getString(R.string.session_saved, result.lapCount)
                     },
-                    actionLabel = "View Record",
+                    actionLabel = context.getString(R.string.action_view_record),
                     duration = SnackbarDuration.Long,
                 )
                 if (snackResult == SnackbarResult.ActionPerformed) {

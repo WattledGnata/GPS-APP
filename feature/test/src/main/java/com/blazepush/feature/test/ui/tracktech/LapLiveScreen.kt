@@ -508,7 +508,7 @@ fun LapLiveScreen(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "保存视频中…",
+                text = stringResource(R.string.live_saving_video),
                 style = TrackTechTypography.RacingTitleSmall,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -737,7 +737,7 @@ private fun SwipeToCameraHint(modifier: Modifier = Modifier) {
         )
         Icon(
             imageVector = Icons.Filled.ChevronRight,
-            contentDescription = "Swipe to camera",
+            contentDescription = stringResource(R.string.live_swipe_camera),
             tint = TrackTechColors.TextMuted,
         )
     }
@@ -776,7 +776,7 @@ private fun CameraPreviewPage(
     ) {
         if (!hasCamera) {
             Text(
-                text = "无可用相机",
+                text = stringResource(R.string.live_camera_unavailable),
                 style = TrackTechTypography.UiTextBody,
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
@@ -788,7 +788,7 @@ private fun CameraPreviewPage(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "需要相机/麦克风权限",
+                    text = stringResource(R.string.live_camera_permission),
                     style = TrackTechTypography.UiTextBody,
                     color = TrackTechColors.TextSecondary,
                     maxLines = 1,
@@ -796,7 +796,7 @@ private fun CameraPreviewPage(
                 )
                 TextButton(onClick = onRequestPermission) {
                     Text(
-                        text = "授权",
+                        text = stringResource(R.string.action_grant),
                         style = TrackTechTypography.RacingTitleSmall,
                         color = TrackTechColors.Cyan,
                         maxLines = 1,
@@ -815,7 +815,7 @@ private fun CameraPreviewPage(
 
             // 角落标题（左上角）
             Text(
-                text = "CAMERA · 取景",
+                text = stringResource(R.string.live_camera_viewfinder),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -836,7 +836,7 @@ private fun CameraPreviewPage(
                     .padding(16.dp),
             ) {
                 Text(
-                    text = "⚙ 设置",
+                    text = "⚙ ${stringResource(R.string.action_settings)}",
                     style = TrackTechTypography.UiTextLabel,
                     color = if (settingsEnabled) TrackTechColors.Cyan else TrackTechColors.TextMuted,
                     maxLines = 1,
@@ -915,7 +915,7 @@ private fun CameraPreviewPage(
         } else {
             // 已授权但当前不在本页（settledPage!=1）→ 占位，不绑相机（防 beyondBounds 预组合时误绑）。
             Text(
-                text = "横滑查看相机",
+                text = stringResource(R.string.live_swipe_camera),
                 style = TrackTechTypography.UiTextBody,
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
@@ -939,7 +939,11 @@ private fun LapLiveTopStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = if (isDebugCapture) "CAPTURE" else "LAPS",
+            text = if (isDebugCapture) {
+                stringResource(R.string.action_free_capture)
+            } else {
+                stringResource(R.string.screen_laps)
+            },
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
             maxLines = 1,
@@ -957,7 +961,7 @@ private fun LapLiveTopStrip(
         Spacer(Modifier.width(12.dp))
         if (!isDebugCapture) {
             Text(
-                text = "LAP $lapNumber",
+                text = stringResource(R.string.live_lap_number, lapNumber),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple,
                 maxLines = 1,
@@ -1025,6 +1029,8 @@ internal fun debugMainStatusText(gpsData: GpsData?): String = when {
 }
 
 @Composable
+// WP3 本地化边界：本面板只在 isDebugCapture 自由采集路径渲染，用于路测诊断协议时钟与收帧。
+// 手机时钟、GPS 时钟与接收延迟保留诊断术语，不属于普通车主 Lap Live HUD 文案。
 private fun DebugCaptureDashboard(
     stats: DebugCaptureStats,
     gpsData: GpsData,
@@ -1083,7 +1089,7 @@ private fun DebugCaptureDashboard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "CURRENT SPEED",
+                label = stringResource(R.string.live_current_speed),
                 value = speedText,
                 unit = if (hasFreshMain) "km/h" else null,
                 status = if (hasFreshMain) "实时 Main 帧" else "等待新鲜数据",
@@ -1098,7 +1104,7 @@ private fun DebugCaptureDashboard(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 MetricTile(
-                    label = "SATELLITES",
+                    label = stringResource(R.string.live_satellites),
                     value = satellitesText,
                     status = if (hasFreshMain) "FIX Q${gpsData.fixQuality}" else "NO FRESH FRAME",
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1111,7 +1117,7 @@ private fun DebugCaptureDashboard(
                     maxValueFontScale = 1.15f,
                 )
                 MetricTile(
-                    label = "MAIN RATE",
+                    label = stringResource(R.string.live_main_rate),
                     value = rateText,
                     unit = if (rateText != "--") "Hz" else null,
                     status = "实测接收帧率",
@@ -1282,7 +1288,7 @@ private fun Lap2x2Dashboard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "DELTA",
+                label = stringResource(R.string.live_delta),
                 value = deltaText,
                 modifier = Modifier
                     .weight(1f)
@@ -1295,7 +1301,7 @@ private fun Lap2x2Dashboard(
                 valueColor = deltaAccent,
             )
             MetricTile(
-                label = "CURRENT",
+                label = stringResource(R.string.live_current),
                 value = formatLapTime(state.currentLapTimerMs),
                 modifier = Modifier
                     .weight(1f)
@@ -1312,7 +1318,7 @@ private fun Lap2x2Dashboard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "LAST",
+                label = stringResource(R.string.live_last),
                 value = formatLapTime(state.lastLapTimeMs),
                 modifier = Modifier
                     .weight(1f)
@@ -1322,7 +1328,7 @@ private fun Lap2x2Dashboard(
                 valueKind = MetricKind.Score,
             )
             MetricTile(
-                label = "BEST",
+                label = stringResource(R.string.live_best),
                 value = formatLapTime(state.bestLapTimeMs),
                 modifier = Modifier
                     .weight(1f)
@@ -1459,7 +1465,7 @@ private fun HoldToEndButton(
                 .background(TrackTechColors.Red.copy(alpha = 0.25f)),
         )
         Text(
-            text = "HOLD TO END",
+            text = stringResource(R.string.live_hold_to_end),
             style = TrackTechTypography.RacingTitleSmall,
             color = TrackTechColors.Red,
             maxLines = 1,

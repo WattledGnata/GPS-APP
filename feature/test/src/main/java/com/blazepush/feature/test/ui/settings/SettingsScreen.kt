@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,11 +29,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.diagnostic.VersionTapCounter
 import com.blazepush.feature.test.ui.diagnostic.DiagnosticUploadSheet
@@ -58,6 +61,7 @@ fun SettingsScreen(
     val savedName by userProfileRepository.driverName.collectAsState(initial = "")
     // 本地 draft 驱动 TextField，避免每次 Flow 重发导致光标跳；持久化值加载后同步一次。
     var draft by remember { mutableStateOf("") }
+    var showDriverNameRequired by remember { mutableStateOf(false) }
     LaunchedEffect(savedName) {
         if (draft.isEmpty() && savedName.isNotEmpty()) draft = savedName
     }
@@ -92,7 +96,7 @@ fun SettingsScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { navController.popBackStack() }) {
                 Text(
-                    text = "‹ 返回",
+                    text = stringResource(R.string.action_back),
                     style = TrackTechTypography.RacingTitleSmall,
                     color = TrackTechColors.Cyan,
                     maxLines = 1,
@@ -101,7 +105,7 @@ fun SettingsScreen(
             }
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "设置",
+                text = stringResource(R.string.screen_settings),
                 style = TrackTechTypography.RacingTitleSmall,
                 color = TrackTechColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
@@ -113,7 +117,7 @@ fun SettingsScreen(
         // 车手显示名
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "车手",
+                text = stringResource(R.string.label_driver),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -130,10 +134,10 @@ fun SettingsScreen(
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("车手显示名（昵称 / 车号）") },
+                label = { Text(stringResource(R.string.label_driver_name_hint)) },
             )
             Text(
-                text = "用于赛道 livetiming 榜单显示",
+                text = stringResource(R.string.label_driver_name_detail),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
@@ -141,22 +145,22 @@ fun SettingsScreen(
             )
         }
 
-        // livetiming 上报开关（livetiming-lap-upload round；默认开）
-        val livetimingEnabled by userProfileRepository.livetimingEnabled.collectAsState(initial = true)
+        // 上报是唯一需要车手名的真实动作；缺名时不开启，也不影响本地记录。
+        val livetimingEnabled by userProfileRepository.livetimingEnabled.collectAsState(initial = false)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f, fill = false)) {
                 Text(
-                    text = "上报到 livetiming",
+                    text = stringResource(R.string.label_livetiming_upload),
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.Cyan,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "出圈把成绩实时上报到榜单（需先填车手名）",
+                    text = stringResource(R.string.label_livetiming_upload_detail),
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.TextMuted,
                     maxLines = 1,
@@ -167,9 +171,13 @@ fun SettingsScreen(
             Switch(
                 checked = livetimingEnabled,
                 onCheckedChange = { enabled ->
-                    scope.launch {
-                        userProfileRepository.setLivetimingEnabled(enabled)
-                        FileLogger.d("UserProfile", "livetimingEnabled set $enabled")
+                    if (enabled && draft.trim().isEmpty()) {
+                        showDriverNameRequired = true
+                    } else {
+                        scope.launch {
+                            userProfileRepository.setLivetimingEnabled(enabled)
+                            FileLogger.d("UserProfile", "livetimingEnabled set $enabled")
+                        }
                     }
                 },
             )
@@ -193,6 +201,24 @@ fun SettingsScreen(
                 }
             )
         }
+    }
+
+    if (showDriverNameRequired) {
+        AlertDialog(
+            onDismissRequest = { showDriverNameRequired = false },
+            title = { Text(stringResource(R.string.driver_name_required_title)) },
+            text = { Text(stringResource(R.string.driver_name_required_message)) },
+            confirmButton = {
+                TextButton(onClick = { showDriverNameRequired = false }) {
+                    Text(stringResource(R.string.action_enter_name))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDriverNameRequired = false }) {
+                    Text(stringResource(R.string.action_later))
+                }
+            },
+        )
     }
 
     // 诊断上传面板 overlay（暗门触发后用全屏 Box 遮盖，非独立路由）

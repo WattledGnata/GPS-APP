@@ -2,6 +2,7 @@ package com.blazepush.feature.test.ui.tracktech
 
 import com.blazepush.core.data.local.entity.TestRecordEntity
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -47,11 +48,11 @@ class DerivePeakGTest {
         val record = fixture(templateId = "acc_0_100", maxA = 0.85, maxD = 0.0)
         val peak = derivePeakG(record, TestTemplate.Acceleration0To100)
 
-        assertEquals("PEAK ACCEL G", peak.label)
+        assertEquals(R.string.detail_peak_accel_g, peak.labelRes)
         assertEquals("0.85", peak.valueText)
         assertEquals("G", peak.unit)
         assertEquals(0.85, peak.gForceChartMaxG, 1e-9)
-        assertNull("acc 分支 subtitle 必须为 null", peak.subtitle)
+        assertEquals(false, peak.isLegacyRecord)
     }
 
     @Test
@@ -59,11 +60,11 @@ class DerivePeakGTest {
         val record = fixture(templateId = "brake_100_0", maxA = 0.0, maxD = 1.12)
         val peak = derivePeakG(record, TestTemplate.Braking100To0)
 
-        assertEquals("PEAK BRAKE G", peak.label)
+        assertEquals(R.string.detail_peak_brake_g, peak.labelRes)
         assertEquals("1.12", peak.valueText)
         assertEquals("G", peak.unit)
         assertEquals(1.12, peak.gForceChartMaxG, 1e-9)
-        assertNull("brake 正常分支 subtitle 必须为 null", peak.subtitle)
+        assertEquals(false, peak.isLegacyRecord)
     }
 
     @Test
@@ -72,11 +73,11 @@ class DerivePeakGTest {
         val record = fixture(templateId = "brake_100_0", maxA = 0.91, maxD = 0.0)
         val peak = derivePeakG(record, TestTemplate.Braking100To0)
 
-        assertEquals("PEAK BRAKE G", peak.label)
+        assertEquals(R.string.detail_peak_brake_g, peak.labelRes)
         assertEquals("V1 brake 分支 valueText MUST 为 dash，不能 fallback 到 maxA=0.91", "—", peak.valueText)
         assertNull("V1 brake 分支 unit MUST 为 null（不显示 G）", peak.unit)
         assertEquals("V1 brake 分支 gForceChartMaxG MUST 为 0.0", 0.0, peak.gForceChartMaxG, 1e-9)
-        assertEquals("V1 record", peak.subtitle)
+        assertEquals(true, peak.isLegacyRecord)
     }
 
     @Test
@@ -85,10 +86,10 @@ class DerivePeakGTest {
         val record = fixture(templateId = "unknown", maxA = 0.5, maxD = 0.0)
         val peak = derivePeakG(record, template = null)
 
-        assertEquals("PEAK G", peak.label)
+        assertEquals(R.string.detail_peak_g, peak.labelRes)
         assertEquals("0.50", peak.valueText)
         assertEquals("G", peak.unit)
         assertEquals(0.5, peak.gForceChartMaxG, 1e-9)
-        assertNull("兜底分支 subtitle 为 null", peak.subtitle)
+        assertEquals(false, peak.isLegacyRecord)
     }
 }

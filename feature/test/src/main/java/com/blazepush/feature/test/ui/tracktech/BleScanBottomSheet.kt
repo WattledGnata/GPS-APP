@@ -40,18 +40,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.bluetooth.ScannedDevice
 import com.blazepush.core.domain.model.ConnectionState
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 
 enum class ScanSheetState { Scanning, Found, Empty, Connecting, Failed }
 
-private enum class DeviceLabel(val label: String, val color: Color) {
-    Recommended("Recommended", TrackTechColors.Purple),
-    External("External GPS", TrackTechColors.Cyan),
-    Unknown("Unknown", TrackTechColors.TextSecondary),
+private enum class DeviceLabel(val color: Color) {
+    Recommended(TrackTechColors.Purple),
+    External(TrackTechColors.Cyan),
+    Unknown(TrackTechColors.TextSecondary),
 }
 
 private fun classifyDevice(name: String): DeviceLabel = when {
@@ -134,7 +136,7 @@ fun BleScanBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "SCAN DEVICES",
+                    text = stringResource(R.string.scan_devices_title),
                     style = TrackTechTypography.RacingTitleMedium,
                     color = TrackTechColors.TextPrimary,
                 )
@@ -144,7 +146,7 @@ fun BleScanBottomSheet(
                 }) {
                     Icon(
                         imageVector = Icons.Filled.Close,
-                        contentDescription = "Close",
+                        contentDescription = stringResource(R.string.action_close),
                         tint = TrackTechColors.TextSecondary,
                     )
                 }
@@ -180,8 +182,12 @@ fun BleScanBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PrimaryActionPanel(
-                    title = if (state == ScanSheetState.Failed) "RETRY" else "CONNECT",
-                    subtitle = if (selectedDevice != null) selectedDevice!!.name else "SELECT A DEVICE",
+                    title = if (state == ScanSheetState.Failed) {
+                        stringResource(R.string.action_retry)
+                    } else {
+                        stringResource(R.string.action_connect)
+                    },
+                    subtitle = selectedDevice?.name ?: stringResource(R.string.action_select_device),
                     enabled = selectedDevice != null && connectionState != ConnectionState.CONNECTING,
                     onClick = {
                         selectedDevice?.let {
@@ -209,7 +215,7 @@ fun BleScanBottomSheet(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = "SCAN AGAIN",
+                    text = stringResource(R.string.action_scan_again),
                     style = TrackTechTypography.UiTextLabel,
                     color = if (isScanning) TrackTechColors.TextMuted else TrackTechColors.Purple,
                 )
@@ -227,7 +233,7 @@ fun BleScanBottomSheet(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = "Choose a BLE GPS receiver for tests",
+                    text = stringResource(R.string.scan_devices_hint),
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextMuted,
                 )
@@ -239,11 +245,14 @@ fun BleScanBottomSheet(
 @Composable
 private fun Subtitle(state: ScanSheetState, foundCount: Int, connectingTo: String?) {
     val (text, accent) = when (state) {
-        ScanSheetState.Scanning -> "Searching nearby GPS receivers" to TrackTechColors.Cyan
-        ScanSheetState.Found -> "Searching nearby GPS receivers · $foundCount found" to TrackTechColors.Cyan
-        ScanSheetState.Empty -> "No devices found" to TrackTechColors.TextSecondary
-        ScanSheetState.Connecting -> "Connecting to ${connectingTo ?: "device"}..." to TrackTechColors.Cyan
-        ScanSheetState.Failed -> "Connection failed · Tap a device to retry" to TrackTechColors.Red
+        ScanSheetState.Scanning -> stringResource(R.string.scan_searching) to TrackTechColors.Cyan
+        ScanSheetState.Found -> stringResource(R.string.scan_found, foundCount) to TrackTechColors.Cyan
+        ScanSheetState.Empty -> stringResource(R.string.scan_empty) to TrackTechColors.TextSecondary
+        ScanSheetState.Connecting -> stringResource(
+            R.string.scan_connecting,
+            connectingTo ?: stringResource(R.string.scan_device_fallback),
+        ) to TrackTechColors.Cyan
+        ScanSheetState.Failed -> stringResource(R.string.scan_connection_failed) to TrackTechColors.Red
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (state == ScanSheetState.Scanning || state == ScanSheetState.Connecting) {
@@ -311,7 +320,7 @@ private fun DeviceRow(
                     Row {
                         if (isLastConnected) {
                             Text(
-                                text = "Last connected · ",
+                                text = stringResource(R.string.scan_last_connected),
                                 style = TrackTechTypography.UiTextSmall,
                                 color = TrackTechColors.Green,
                                 maxLines = 1,
@@ -319,7 +328,11 @@ private fun DeviceRow(
                             )
                         }
                         Text(
-                            text = label.label,
+                            text = when (label) {
+                                DeviceLabel.Recommended -> stringResource(R.string.device_recommended)
+                                DeviceLabel.External -> stringResource(R.string.device_external_gps)
+                                DeviceLabel.Unknown -> stringResource(R.string.device_unknown)
+                            },
                             style = TrackTechTypography.UiTextSmall,
                             color = label.color,
                             maxLines = 1,
@@ -354,7 +367,7 @@ private fun SelectedRadio(selected: Boolean) {
         ) {
             Icon(
                 imageVector = Icons.Filled.Check,
-                contentDescription = "Selected",
+                contentDescription = stringResource(R.string.action_selected),
                 tint = TrackTechColors.TextPrimary,
                 modifier = Modifier.size(14.dp),
             )

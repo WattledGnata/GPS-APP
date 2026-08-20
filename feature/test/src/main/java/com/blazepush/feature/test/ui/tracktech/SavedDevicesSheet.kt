@@ -39,10 +39,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.data.model.BluetoothDeviceModel
 import com.blazepush.core.data.model.displayName
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 
 /**
@@ -88,7 +90,7 @@ fun SavedDevicesSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "SAVED DEVICES",
+                    text = stringResource(R.string.saved_devices_title),
                     style = TrackTechTypography.RacingTitleMedium,
                     color = TrackTechColors.TextPrimary,
                     maxLines = 1,
@@ -97,7 +99,7 @@ fun SavedDevicesSheet(
                 IconButton(onClick = onDismiss) {
                     Icon(
                         imageVector = Icons.Filled.Close,
-                        contentDescription = "Close",
+                        contentDescription = stringResource(R.string.action_close),
                         tint = TrackTechColors.TextSecondary,
                     )
                 }
@@ -105,9 +107,9 @@ fun SavedDevicesSheet(
 
             Text(
                 text = if (savedDevices.isEmpty()) {
-                    "No saved devices yet — connect a device to remember it"
+                    stringResource(R.string.saved_devices_empty_detail)
                 } else {
-                    "${savedDevices.size} device${if (savedDevices.size > 1) "s" else ""}"
+                    stringResource(R.string.device_saved_count, savedDevices.size)
                 },
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextSecondary,
@@ -152,21 +154,20 @@ fun SavedDevicesSheet(
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除设备记录？") },
+            title = { Text(stringResource(R.string.confirm_delete_device)) },
             text = {
                 Text(
-                    "将删除 \"${target.displayName}\" 的保存记录（含别名）。" +
-                        "不影响当前连接；重新连接会再次记住该设备。"
+                    stringResource(R.string.confirm_delete_device_message, target.displayName)
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     gpsViewModel.deleteSavedDevice(target.address)
                     deleteTarget = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.action_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+                TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -212,7 +213,7 @@ private fun SavedDeviceRow(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Connected",
+                            text = stringResource(R.string.state_connected),
                             style = TrackTechTypography.UiTextSmall,
                             color = TrackTechColors.Green,
                             maxLines = 1,
@@ -232,7 +233,7 @@ private fun SavedDeviceRow(
             IconButton(onClick = onRename) {
                 Icon(
                     imageVector = Icons.Filled.Edit,
-                    contentDescription = "Rename",
+                    contentDescription = stringResource(R.string.action_rename),
                     tint = TrackTechColors.TextSecondary,
                     modifier = Modifier.size(18.dp),
                 )
@@ -240,7 +241,7 @@ private fun SavedDeviceRow(
             IconButton(onClick = onDelete) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete",
+                    contentDescription = stringResource(R.string.action_delete),
                     tint = TrackTechColors.TextSecondary,
                     modifier = Modifier.size(18.dp),
                 )
@@ -259,11 +260,11 @@ private fun RenameAliasDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("设备别名") },
+        title = { Text(stringResource(R.string.device_alias_title)) },
         text = {
             Column {
                 Text(
-                    "为 \"${device.name ?: device.address}\" 设置别名；清空保存即还原固件名。",
+                    stringResource(R.string.device_alias_message, device.name ?: device.address),
                     style = TrackTechTypography.UiTextSmall,
                 )
                 Spacer(Modifier.size(8.dp))
@@ -276,10 +277,10 @@ private fun RenameAliasDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(input.takeIf { it.isNotBlank() }) }) { Text("保存") }
+            TextButton(onClick = { onConfirm(input.takeIf { it.isNotBlank() }) }) { Text(stringResource(R.string.action_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }
@@ -288,14 +289,15 @@ private fun RenameAliasDialog(
  * 最近连接相对时间（UI 交互细化 §3）：<1min "Just now" / <1h "Xm ago" / <24h "Xh ago" / 其他 "MMM d"。
  * lastConnectedAtMs 为 null（migration 历史行）显示 "—"。
  */
+@Composable
 internal fun formatLastConnected(lastConnectedAtMs: Long?, nowMs: Long = System.currentTimeMillis()): String {
     if (lastConnectedAtMs == null) return "—"
     val deltaMs = nowMs - lastConnectedAtMs
     return when {
-        deltaMs < 60_000L -> "Just now"
-        deltaMs < 3_600_000L -> "${deltaMs / 60_000L}m ago"
-        deltaMs < 86_400_000L -> "${deltaMs / 3_600_000L}h ago"
-        else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.US)
+        deltaMs < 60_000L -> stringResource(R.string.time_just_now)
+        deltaMs < 3_600_000L -> stringResource(R.string.time_minutes_ago, deltaMs / 60_000L)
+        deltaMs < 86_400_000L -> stringResource(R.string.time_hours_ago, deltaMs / 3_600_000L)
+        else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
             .format(java.util.Date(lastConnectedAtMs))
     }
 }

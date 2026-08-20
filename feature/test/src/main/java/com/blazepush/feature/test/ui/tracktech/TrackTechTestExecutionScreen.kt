@@ -142,7 +142,7 @@ fun TrackTechTestExecutionScreen(
         if (s is TestState.Completed) {
             // round perftest-result-detail-navigation-feedback：成绩落库后 Toast 反馈消除
             // "必须点 Done 才记录"体感错觉（实际 finishTest 已自动 saveResult）
-            Toast.makeText(context, "已保存到历史", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.execution_saved_history), Toast.LENGTH_SHORT).show()
             // unify-speed-judgement-source Decision 3:DNF(totalTime<=0)播"测试未完成",
             // 不播"零点零零秒"
             if (s.result.totalTime <= 0.0) {
@@ -215,7 +215,7 @@ fun TrackTechTestExecutionScreen(
 
         // CURRENT SPEED
         Text(
-            text = "CURRENT SPEED",
+            text = stringResource(R.string.execution_current_speed),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Purple,
             modifier = Modifier.fillMaxWidth(),
@@ -230,7 +230,7 @@ fun TrackTechTestExecutionScreen(
 
         // ELAPSED TIME
         Text(
-            text = "ELAPSED TIME",
+            text = stringResource(R.string.execution_elapsed_time),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Purple,
             modifier = Modifier.fillMaxWidth(),
@@ -374,7 +374,11 @@ private fun StripDivider() {
 private fun TestTypeHeader(currentMode: TestMode) {
     val isAcceleration = currentMode == TestMode.Acceleration
     val speedLabel = if (isAcceleration) "0-100 km/h" else "100-0 km/h"
-    val typeLabel = if (isAcceleration) "ACCELERATION TEST" else "BRAKING TEST"
+    val typeLabel = if (isAcceleration) {
+        stringResource(R.string.execution_acceleration_test)
+    } else {
+        stringResource(R.string.execution_braking_test)
+    }
     val icon = if (isAcceleration) Icons.Filled.Speed else Icons.Outlined.DoNotDisturbOn
 
     Box(
@@ -448,50 +452,74 @@ private fun PhaseBanner(
     launchArmed: Boolean = false,
 ) {
     val (phaseTag, phaseTitle, phaseSub) = when (testState) {
-        is TestState.Idle -> Triple("STANDBY", "IDLE", "—")
+        is TestState.Idle -> Triple(
+            stringResource(R.string.execution_standby),
+            stringResource(R.string.execution_idle),
+            "—",
+        )
         // launch-arming-feedback Decision 3:Preparing 三态——倒计时 / 引导停稳 / 武装就绪
         // (旧版只有 COUNTDOWN,用户行驶中进页面不知道"要先停稳",2.7km/h 缓动直接误触发)
         is TestState.Preparing -> when {
             countdownSeconds > 0 -> Triple(
-                "PREPARING",
-                "COUNTDOWN  $countdownSeconds",
-                "Waiting for start conditions",
+                stringResource(R.string.execution_preparing),
+                stringResource(R.string.execution_countdown, countdownSeconds),
+                stringResource(R.string.execution_waiting_conditions),
             )
             !launchArmed && currentMode == TestMode.Acceleration -> Triple(
-                "STOP",
-                "BRING CAR TO A STOP",
-                "Hold still for 1 second to arm",
+                stringResource(R.string.execution_stop),
+                stringResource(R.string.execution_bring_to_stop),
+                stringResource(R.string.execution_hold_to_arm),
             )
             launchArmed && currentMode == TestMode.Acceleration -> Triple(
-                "ARMED",
-                "READY TO LAUNCH",
-                "Floor it when ready",
+                stringResource(R.string.execution_armed),
+                stringResource(R.string.execution_ready_launch),
+                stringResource(R.string.execution_floor_when_ready),
             )
             else -> Triple(
-                "PREPARING",
-                "REACH SPEED",
-                "Reach 95-105 km/h",
+                stringResource(R.string.execution_preparing),
+                stringResource(R.string.execution_reach_speed),
+                stringResource(R.string.execution_reach_95_105),
             )
         }
         is TestState.Ready -> Triple(
-            "READY",
-            if (currentMode == TestMode.Acceleration) "HOLD STILL" else "REACH SPEED",
-            if (currentMode == TestMode.Acceleration) "Release brakes to start" else "Reach 95-105 km/h",
+            stringResource(R.string.execution_ready),
+            if (currentMode == TestMode.Acceleration) {
+                stringResource(R.string.execution_hold_still)
+            } else {
+                stringResource(R.string.execution_reach_speed)
+            },
+            if (currentMode == TestMode.Acceleration) {
+                stringResource(R.string.execution_release_brakes)
+            } else {
+                stringResource(R.string.execution_reach_95_105)
+            },
         )
         is TestState.Running -> Triple(
-            "TESTING",
-            if (currentMode == TestMode.Acceleration) "ACCELERATING" else "BRAKING",
-            "Started automatically",
+            stringResource(R.string.execution_testing),
+            if (currentMode == TestMode.Acceleration) {
+                stringResource(R.string.execution_accelerating)
+            } else {
+                stringResource(R.string.execution_braking)
+            },
+            stringResource(R.string.execution_started_automatically),
         )
         // unify-speed-judgement-source Decision 3:DNF(totalTime<=0)显式表达,
         // 不再显示 "DONE" 成功文案(2026-06-04 路测"done 却成绩 0"认知撕裂)
         is TestState.Completed -> if (testState.result.totalTime <= 0.0) {
-            Triple("DNF", "NOT COMPLETED", "Target speed not reached")
+            Triple(
+                stringResource(R.string.execution_dnf),
+                stringResource(R.string.execution_not_completed),
+                stringResource(R.string.execution_target_not_reached),
+            )
         } else {
             Triple(
-                "COMPLETE",
-                if (currentMode == TestMode.Acceleration) "ACCELERATION DONE" else "BRAKING DONE",
-                "Result recorded",
+                stringResource(R.string.execution_complete),
+                if (currentMode == TestMode.Acceleration) {
+                    stringResource(R.string.execution_acceleration_done)
+                } else {
+                    stringResource(R.string.execution_braking_done)
+                },
+                stringResource(R.string.execution_result_recorded),
             )
         }
     }
@@ -623,7 +651,10 @@ private fun ProgressPanel(
     displayPct: Int,
     waitingForLaunch: Boolean = false,
 ) {
-    val targetLabel = if (currentMode == TestMode.Acceleration) "TO 100 km/h" else "TO 0 km/h"
+    val targetLabel = stringResource(
+        R.string.execution_to_speed,
+        if (currentMode == TestMode.Acceleration) "100 km/h" else "0 km/h",
+    )
     val fillFraction = if (waitingForLaunch) 0f else progress.coerceIn(0f, 1f)
 
     Box(
@@ -691,7 +722,7 @@ private fun ProgressPanel(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (waitingForLaunch) {
                     Text(
-                        text = "WAITING FOR LAUNCH",
+                        text = stringResource(R.string.execution_waiting_launch),
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Cyan,
                         maxLines = 1,
@@ -747,7 +778,7 @@ private fun SignalFooter(satelliteCount: Int, hdop: Double) {
         )
         Spacer(Modifier.width(8.dp))
         Column {
-            Text(text = "SATELLITES", style = TrackTechTypography.UiTextLabel, color = TrackTechColors.TextMuted)
+            Text(text = stringResource(R.string.execution_satellites), style = TrackTechTypography.UiTextLabel, color = TrackTechColors.TextMuted)
             Text(text = satelliteCount.toString(), style = TrackTechTypography.UiTextBody, color = TrackTechColors.TextPrimary)
         }
         Spacer(Modifier.weight(1f))
@@ -774,7 +805,11 @@ private fun CancelOrDoneButton(
     onDone: () -> Unit,
 ) {
     val isComplete = testState is TestState.Completed
-    val label = if (isComplete) "查看详情" else "CANCEL TEST"
+    val label = if (isComplete) {
+        stringResource(R.string.action_view_details)
+    } else {
+        stringResource(R.string.action_cancel_test)
+    }
     val color = if (isComplete) TrackTechColors.Green else TrackTechColors.Red
     val onClick = if (isComplete) onDone else onCancel
     val shape = CutCornerPanelShape(10.dp, cutCornersAll)

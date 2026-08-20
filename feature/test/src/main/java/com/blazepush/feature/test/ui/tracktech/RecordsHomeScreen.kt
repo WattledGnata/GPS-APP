@@ -1,8 +1,6 @@
 package com.blazepush.feature.test.ui.tracktech
 // @IgnoreFormatCheck
 
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,7 +24,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
@@ -50,7 +47,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -78,7 +74,6 @@ fun RecordsHomeScreen(
     recoveryCoordinator: IncompleteLapSessionRecoveryCoordinator = koinInject(),
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     // rememberSaveable：进入 detail 屏后返回，sub-tab 选中态保持。
     var selectedSegment by rememberSaveable { mutableStateOf("PERFORMANCE") }
 
@@ -107,7 +102,7 @@ fun RecordsHomeScreen(
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        RecordsTitleRow(context = context)
+        RecordsTitleRow()
 
         SegmentedControl(
             options = listOf("PERFORMANCE", "LAPS"),
@@ -118,7 +113,7 @@ fun RecordsHomeScreen(
 
         when (selectedSegment) {
             "PERFORMANCE" -> PerformanceView(navController = navController)
-            "LAPS" -> LapsView(context = context, navController = navController)
+            "LAPS" -> LapsView(navController = navController)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -126,7 +121,7 @@ fun RecordsHomeScreen(
 }
 
 @Composable
-private fun RecordsTitleRow(context: Context) {
+private fun RecordsTitleRow() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -140,16 +135,6 @@ private fun RecordsTitleRow(context: Context) {
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-        )
-        Icon(
-            imageVector = Icons.Filled.FilterAlt,
-            contentDescription = stringResource(R.string.action_filter),
-            tint = TrackTechColors.TextSecondary,
-            modifier = Modifier
-                .size(24.dp)
-                .clickable {
-                    Toast.makeText(context, "Filter coming next round", Toast.LENGTH_SHORT).show()
-                },
         )
     }
 }
@@ -182,7 +167,7 @@ private fun PerformanceView(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "BEST 0-100",
+                label = stringResource(R.string.records_best_0_100),
                 value = bestAcc?.let { "%.2f".format(it.totalTime) } ?: "--",
                 unit = "s",
                 accentColor = TrackTechColors.Purple,
@@ -190,7 +175,7 @@ private fun PerformanceView(
                 modifier = Modifier.weight(1f),
             )
             MetricTile(
-                label = "BEST BRAKE",
+                label = stringResource(R.string.records_best_brake),
                 value = bestBrake?.let { "%.1f".format(it.totalDistance) } ?: "--",
                 unit = "m",
                 accentColor = TrackTechColors.Red,
@@ -198,7 +183,7 @@ private fun PerformanceView(
                 modifier = Modifier.weight(1f),
             )
             MetricTile(
-                label = "TOTAL RUNS",
+                label = stringResource(R.string.records_total_runs),
                 value = totalRuns.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
@@ -218,7 +203,7 @@ private fun PerformanceView(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "RECENT RUNS",
+            text = stringResource(R.string.records_recent_runs),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
             maxLines = 1,
@@ -226,7 +211,7 @@ private fun PerformanceView(
         )
         if (recent.isEmpty()) {
             Text(
-                text = "No runs yet.",
+                text = stringResource(R.string.records_no_runs),
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
@@ -236,6 +221,7 @@ private fun PerformanceView(
             recent.forEach { result ->
                 val isPB = result.id == bestAcc?.id || result.id == bestBrake?.id
                 val (leadingIcon, title, subtitle) = recentRunRowContent(result, isPB)
+                val deleteHint = formatPerfDeleteHint(result)
                 TrackTechRow(
                     leadingIcon = leadingIcon,
                     title = title,
@@ -246,7 +232,7 @@ private fun PerformanceView(
                     onLongClick = {
                         deleteCandidate = DeleteCandidate.TestRecord(
                             id = result.id,
-                            titleHint = formatPerfDeleteHint(result),
+                            titleHint = deleteHint,
                         )
                     },
                 )
@@ -268,6 +254,7 @@ private fun PerformanceView(
     }
 }
 
+@Composable
 private fun recentRunRowContent(
     result: TestResultSummary,
     isPB: Boolean,
@@ -288,7 +275,7 @@ private fun recentRunRowContent(
         result.testTemplateId == "acc_0_100" -> Icons.Filled.Speed
         else -> Icons.Outlined.DoNotDisturbOn
     }
-    val subtitle = if (isPB) "$value · $time · Personal Best" else "$value · $time"
+    val subtitle = if (isPB) "$value · $time · ${stringResource(R.string.records_personal_best)}" else "$value · $time"
     return Triple(icon, type, subtitle)
 }
 
@@ -319,7 +306,7 @@ private fun SpeedCurveSection(bestAcc: TestResultSummary?) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = "SPEED CURVE",
+                    text = stringResource(R.string.records_speed_curve),
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.Cyan,
                     maxLines = 1,
@@ -481,7 +468,6 @@ private fun SpeedCurveBubble(timeLabel: String, modifier: Modifier) {
 
 @Composable
 private fun LapsView(
-    @Suppress("UNUSED_PARAMETER") context: Context,
     navController: NavController,
     testSessionViewModel: TestSessionViewModel = koinViewModel(),
 ) {
@@ -527,7 +513,7 @@ private fun LapsView(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MetricTile(
-                label = "BEST LAP",
+                label = stringResource(R.string.records_best_lap),
                 value = record.bestLapTime,
                 accentColor = TrackTechColors.Purple,
                 valueSize = MetricSize.Small,
@@ -536,7 +522,7 @@ private fun LapsView(
                     .fillMaxHeight(),
             )
             MetricTile(
-                label = "SESSIONS",
+                label = stringResource(R.string.records_sessions),
                 value = record.sessions.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
@@ -545,7 +531,7 @@ private fun LapsView(
                     .fillMaxHeight(),
             )
             MetricTile(
-                label = "TOTAL LAPS",
+                label = stringResource(R.string.records_total_laps),
                 value = record.totalLaps.toString(),
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Medium,
@@ -565,7 +551,7 @@ private fun LapsView(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "SESSION HISTORY",
+            text = stringResource(R.string.records_session_history),
             style = TrackTechTypography.UiTextLabel,
             color = TrackTechColors.Cyan,
             maxLines = 1,
@@ -573,7 +559,7 @@ private fun LapsView(
         )
         if (recentSessions.isEmpty()) {
             Text(
-                text = "No lap sessions yet.",
+                text = stringResource(R.string.records_no_lap_sessions),
                 style = TrackTechTypography.UiTextSmall,
                 color = TrackTechColors.TextMuted,
                 maxLines = 1,
@@ -581,16 +567,18 @@ private fun LapsView(
             )
         } else {
             recentSessions.forEach { session ->
+                val title = formatLapSessionRowTitle(session)
+                val deleteHint = formatLapDeleteHint(session)
                 TrackTechRow(
                     leadingIcon = Icons.Filled.CalendarMonth,
-                    title = formatLapSessionRowTitle(session),
+                    title = title,
                     onClick = {
                         navController.navigate("lap_session_detail/${session.sessionId}")
                     },
                     onLongClick = {
                         deleteCandidate = DeleteCandidate.LapSession(
                             id = session.sessionId,
-                            titleHint = formatLapDeleteHint(session),
+                            titleHint = deleteHint,
                         )
                     },
                 )
@@ -621,16 +609,18 @@ private fun LapsView(
     }
 }
 
+@Composable
 private fun formatLapSessionRowTitle(session: TelemetrySession): String {
     val date = formatDate(session.startTs)
     val best = session.bestLapMs?.let { formatLapMs(it) } ?: "--"
-    return "$date · ${session.lapCount} Laps · Best $best"
+    return "$date · ${stringResource(R.string.records_lap_summary, session.lapCount, best)}"
 }
 
 /**
  * round add-history-deletion §8.4：PERFORMANCE row 长按删除 dialog 副标 hint
  * （格式："0-100 km/h · 4.21 s · Today 10:35"），复用 [recentRunRowContent] 的派生口径。
  */
+@Composable
 private fun formatPerfDeleteHint(result: TestResultSummary): String {
     val type = when (result.testTemplateId) {
         "acc_0_100" -> "0-100 km/h"
@@ -650,10 +640,11 @@ private fun formatPerfDeleteHint(result: TestResultSummary): String {
  * round add-history-deletion §8.4：LAPS row 长按删除 dialog 副标 hint
  * （格式："5/2 23:48 · 4 Laps · Best 1:32.457"），复用 [formatLapSessionRowTitle] 同款字段。
  */
+@Composable
 private fun formatLapDeleteHint(session: TelemetrySession): String {
     val date = formatDate(session.startTs)
     val best = session.bestLapMs?.let { formatLapMs(it) } ?: "--"
-    return "$date · ${session.lapCount} Laps · Best $best"
+    return "$date · ${stringResource(R.string.records_lap_summary, session.lapCount, best)}"
 }
 
 @Composable
@@ -680,7 +671,7 @@ private fun CurrentTrackRecordCard(
             ) {
                 Column {
                     Text(
-                        text = "CURRENT TRACK RECORD",
+                        text = stringResource(R.string.records_current_track),
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Purple,
                         maxLines = 1,
@@ -697,7 +688,7 @@ private fun CurrentTrackRecordCard(
                 }
                 Column {
                     Text(
-                        text = "BEST LAP",
+                        text = stringResource(R.string.records_best_lap),
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Cyan,
                         maxLines = 1,
@@ -727,7 +718,7 @@ private fun CurrentTrackRecordCard(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Star,
-                    contentDescription = "Favorite",
+                    contentDescription = null,
                     tint = TrackTechColors.TextSecondary,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -789,7 +780,11 @@ private fun SegmentedControl(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = opt,
+                    text = when (opt) {
+                        "PERFORMANCE" -> stringResource(R.string.records_performance)
+                        "LAPS" -> stringResource(R.string.records_laps)
+                        else -> opt
+                    },
                     style = TrackTechTypography.UiTextLabel,
                     color = if (isSelected) TrackTechColors.TextPrimary else TrackTechColors.TextSecondary,
                     maxLines = 1,

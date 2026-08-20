@@ -102,8 +102,8 @@ class LapComparisonScreenContractTest {
             source.contains("derived.validLaps >= 2"),
         )
         assertTrue(
-            "LapSessionDetailScreen.kt MUST render COMPARE LAPS label",
-            source.contains("\"COMPARE LAPS\""),
+            "LapSessionDetailScreen.kt MUST render the localized compare action",
+            source.contains("R.string.detail_compare_laps"),
         )
     }
 
@@ -227,10 +227,10 @@ class LapComparisonScreenContractTest {
 
         private val REQUIRED_LITERALS = listOf(
             // Visual literals
-            "\"LAP COMPARE\"",
-            "\"SELECT 2+ LAPS TO COMPARE\"",
-            "\"SESSION HAS < 2 VALID LAPS\"",
-            "\"SPEED OVERLAY\"",
+            "R.string.comparison_title",
+            "R.string.comparison_select_two_hint",
+            "R.string.comparison_not_enough_laps",
+            "R.string.comparison_speed_overlay",
             // 多圈组件接线
             "MultiLapSpeedChart(",
             // reader 加载
