@@ -3,6 +3,7 @@ package com.blazepush.feature.test.usecase
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.usecase.isUsableForTiming
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.LapSession
 import com.blazepush.feature.test.model.track.TimingGateType
@@ -88,7 +89,7 @@ object LapLiveStateDeriver {
      */
     fun derive(
         session: LapSession?,
-        currentDisplayTimeMs: Long,
+        currentDisplayTimeMs: Long?,
         gpsData: GpsData,
         connectionState: ConnectionState,
         dataQuality: DataQuality,
@@ -100,8 +101,15 @@ object LapLiveStateDeriver {
             ?.sortedBy { it.timestampMillis }
             .orEmpty()
 
-        val currentLapTimerMs = acceptedStartFinish.lastOrNull()
-            ?.let { currentDisplayTimeMs - it.timestampMillis }
+        val currentLapTimerMs = if (gpsData.isUsableForTiming()) {
+            currentDisplayTimeMs?.let { now ->
+                acceptedStartFinish.lastOrNull()
+                    ?.takeIf { now >= it.timestampMillis }
+                    ?.let { now - it.timestampMillis }
+            }
+        } else {
+            null
+        }
 
         val lapDurations = if (acceptedStartFinish.size >= 2) {
             acceptedStartFinish.zipWithNext { prev, next ->
@@ -144,7 +152,7 @@ object LapLiveStateDeriver {
 
     private fun deriveAbnormalState(
         session: LapSession?,
-        currentTimeMs: Long,
+        currentTimeMs: Long?,
         gpsData: GpsData,
         connectionState: ConnectionState,
         dataQuality: DataQuality,
@@ -171,7 +179,11 @@ object LapLiveStateDeriver {
         val latest = invalidatingEvents.maxBy { it.timestampMillis }
 
         // 显示时长门：banner 触发后只在 5 秒内显示
-        if (currentTimeMs - latest.timestampMillis >= LAP_INVALIDATED_DISPLAY_WINDOW_MS) return null
+        if (
+            currentTimeMs == null ||
+            currentTimeMs < latest.timestampMillis ||
+            currentTimeMs - latest.timestampMillis >= LAP_INVALIDATED_DISPLAY_WINDOW_MS
+        ) return null
 
         // 去抖门：以 latest 为锚点，向前 1 秒窗口内 invalidating event 必须 ≥ LAP_INVALIDATED_DEBOUNCE_MIN_COUNT 个
         // (W4 wire-laptime-to-gps-filter round 后 MIN_COUNT = 1：filter 接通后 jitter 已从数据流根因消除)

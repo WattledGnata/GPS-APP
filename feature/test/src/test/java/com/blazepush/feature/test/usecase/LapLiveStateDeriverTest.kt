@@ -5,6 +5,7 @@ import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.model.SignalStrength
+import com.blazepush.core.domain.model.TimingHandshakeState
 import com.blazepush.feature.test.model.laptiming.CrossingEvent
 import com.blazepush.feature.test.model.laptiming.CrossingReason
 import com.blazepush.feature.test.model.laptiming.LapSession
@@ -86,6 +87,75 @@ class LapLiveStateDeriverTest {
         assertNull(state.bestLapTimeMs)
         assertNull(state.deltaToBestMs)
         assertEquals(1, state.currentLapNumber)
+    }
+
+    @Test
+    fun `unsynchronized sentinel timestamp after reconnect keeps current timer hidden`() {
+        val session = sessionWith(
+            crossings = listOf(crossing(timestampMs = 1_000L, accepted = true)),
+            currentLapIndex = 1,
+        )
+
+        val state = LapLiveStateDeriver.derive(
+            session = session,
+            currentDisplayTimeMs = Long.MIN_VALUE,
+            gpsData = goodGpsData().copy(
+                timestamp = Long.MIN_VALUE,
+                isTimeSynced = false,
+                isRecoveryStable = false,
+                timingHandshakeState = TimingHandshakeState.WAITING_TIME,
+            ),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertNull(state.currentLapTimerMs)
+    }
+
+    @Test
+    fun `connected without a new main frame keeps current timer hidden`() {
+        val session = sessionWith(
+            crossings = listOf(crossing(timestampMs = 1_000L, accepted = true)),
+            currentLapIndex = 1,
+        )
+
+        val state = LapLiveStateDeriver.derive(
+            session = session,
+            currentDisplayTimeMs = null,
+            gpsData = goodGpsData().copy(
+                hasMainFrame = false,
+                isRecoveryStable = false,
+                timingHandshakeState = TimingHandshakeState.WAITING_MAIN,
+            ),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertNull(state.currentLapTimerMs)
+    }
+
+    @Test
+    fun `display timestamp before accepted crossing never wraps current timer`() {
+        val session = sessionWith(
+            crossings = listOf(crossing(timestampMs = 2_000L, accepted = true)),
+            currentLapIndex = 1,
+        )
+
+        val state = LapLiveStateDeriver.derive(
+            session = session,
+            currentDisplayTimeMs = 1_000L,
+            gpsData = goodGpsData(),
+            connectionState = ConnectionState.CONNECTED,
+            dataQuality = goodDataQuality(),
+            deltaToBestMs = null,
+            deltaIsStale = false,
+        )
+
+        assertNull(state.currentLapTimerMs)
     }
 
     @Test
@@ -515,12 +585,20 @@ class LapLiveStateDeriverTest {
     )
 
     private fun goodGpsData(): GpsData = GpsData.Empty.copy(
+        timestamp = 1_000L,
         satelliteCount = 8,
         hdop = 1.2,
         isConnected = true,
         isTestReady = true,
         fixQuality = 1,
         isTimeSynced = true,
+        hasMainFrame = true,
+        consecutiveReliableMainFrames = 11,
+        requiredReliableMainFrames = 11,
+        reliableMainStableDurationMs = 1_000L,
+        requiredReliableMainStableDurationMs = 1_000L,
+        isRecoveryStable = true,
+        timingHandshakeState = TimingHandshakeState.SYNCHRONIZED,
     )
 
     private fun goodDataQuality(): DataQuality = DataQuality(

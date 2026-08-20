@@ -290,10 +290,16 @@ class TestSessionViewModel(
         // 通过 elapsedRealtime 在 GPS 帧间隔内推进，让 ticker 50ms 驱动 CURRENT tile 平滑滚动
         // （不依赖 GPS 帧到达频率：5Hz replay 下 timer 仍 50ms 跳一次）。
         val anchorElapsed = lastReceivedAtElapsed
-        val currentDisplayTimeMs = if (anchorElapsed > 0L) {
-            gps.timestamp + (SystemClock.elapsedRealtime() - anchorElapsed)
+        val currentDisplayTimeMs = if (gps.isUsableForTiming() && gps.timestamp != Long.MIN_VALUE) {
+            val elapsedSinceAnchor = if (anchorElapsed > 0L) {
+                (SystemClock.elapsedRealtime() - anchorElapsed).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            gps.timestamp.takeIf { it <= Long.MAX_VALUE - elapsedSinceAnchor }
+                ?.plus(elapsedSinceAnchor)
         } else {
-            gps.timestamp
+            null
         }
         LapLiveStateDeriver.derive(
             session = session,
