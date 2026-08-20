@@ -65,6 +65,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -75,6 +76,7 @@ import com.blazepush.core.domain.model.GpsData
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredCameraPermissions
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.model.laptiming.LapGpsReadiness
 import com.blazepush.feature.test.recording.CameraRecordingEngine
 import com.blazepush.feature.test.recording.RecordingConfig
@@ -900,10 +902,14 @@ private fun LapLiveTopStrip(
                 overflow = TextOverflow.Ellipsis,
             )
         } else {
+            val gpsPresentation = GpsReadinessPresentationMapper.present(
+                readiness = lapGpsReadiness,
+                connectionState = connectionState ?: ConnectionState.DISCONNECTED,
+            )
             Text(
-                text = lapGpsReadiness.name,
+                text = stringResource(gpsPresentation.shortLabelRes),
                 style = TrackTechTypography.UiTextSmall,
-                color = if (lapGpsReadiness == LapGpsReadiness.ARMED) {
+                color = if (gpsPresentation.tone == GpsReadinessTone.READY) {
                     TrackTechColors.Green
                 } else {
                     TrackTechColors.TextMuted
@@ -1381,7 +1387,7 @@ private fun EndConfirmationDialog(
         onDismissRequest = onContinue,
         title = {
             Text(
-                text = "End Lap Session?",
+                text = stringResource(R.string.confirm_end_lap_title),
                 style = TrackTechTypography.RacingTitleSmall,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -1390,7 +1396,7 @@ private fun EndConfirmationDialog(
         },
         text = {
             Text(
-                text = "Stop recording and save the current session.",
+                text = stringResource(R.string.confirm_end_lap_message),
                 style = TrackTechTypography.UiTextBody,
                 color = TrackTechColors.TextSecondary,
                 maxLines = 2,
@@ -1400,7 +1406,7 @@ private fun EndConfirmationDialog(
         dismissButton = {
             TextButton(onClick = onContinue) {
                 Text(
-                    text = "Continue",
+                    text = stringResource(R.string.confirm_continue),
                     color = TrackTechColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1410,7 +1416,7 @@ private fun EndConfirmationDialog(
         confirmButton = {
             TextButton(onClick = onEnd) {
                 Text(
-                    text = "End Session",
+                    text = stringResource(R.string.confirm_end_session),
                     color = TrackTechColors.Red,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

@@ -151,6 +151,7 @@ fun TrackTechAppShell() {
                                 onTabSelected = onTabSelected,
                                 pendingShowScanSheet = pendingShowScanSheet,
                                 onPendingShowScanSheetConsumed = { pendingShowScanSheet = false },
+                                sessionViewModel = sessionViewModel,
                             )
                         }
                     }

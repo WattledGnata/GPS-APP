@@ -32,10 +32,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.QualityLevel
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.ui.tracktech.format.formatDate
 import com.blazepush.feature.test.ui.tracktech.format.formatLapMs
@@ -53,7 +55,9 @@ fun LapsHomeScreen(
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
+    val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
+    val lapGpsReadiness by testSessionViewModel.lapGpsReadiness.collectAsState()
     val availableTracks by testSessionViewModel.availableTracks.collectAsState()
     val currentTrack by testSessionViewModel.currentSelectedTrack.collectAsState()
     val recentTrackIds by testSessionViewModel.recentTrackIds.collectAsState()
@@ -63,12 +67,16 @@ fun LapsHomeScreen(
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT ||
         dataQuality.overall == QualityLevel.GOOD
     val signalLabel = when (dataQuality.overall) {
-        QualityLevel.EXCELLENT, QualityLevel.GOOD -> "Good signal"
-        QualityLevel.FAIR -> "Weak signal"
-        QualityLevel.POOR -> "No signal"
+        QualityLevel.EXCELLENT, QualityLevel.GOOD -> stringResource(R.string.quality_good_signal)
+        QualityLevel.FAIR -> stringResource(R.string.quality_weak_signal)
+        QualityLevel.POOR -> stringResource(R.string.quality_no_signal)
+    }
+    val gpsPresentation = remember(lapGpsReadiness, connectionState) {
+        GpsReadinessPresentationMapper.present(lapGpsReadiness, connectionState)
     }
     val statusItems = statusItemsFromGpsState(
-        gpsReady = gpsData.isTestReady,
+        gpsStatusLabel = stringResource(gpsPresentation.shortLabelRes),
+        gpsStatusTone = gpsPresentation.tone,
         frequencyHz = gpsData.frequency.toInt(),
         signalLabel = signalLabel,
         signalIsGood = signalGood,
@@ -94,7 +102,7 @@ fun LapsHomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Laps",
+                text = stringResource(R.string.screen_laps),
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -102,7 +110,7 @@ fun LapsHomeScreen(
             )
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                contentDescription = "Help",
+                contentDescription = stringResource(R.string.action_help),
                 tint = TrackTechColors.TextSecondary,
                 modifier = Modifier.size(20.dp),
             )
@@ -125,8 +133,8 @@ fun LapsHomeScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PrimaryActionPanel(
-                title = "START LAP SESSION",
-                subtitle = "BEGIN TIMING",
+                title = stringResource(R.string.action_start_lap_session),
+                subtitle = stringResource(R.string.action_begin_timing),
                 leadingIcon = Icons.Filled.Flag,
                 onClick = {
                     startLapSession(
@@ -138,8 +146,8 @@ fun LapsHomeScreen(
             )
             if (lastTrack != null) {
                 SecondaryActionPanel(
-                    title = "QUICK START · ${lastTrack.name.zh}",
-                    subtitle = "上一赛道 · 新 Session",
+                    title = stringResource(R.string.action_quick_start, lastTrack.name.zh),
+                    subtitle = stringResource(R.string.action_quick_start_detail),
                     leadingIcon = Icons.Filled.Flag,
                     accentColor = TrackTechColors.Purple,
                     onClick = {
@@ -153,16 +161,16 @@ fun LapsHomeScreen(
                 )
             }
             SecondaryActionPanel(
-                title = "CHANGE TRACK",
-                subtitle = "切换计时赛道",
+                title = stringResource(R.string.action_change_track),
+                subtitle = stringResource(R.string.action_change_track_detail),
                 leadingIcon = Icons.Filled.SwapHoriz,
                 accentColor = TrackTechColors.Cyan,
                 onClick = { showSelectTrackSheet = true },
             )
             if (isDebugCaptureAvailable()) {
                 SecondaryActionPanel(
-                    title = "FREE CAPTURE",
-                    subtitle = "任意地点采集 GPS 与视频",
+                    title = stringResource(R.string.action_free_capture),
+                    subtitle = stringResource(R.string.action_free_capture_detail),
                     leadingIcon = Icons.Filled.BugReport,
                     accentColor = TrackTechColors.Purple,
                     onClick = {

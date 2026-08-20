@@ -65,15 +65,20 @@ fun TrackTechStatusStrip(
 
 /** 由 GpsDataViewModel 当前状态派生 3 项 status item。 */
 fun statusItemsFromGpsState(
-    gpsReady: Boolean,
+    gpsStatusLabel: String,
+    gpsStatusTone: GpsReadinessTone,
     frequencyHz: Int,
     signalLabel: String,  // "Good signal" / "Weak signal" / "No signal"
     signalIsGood: Boolean,
 ): List<TrackTechStatusItem> = listOf(
     TrackTechStatusItem(
         icon = Icons.Filled.GpsFixed,
-        label = if (gpsReady) "GPS ready" else "GPS no fix",
-        color = if (gpsReady) TrackTechColors.Green else TrackTechColors.Red,
+        label = gpsStatusLabel,
+        color = when (gpsStatusTone) {
+            GpsReadinessTone.READY -> TrackTechColors.Green
+            GpsReadinessTone.CONNECTING -> TrackTechColors.Purple
+            GpsReadinessTone.WAITING -> TrackTechColors.Red
+        },
     ),
     TrackTechStatusItem(
         icon = Icons.Filled.GraphicEq,

@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -54,6 +55,7 @@ import com.blazepush.core.domain.model.TestResult
 import com.blazepush.core.domain.model.TestState
 import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.feature.test.utils.VoiceAnnouncer
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestMode
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
@@ -119,6 +121,7 @@ fun TrackTechTestExecutionScreen(
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
+    val lapGpsReadiness by sessionViewModel.lapGpsReadiness.collectAsState()
     val testState by sessionViewModel.testState.collectAsState()
     val currentMode by sessionViewModel.currentMode.collectAsState()
     val countdownSeconds by sessionViewModel.countdownSeconds.collectAsState()
@@ -170,11 +173,14 @@ fun TrackTechTestExecutionScreen(
 
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT || dataQuality.overall == QualityLevel.GOOD
     val qualityLabel = when (dataQuality.overall) {
-        QualityLevel.EXCELLENT, QualityLevel.GOOD -> "Good"
-        QualityLevel.FAIR -> "Fair"
-        QualityLevel.POOR -> "Poor"
+        QualityLevel.EXCELLENT, QualityLevel.GOOD -> stringResource(R.string.quality_good_signal)
+        QualityLevel.FAIR -> stringResource(R.string.quality_weak_signal)
+        QualityLevel.POOR -> stringResource(R.string.quality_no_signal)
     }
-    val isConnected = connectionState == ConnectionState.CONNECTED
+    val gpsPresentation = GpsReadinessPresentationMapper.present(
+        readiness = lapGpsReadiness,
+        connectionState = connectionState,
+    )
     val frequencyHz = gpsData.frequency.toInt().coerceAtLeast(0)
 
     Column(
@@ -185,8 +191,8 @@ fun TrackTechTestExecutionScreen(
         Spacer(Modifier.height(12.dp))
 
         ExecutionStatusStrip(
-            gpsReady = gpsData.isTestReady,
-            isConnected = isConnected,
+            gpsPresentation = gpsPresentation,
+            connectionState = connectionState,
             frequencyHz = frequencyHz,
             qualityLabel = qualityLabel,
             signalGood = signalGood,
@@ -277,12 +283,18 @@ fun TrackTechTestExecutionScreen(
 
 @Composable
 private fun ExecutionStatusStrip(
-    gpsReady: Boolean,
-    isConnected: Boolean,
+    gpsPresentation: GpsReadinessPresentation,
+    connectionState: ConnectionState,
     frequencyHz: Int,
     qualityLabel: String,
     signalGood: Boolean,
 ) {
+    val gpsStatusColor = when (gpsPresentation.tone) {
+        GpsReadinessTone.READY -> TrackTechColors.Green
+        GpsReadinessTone.CONNECTING -> TrackTechColors.Purple
+        GpsReadinessTone.WAITING -> TrackTechColors.Red
+    }
+    val isConnected = connectionState == ConnectionState.CONNECTED
     val shape = CutCornerPanelShape(cutSize = 8.dp, cutCorners = cutCornersAll)
     Row(
         modifier = Modifier
@@ -295,16 +307,21 @@ private fun ExecutionStatusStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusCell(
-            icon = { Icon(Icons.Filled.GpsFixed, null, tint = if (gpsReady) TrackTechColors.Green else TrackTechColors.Red, modifier = Modifier.size(12.dp)) },
+            icon = { Icon(Icons.Filled.GpsFixed, null, tint = gpsStatusColor, modifier = Modifier.size(12.dp)) },
             label = "GPS",
-            status = if (gpsReady) "Ready" else "No Fix",
-            statusColor = if (gpsReady) TrackTechColors.Green else TrackTechColors.Red,
+            status = stringResource(gpsPresentation.shortLabelRes),
+            statusColor = gpsStatusColor,
         )
         StripDivider()
         StatusCell(
             icon = { Icon(Icons.Filled.Bluetooth, null, tint = if (isConnected) TrackTechColors.Cyan else TrackTechColors.TextMuted, modifier = Modifier.size(12.dp)) },
             label = "BLE",
-            status = if (isConnected) "Connected" else "Disconnected",
+            status = when (connectionState) {
+                ConnectionState.CONNECTED -> stringResource(R.string.label_ble_connected)
+                ConnectionState.CONNECTING -> stringResource(R.string.label_ble_connecting)
+                ConnectionState.DISCONNECTING -> stringResource(R.string.label_ble_disconnecting)
+                ConnectionState.DISCONNECTED -> stringResource(R.string.label_ble_disconnected)
+            },
             statusColor = if (isConnected) TrackTechColors.Cyan else TrackTechColors.TextMuted,
         )
         StripDivider()
@@ -317,7 +334,7 @@ private fun ExecutionStatusStrip(
         StripDivider()
         StatusCell(
             icon = { Icon(Icons.Filled.SignalCellularAlt, null, tint = if (signalGood) TrackTechColors.Green else TrackTechColors.Red, modifier = Modifier.size(12.dp)) },
-            label = "Quality",
+            label = stringResource(R.string.label_quality),
             status = qualityLabel,
             statusColor = if (signalGood) TrackTechColors.Green else TrackTechColors.Red,
         )

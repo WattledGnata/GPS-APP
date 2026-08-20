@@ -28,11 +28,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -49,6 +51,7 @@ fun TestHomeScreen(
     val gpsData by gpsViewModel.gpsData.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
+    val lapGpsReadiness by sessionViewModel.lapGpsReadiness.collectAsState()
 
     val readiness = remember(connectionState, gpsData, dataQuality) {
         TabGatingPolicy.computeTabReadiness(connectionState, gpsData, dataQuality)
@@ -65,12 +68,16 @@ fun TestHomeScreen(
     val signalGood = dataQuality.overall == QualityLevel.EXCELLENT ||
         dataQuality.overall == QualityLevel.GOOD
     val signalLabel = when (dataQuality.overall) {
-        QualityLevel.EXCELLENT, QualityLevel.GOOD -> "Good signal"
-        QualityLevel.FAIR -> "Weak signal"
-        QualityLevel.POOR -> "No signal"
+        QualityLevel.EXCELLENT, QualityLevel.GOOD -> stringResource(R.string.quality_good_signal)
+        QualityLevel.FAIR -> stringResource(R.string.quality_weak_signal)
+        QualityLevel.POOR -> stringResource(R.string.quality_no_signal)
+    }
+    val gpsPresentation = remember(lapGpsReadiness, connectionState) {
+        GpsReadinessPresentationMapper.present(lapGpsReadiness, connectionState)
     }
     val statusItems = statusItemsFromGpsState(
-        gpsReady = gpsData.isTestReady,
+        gpsStatusLabel = stringResource(gpsPresentation.shortLabelRes),
+        gpsStatusTone = gpsPresentation.tone,
         frequencyHz = gpsData.frequency.toInt(),
         signalLabel = signalLabel,
         signalIsGood = signalGood,
@@ -92,7 +99,7 @@ fun TestHomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Drive Test",
+                text = stringResource(R.string.screen_drive_test),
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -100,7 +107,7 @@ fun TestHomeScreen(
             )
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                contentDescription = "Help",
+                contentDescription = stringResource(R.string.action_help),
                 tint = TrackTechColors.TextSecondary,
                 modifier = Modifier.size(20.dp),
             )
@@ -113,7 +120,7 @@ fun TestHomeScreen(
             },
         )
 
-        SpeedHero(speed = gpsData.speed.toInt(), isReady = gpsData.isTestReady)
+        SpeedHero(speed = gpsData.speed.toInt(), gpsPresentation = gpsPresentation)
 
         Column(
             modifier = Modifier
@@ -122,7 +129,7 @@ fun TestHomeScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "PERFORMANCE TEST",
+                text = stringResource(R.string.label_performance_test),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -130,7 +137,7 @@ fun TestHomeScreen(
             )
             PrimaryActionPanel(
                 title = "0-100",
-                subtitle = "ACCELERATION",
+                subtitle = stringResource(R.string.label_acceleration),
                 leadingIcon = Icons.Filled.Speed,
                 onClick = {
                     if (readiness.canEnterTestFlow) {
@@ -146,7 +153,7 @@ fun TestHomeScreen(
             )
             SecondaryActionPanel(
                 title = "100-0",
-                subtitle = "BRAKING",
+                subtitle = stringResource(R.string.label_braking),
                 leadingIcon = Icons.Outlined.DoNotDisturbOn,
                 onClick = {
                     if (readiness.canEnterTestFlow) {
@@ -169,7 +176,7 @@ fun TestHomeScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "LATEST RESULT",
+                text = stringResource(R.string.label_latest_result),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -205,7 +212,8 @@ fun TestHomeScreen(
 }
 
 @Composable
-private fun SpeedHero(speed: Int, isReady: Boolean) {
+private fun SpeedHero(speed: Int, gpsPresentation: GpsReadinessPresentation) {
+    val isReady = gpsPresentation.tone == GpsReadinessTone.READY
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -216,7 +224,7 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
     ) {
         Column {
             Text(
-                text = "SPEED",
+                text = stringResource(R.string.label_speed),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Cyan,
                 maxLines = 1,
@@ -234,7 +242,7 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "STATUS",
+                    text = stringResource(R.string.label_status),
                     style = TrackTechTypography.UiTextLabel,
                     color = TrackTechColors.TextSecondary,
                     maxLines = 1,
@@ -242,7 +250,11 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (isReady) "READY" else "STANDBY",
+                    text = if (isReady) {
+                        stringResource(R.string.speed_status_ready)
+                    } else {
+                        stringResource(gpsPresentation.shortLabelRes)
+                    },
                     style = TrackTechTypography.UiTextLabel,
                     color = if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted,
                     maxLines = 1,
@@ -252,4 +264,3 @@ private fun SpeedHero(speed: Int, isReady: Boolean) {
         }
     }
 }
-

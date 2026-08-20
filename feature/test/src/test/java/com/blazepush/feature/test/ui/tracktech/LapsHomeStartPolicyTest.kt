@@ -62,7 +62,7 @@ class LapsHomeStartPolicyTest {
     @Test
     fun `START action delegates directly without tab readiness gate`() {
         val source = readSource()
-        val startAction = source.substringAfter("title = \"START LAP SESSION\"")
+        val startAction = source.substringAfter("title = stringResource(R.string.action_start_lap_session)")
             .substringBefore("SecondaryActionPanel(")
 
         assertTrue(startAction.contains("startLapSession("))

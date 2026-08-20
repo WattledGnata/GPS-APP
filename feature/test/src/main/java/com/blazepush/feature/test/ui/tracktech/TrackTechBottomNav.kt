@@ -20,9 +20,10 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.remember
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,15 +32,15 @@ import androidx.compose.ui.unit.dp
 
 data class TrackTechTabItem(
     val route: String,
-    val label: String,
+    val labelRes: Int,
     val icon: ImageVector,
 )
 
 val DefaultTrackTechTabs = listOf(
-    TrackTechTabItem("test", "Test", Icons.Filled.Speed),
-    TrackTechTabItem("laps", "Laps", Icons.Filled.Flag),
-    TrackTechTabItem("records", "Records", Icons.Filled.Insights),
-    TrackTechTabItem("device", "Device", Icons.Filled.Bluetooth),
+    TrackTechTabItem("test", com.blazepush.feature.test.R.string.tab_test, Icons.Filled.Speed),
+    TrackTechTabItem("laps", com.blazepush.feature.test.R.string.tab_laps, Icons.Filled.Flag),
+    TrackTechTabItem("records", com.blazepush.feature.test.R.string.tab_records, Icons.Filled.Insights),
+    TrackTechTabItem("device", com.blazepush.feature.test.R.string.tab_device, Icons.Filled.Bluetooth),
 )
 
 @Composable
@@ -81,6 +82,7 @@ private fun TrackTechBottomNavItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val label = stringResource(tab.labelRes)
     val indicatorShape = CutCornerPanelShape(cutSize = 6.dp, cutCorners = cutCornersDiagonal)
     val interactionSource = remember { MutableInteractionSource() }
     Box(
@@ -109,12 +111,12 @@ private fun TrackTechBottomNavItem(
         ) {
             Icon(
                 imageVector = tab.icon,
-                contentDescription = tab.label,
+                contentDescription = label,
                 tint = if (selected) TrackTechColors.Purple else TrackTechColors.TextSecondary,
                 modifier = Modifier.size(20.dp),
             )
             Text(
-                text = tab.label,
+                text = label,
                 style = TrackTechTypography.UiTextSmall,
                 color = if (selected) TrackTechColors.TextPrimary else TrackTechColors.TextSecondary,
                 maxLines = 1,

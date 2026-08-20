@@ -63,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -75,7 +76,9 @@ import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.core.domain.permission.PermissionRequestOutcome
 import com.blazepush.core.domain.permission.RequiredBluetoothPermissions
 import com.blazepush.feature.test.datastore.UserProfileRepository
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
+import com.blazepush.feature.test.viewmodel.TestSessionViewModel
 import kotlinx.coroutines.flow.first
 import org.koin.compose.koinInject
 
@@ -86,40 +89,6 @@ private data class HeroState(
     val accent: Color,
 )
 
-private fun deriveHeroState(
-    connectionState: ConnectionState,
-    isTestReady: Boolean,
-    frequencyHz: Int,
-    qualityLabel: String,
-    // ble-device-memory（UI 交互细化 §5）：冷启动自动连（CONNECTING 且无设备名）提示用户"不用动"
-    isAutoConnecting: Boolean = false,
-): HeroState = when {
-    connectionState == ConnectionState.CONNECTED && isTestReady -> HeroState(
-        title = "READY TO TEST",
-        subtitle = "GPS locked · BLE connected",
-        statusLine = "${frequencyHz}Hz · Quality $qualityLabel",
-        accent = TrackTechSemantic.ReadyAccent,
-    )
-    connectionState == ConnectionState.CONNECTED -> HeroState(
-        title = "WAITING FOR GPS LOCK",
-        subtitle = "BLE connected · acquiring GPS fix",
-        statusLine = "${frequencyHz}Hz · Quality $qualityLabel",
-        accent = TrackTechSemantic.ConnectingAccent,
-    )
-    connectionState == ConnectionState.CONNECTING -> HeroState(
-        title = "CONNECTING…",
-        subtitle = "Establishing BLE link",
-        statusLine = if (isAutoConnecting) "Auto-connecting last device…" else "—",
-        accent = TrackTechColors.TextSecondary,
-    )
-    else -> HeroState(
-        title = "CONNECT GPS DEVICE",
-        subtitle = "BLE disconnected · GPS no fix",
-        statusLine = "Tap SCAN to find devices",
-        accent = TrackTechSemantic.PrimaryActionAccent,
-    )
-}
-
 @Composable
 fun DeviceHomeScreen(
     navController: NavController,
@@ -127,6 +96,7 @@ fun DeviceHomeScreen(
     modifier: Modifier = Modifier,
     pendingShowScanSheet: Boolean = false,
     onPendingShowScanSheetConsumed: () -> Unit = {},
+    sessionViewModel: TestSessionViewModel,
 ) {
     val gpsViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsViewModel.gpsData.collectAsState()
@@ -134,6 +104,7 @@ fun DeviceHomeScreen(
     val dataQuality by gpsViewModel.dataQuality.collectAsState()
     val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
     val batteryCapability by gpsViewModel.batteryCapability.collectAsState()
+    val lapGpsReadiness by sessionViewModel.lapGpsReadiness.collectAsState()
     // ble-device-memory：已保存设备（入口 subtitle + 管理 sheet）
     val savedDevices by gpsViewModel.savedDevices.collectAsState()
 
@@ -173,7 +144,11 @@ fun DeviceHomeScreen(
                     showBluetoothSettingsDialog = true
                 } else {
                     pendingScanAfterPermission = false
-                    Toast.makeText(context, "需要蓝牙和位置权限才能扫描 GPS 设备", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.permission_bluetooth_scan_message),
+                        Toast.LENGTH_LONG,
+                    ).show()
                 }
             }
         }
@@ -244,17 +219,30 @@ fun DeviceHomeScreen(
     }
 
     val qualityLabel = when (dataQuality.overall) {
-        QualityLevel.EXCELLENT -> "Excellent"
-        QualityLevel.GOOD -> "Good"
-        QualityLevel.FAIR -> "Fair"
-        QualityLevel.POOR -> "Poor"
+        QualityLevel.EXCELLENT, QualityLevel.GOOD -> stringResource(R.string.quality_good_signal)
+        QualityLevel.FAIR -> stringResource(R.string.quality_weak_signal)
+        QualityLevel.POOR -> stringResource(R.string.quality_no_signal)
     }
     val frequencyHz = gpsData.frequency.toInt().coerceAtLeast(0)
     // ble-device-memory（UI 交互细化 §5）：CONNECTING 且设备名尚空 = 冷启动自动连接中
     val isAutoConnecting = connectionState == ConnectionState.CONNECTING && connectedDeviceName == null
-    val hero = remember(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel, isAutoConnecting) {
-        deriveHeroState(connectionState, gpsData.isTestReady, frequencyHz, qualityLabel, isAutoConnecting)
+    val gpsPresentation = remember(lapGpsReadiness, connectionState, isAutoConnecting) {
+        GpsReadinessPresentationMapper.present(
+            readiness = lapGpsReadiness,
+            connectionState = connectionState,
+            isReconnecting = isAutoConnecting,
+        )
     }
+    val hero = HeroState(
+        title = stringResource(gpsPresentation.titleRes),
+        subtitle = stringResource(gpsPresentation.detailRes),
+        statusLine = "${frequencyHz}Hz · $qualityLabel",
+        accent = when (gpsPresentation.tone) {
+            GpsReadinessTone.READY -> TrackTechSemantic.ReadyAccent
+            GpsReadinessTone.CONNECTING -> TrackTechSemantic.ConnectingAccent
+            GpsReadinessTone.WAITING -> TrackTechSemantic.PrimaryActionAccent
+        },
+    )
 
     Column(
         modifier = modifier
@@ -272,7 +260,7 @@ fun DeviceHomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Device",
+                text = stringResource(R.string.screen_device),
                 style = TrackTechTypography.RacingTitleLarge,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -280,7 +268,7 @@ fun DeviceHomeScreen(
             )
             Icon(
                 imageVector = Icons.Filled.Settings,
-                contentDescription = "Settings",
+                contentDescription = stringResource(R.string.action_settings),
                 tint = TrackTechColors.TextSecondary,
                 modifier = Modifier.size(20.dp),
             )
@@ -298,8 +286,8 @@ fun DeviceHomeScreen(
 
         ConnectedDeviceCard(
             connectionState = connectionState,
-            isTestReady = gpsData.isTestReady,
-            deviceName = connectedDeviceName ?: "No device",
+            gpsPresentation = gpsPresentation,
+            deviceName = connectedDeviceName ?: stringResource(R.string.label_no_device),
             onScanClick = requestScan,
             onDisconnectClick = {
                 gpsViewModel.disconnect()
@@ -315,14 +303,14 @@ fun DeviceHomeScreen(
         ) {
             TrackTechRow(
                 leadingIcon = Icons.Filled.GpsFixed,
-                title = "GPS DETAILS",
+                title = stringResource(R.string.label_gps_details),
                 subtitle = "$qualityLabel · ${gpsData.satelliteCount} sats · ${frequencyHz}Hz",
                 onClick = { navController.navigate("gps_details") },
             )
             // ble-device-memory（UI 交互细化 §1）：已保存设备管理入口
             TrackTechRow(
                 leadingIcon = Icons.Filled.Bluetooth,
-                title = "SAVED DEVICES",
+                title = stringResource(R.string.label_saved_devices),
                 subtitle = if (savedDevices.isEmpty()) {
                     "None yet"
                 } else {
@@ -357,8 +345,8 @@ fun DeviceHomeScreen(
                 showBluetoothSettingsDialog = false
                 pendingScanAfterPermission = false
             },
-            title = { Text("需要蓝牙权限") },
-            text = { Text("系统已不再弹出授权窗口。请到应用设置中开启“附近设备”和位置权限，返回后会自动继续扫描。") },
+            title = { Text(stringResource(R.string.permission_bluetooth_required_title)) },
+            text = { Text(stringResource(R.string.permission_bluetooth_settings_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     runCatching {
@@ -369,15 +357,19 @@ fun DeviceHomeScreen(
                         )
                     }.onFailure {
                         pendingScanAfterPermission = false
-                        Toast.makeText(context, "无法打开系统设置，请手动为 BlazePush 开启蓝牙权限", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.permission_bluetooth_settings_failed),
+                            Toast.LENGTH_LONG,
+                        ).show()
                     }
-                }) { Text("打开设置") }
+                }) { Text(stringResource(R.string.action_open_settings)) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     showBluetoothSettingsDialog = false
                     pendingScanAfterPermission = false
-                }) { Text("取消") }
+                }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -467,29 +459,37 @@ private fun QuickStatusRow(
             },
             unit = null,
             status = when (connectionState) {
-                ConnectionState.CONNECTED -> connectedName ?: "Connected"
-                ConnectionState.CONNECTING -> "Connecting"
-                else -> "Idle"
+                ConnectionState.CONNECTED -> connectedName ?: stringResource(R.string.label_ble_connected)
+                ConnectionState.CONNECTING -> stringResource(R.string.label_ble_connecting)
+                else -> stringResource(R.string.label_ble_idle)
             },
             accentColor = TrackTechColors.Cyan,
             valueSize = MetricSize.Medium,
             modifier = Modifier.weight(1f),
         )
         MetricTile(
-            label = "SATS",
+            label = stringResource(R.string.label_satellites),
             value = satelliteCount.toString(),
             unit = null,
-            status = if (satelliteCount >= 6) "Ready" else "Low",
+            status = if (satelliteCount >= 6) {
+                stringResource(R.string.speed_status_ready)
+            } else {
+                stringResource(R.string.label_low)
+            },
             accentColor = TrackTechColors.Cyan,
             valueSize = MetricSize.Medium,
             valueKind = MetricKind.Mechanical,
             modifier = Modifier.weight(1f),
         )
         MetricTile(
-            label = "RATE",
+            label = stringResource(R.string.label_rate),
             value = frequencyHz.toString(),
             unit = "Hz",
-            status = if (frequencyHz >= 10) "Good" else "Slow",
+            status = if (frequencyHz >= 10) {
+                stringResource(R.string.label_good)
+            } else {
+                stringResource(R.string.label_slow)
+            },
             accentColor = TrackTechColors.Cyan,
             valueSize = MetricSize.Medium,
             valueKind = MetricKind.Mechanical,
@@ -501,19 +501,14 @@ private fun QuickStatusRow(
 @Composable
 private fun ConnectedDeviceCard(
     connectionState: ConnectionState,
-    isTestReady: Boolean,
+    gpsPresentation: GpsReadinessPresentation,
     deviceName: String,
     onScanClick: () -> Unit,
     onDisconnectClick: () -> Unit,
     batteryCapability: BatteryCapabilityState = BatteryCapabilityState.Pending,
 ) {
     val isConnected = connectionState == ConnectionState.CONNECTED
-    val statusText = when {
-        isConnected && isTestReady -> "Ready for Test"
-        isConnected -> "Waiting for GPS Lock"
-        connectionState == ConnectionState.CONNECTING -> "Connecting…"
-        else -> "Disconnected"
-    }
+    val isReady = gpsPresentation.tone == GpsReadinessTone.READY
     CutCornerPanel(
         modifier = Modifier
             .fillMaxWidth()
@@ -525,7 +520,7 @@ private fun ConnectedDeviceCard(
     ) {
         Column {
             Text(
-                text = "CONNECTED DEVICE",
+                text = stringResource(R.string.label_connected_device),
                 style = TrackTechTypography.UiTextLabel,
                 color = TrackTechColors.Purple,
                 maxLines = 1,
@@ -533,7 +528,7 @@ private fun ConnectedDeviceCard(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = if (isConnected) deviceName else "Not connected",
+                text = if (isConnected) deviceName else stringResource(R.string.label_not_connected),
                 style = TrackTechTypography.RacingTitleMedium,
                 color = TrackTechColors.TextPrimary,
                 maxLines = 1,
@@ -545,11 +540,11 @@ private fun ConnectedDeviceCard(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(if (isTestReady) TrackTechColors.Green else TrackTechColors.TextMuted),
+                        .background(if (isReady) TrackTechColors.Green else TrackTechColors.TextMuted),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = statusText,
+                    text = stringResource(gpsPresentation.shortLabelRes),
                     style = TrackTechTypography.UiTextSmall,
                     color = TrackTechColors.TextSecondary,
                     maxLines = 1,
@@ -581,7 +576,7 @@ private fun ConnectedDeviceCard(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "SCAN",
+                        text = stringResource(R.string.action_scan),
                         style = TrackTechTypography.UiTextLabel,
                         color = TrackTechColors.Purple,
                         maxLines = 1,
@@ -601,7 +596,7 @@ private fun ConnectedDeviceCard(
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        text = "DISCONNECT",
+                        text = stringResource(R.string.action_disconnect),
                         style = TrackTechTypography.UiTextLabel,
                         color = if (isConnected) TrackTechColors.Red else TrackTechColors.TextMuted,
                         maxLines = 1,

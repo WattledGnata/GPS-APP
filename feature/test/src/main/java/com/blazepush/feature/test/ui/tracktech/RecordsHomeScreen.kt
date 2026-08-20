@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
@@ -59,6 +60,7 @@ import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TestResultSummary
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.FileLogger
+import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.tracktech.components.DeleteCandidate
 import com.blazepush.feature.test.ui.tracktech.components.DeleteHistoryDialog
 import com.blazepush.feature.test.ui.tracktech.format.formatDate
@@ -133,7 +135,7 @@ private fun RecordsTitleRow(context: Context) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text = "Records",
+            text = stringResource(R.string.screen_records),
             style = TrackTechTypography.RacingTitleLarge,
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
@@ -141,7 +143,7 @@ private fun RecordsTitleRow(context: Context) {
         )
         Icon(
             imageVector = Icons.Filled.FilterAlt,
-            contentDescription = "Filter",
+            contentDescription = stringResource(R.string.action_filter),
             tint = TrackTechColors.TextSecondary,
             modifier = Modifier
                 .size(24.dp)
