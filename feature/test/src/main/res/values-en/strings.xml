@@ -131,6 +131,8 @@
     <string name="detail_total_laps">TOTAL LAPS</string>
     <string name="detail_valid_laps">VALID LAPS</string>
     <string name="detail_invalid_laps">INVALID LAPS</string>
+    <string name="detail_session_best">SESSION BEST</string>
+    <string name="detail_theoretical_best">THEORETICAL BEST</string>
     <string name="detail_lap_number">Lap %1$d</string>
     <string name="detail_lap_time">Lap time</string>
     <string name="detail_lap_title">LAP DETAIL</string>

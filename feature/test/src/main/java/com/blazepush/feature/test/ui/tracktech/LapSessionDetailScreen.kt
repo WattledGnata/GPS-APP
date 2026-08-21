@@ -205,6 +205,12 @@ fun LapSessionDetailScreen(
         val table = remember(crossings, comparisonLapNumbers) {
             computeLapSectorTable(crossings, comparisonLapNumbers)
         }
+        val headlineScores = remember(derived.bestLapMs, table) {
+            deriveSessionHeadlineScores(
+                sessionBestLapMs = derived.bestLapMs,
+                sectorTable = table,
+            )
+        }
         // sector 表横向滚动 state：表头 / THEORETICAL / 各圈行共享同一 hScroll 保证横向同步。
         val hScroll = rememberScrollState()
 
@@ -242,7 +248,7 @@ fun LapSessionDetailScreen(
                 OverviewSection(
                     trackName = trackName,
                     sessionDate = sessionDateLabel,
-                    bestLapMs = derived.bestLapMs,
+                    headlineScores = headlineScores,
                     totalLaps = derived.totalLaps,
                     validLaps = derived.validLaps,
                     invalidLaps = derived.invalidLaps,
@@ -406,7 +412,7 @@ private fun formatFileSize(bytes: Long): String {
 private fun OverviewSection(
     trackName: String,
     sessionDate: String,
-    bestLapMs: Long?,
+    headlineScores: SessionHeadlineScores,
     totalLaps: Int,
     validLaps: Int,
     invalidLaps: Int,
@@ -428,37 +434,24 @@ private fun OverviewSection(
             OverviewRow(label = stringResource(R.string.detail_track), value = trackName)
             OverviewRow(label = stringResource(R.string.detail_session), value = sessionDate)
 
-            Spacer(Modifier.height(4.dp))
+            // Session 首屏的两个核心成绩：都只消费当前 session 的证据。
+            // 本场最佳来自 deriveDetailMetrics 的 PB 资格过滤；理论最佳来自完整 sector splits 拼合。
+            // sectorTable == null 时理论最佳必须显示 "--"，不得回退历史 PB 或估算值。
+            Spacer(Modifier.height(8.dp))
             if (stackMetrics) {
                 MetricTile(
-                    label = stringResource(R.string.records_best_lap),
-                    value = formatLapTime(bestLapMs),
+                    label = stringResource(R.string.detail_session_best),
+                    value = formatLapTime(headlineScores.sessionBestLapMs),
                     accentColor = TrackTechColors.Purple,
-                    valueSize = MetricSize.Medium,
+                    valueSize = MetricSize.Large,
                     valueKind = MetricKind.Score,
                     maxValueFontScale = 1.15f,
                 )
                 MetricTile(
-                    label = stringResource(R.string.detail_total_laps),
-                    value = totalLaps.toString(),
-                    accentColor = TrackTechColors.Cyan,
-                    valueSize = MetricSize.Medium,
-                    valueKind = MetricKind.Score,
-                    maxValueFontScale = 1.15f,
-                )
-                MetricTile(
-                    label = stringResource(R.string.detail_valid_laps),
-                    value = validLaps.toString(),
+                    label = stringResource(R.string.detail_theoretical_best),
+                    value = formatLapTime(headlineScores.theoreticalBestLapMs),
                     accentColor = TrackTechColors.Green,
-                    valueSize = MetricSize.Small,
-                    valueKind = MetricKind.Score,
-                    maxValueFontScale = 1.15f,
-                )
-                MetricTile(
-                    label = stringResource(R.string.detail_invalid_laps),
-                    value = invalidLaps.toString(),
-                    accentColor = TrackTechColors.Red,
-                    valueSize = MetricSize.Small,
+                    valueSize = MetricSize.Large,
                     valueKind = MetricKind.Score,
                     maxValueFontScale = 1.15f,
                 )
@@ -466,8 +459,8 @@ private fun OverviewSection(
                 OverviewMetricPair(
                     first = {
                         MetricTile(
-                            label = stringResource(R.string.records_best_lap),
-                            value = formatLapTime(bestLapMs),
+                            label = stringResource(R.string.detail_session_best),
+                            value = formatLapTime(headlineScores.sessionBestLapMs),
                             accentColor = TrackTechColors.Purple,
                             valueSize = MetricSize.Medium,
                             valueKind = MetricKind.Score,
@@ -476,17 +469,45 @@ private fun OverviewSection(
                     },
                     second = {
                         MetricTile(
-                            label = stringResource(R.string.detail_total_laps),
-                            value = totalLaps.toString(),
-                            accentColor = TrackTechColors.Cyan,
+                            label = stringResource(R.string.detail_theoretical_best),
+                            value = formatLapTime(headlineScores.theoreticalBestLapMs),
+                            accentColor = TrackTechColors.Green,
                             valueSize = MetricSize.Medium,
                             valueKind = MetricKind.Score,
                             maxValueFontScale = 1.15f,
                         )
                     },
                 )
+            }
+
+            // 圈数和能力状态降为次级概览，避免与两项核心成绩争抢视觉层级。
+            Spacer(Modifier.height(4.dp))
+            if (stackMetrics) {
+                OverviewRow(
+                    label = stringResource(R.string.detail_total_laps),
+                    value = totalLaps.toString(),
+                )
+                OverviewRow(
+                    label = stringResource(R.string.detail_valid_laps),
+                    value = validLaps.toString(),
+                )
+                OverviewRow(
+                    label = stringResource(R.string.detail_invalid_laps),
+                    value = invalidLaps.toString(),
+                )
+            } else {
                 OverviewMetricPair(
                     first = {
+                        MetricTile(
+                            label = stringResource(R.string.detail_total_laps),
+                            value = totalLaps.toString(),
+                            accentColor = TrackTechColors.Cyan,
+                            valueSize = MetricSize.Small,
+                            valueKind = MetricKind.Score,
+                            maxValueFontScale = 1.15f,
+                        )
+                    },
+                    second = {
                         MetricTile(
                             label = stringResource(R.string.detail_valid_laps),
                             value = validLaps.toString(),
@@ -496,34 +517,17 @@ private fun OverviewSection(
                             maxValueFontScale = 1.15f,
                         )
                     },
-                    second = {
-                        MetricTile(
-                            label = stringResource(R.string.detail_invalid_laps),
-                            value = invalidLaps.toString(),
-                            accentColor = TrackTechColors.Red,
-                            valueSize = MetricSize.Small,
-                            valueKind = MetricKind.Score,
-                            maxValueFontScale = 1.15f,
-                        )
-                    },
+                )
+                OverviewRow(
+                    label = stringResource(R.string.detail_invalid_laps),
+                    value = invalidLaps.toString(),
                 )
             }
             Spacer(Modifier.height(4.dp))
-            // 最高尾速：纯数字仪表读数 → V2 规范允许 DSEG7（MetricKind.Mechanical），单位 km/h 拆到 unit。
-            // session.topSpeedKmh 由 endSession 时 binary 全扫派生（persist-session-summary-fields），
-            // null 表示旧数据或无 GPS 速度记录，降级显示 "--"。
-            MetricTile(
+            OverviewRow(
                 label = stringResource(R.string.detail_top_speed),
-                value = topSpeedKmh?.let { "%.1f".format(it) } ?: "--",
-                unit = if (topSpeedKmh != null) "km/h" else null,
-                modifier = Modifier.fillMaxWidth(),
-                accentColor = TrackTechColors.Red,
-                valueSize = MetricSize.Medium,
-                valueKind = MetricKind.Mechanical,
-                maxValueFontScale = 1.15f,
+                value = topSpeedKmh?.let { "%.1f km/h".format(it) } ?: "--",
             )
-            Spacer(Modifier.height(4.dp))
-            // 辅助信息（Duration / Distance）用 row 风格 label-value
             OverviewRow(
                 label = stringResource(R.string.detail_duration),
                 value = durationMs?.let(::formatDuration) ?: "--",
@@ -881,6 +885,24 @@ internal data class DetailMetrics(
     val invalidLaps: Int,
     val bestLapMs: Long?,
     val lapRecords: List<UiLapRecord>,
+)
+
+/**
+ * Session 详情首屏唯一成绩输入。调用方只能传入当前 session 派生结果：
+ * - sessionBestLapMs：deriveDetailMetrics 的 PB 资格圈最小值；
+ * - theoreticalBestLapMs：当前 session 完整 sector splits 的逐段最优拼合。
+ */
+internal data class SessionHeadlineScores(
+    val sessionBestLapMs: Long?,
+    val theoreticalBestLapMs: Long?,
+)
+
+internal fun deriveSessionHeadlineScores(
+    sessionBestLapMs: Long?,
+    sectorTable: LapSectorTable?,
+): SessionHeadlineScores = SessionHeadlineScores(
+    sessionBestLapMs = sessionBestLapMs,
+    theoreticalBestLapMs = sectorTable?.theoreticalTotalMs,
 )
 
 /**

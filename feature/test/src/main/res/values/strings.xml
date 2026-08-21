@@ -131,6 +131,8 @@
     <string name="detail_total_laps">总圈数</string>
     <string name="detail_valid_laps">有效圈</string>
     <string name="detail_invalid_laps">无效圈</string>
+    <string name="detail_session_best">本场最佳</string>
+    <string name="detail_theoretical_best">理论最佳</string>
     <string name="detail_lap_number">第 %1$d 圈</string>
     <string name="detail_lap_time">圈速</string>
     <string name="detail_lap_title">圈速详情</string>
