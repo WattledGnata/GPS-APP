@@ -20,7 +20,10 @@ class LapSessionHeadlineScoresTest {
         )
 
         val scores = deriveSessionHeadlineScores(
-            sessionBestLapMs = 93_456L,
+            derivedBestLapMs = 93_456L,
+            persistedSessionBestLapMs = 90_000L,
+            hasAnyLapEvidence = true,
+            lapEvidenceLoaded = true,
             sectorTable = table,
         )
 
@@ -31,7 +34,10 @@ class LapSessionHeadlineScoresTest {
     @Test
     fun `headline theoretical best stays absent without complete sector table`() {
         val scores = deriveSessionHeadlineScores(
-            sessionBestLapMs = 93_456L,
+            derivedBestLapMs = 93_456L,
+            persistedSessionBestLapMs = null,
+            hasAnyLapEvidence = true,
+            lapEvidenceLoaded = true,
             sectorTable = null,
         )
 
@@ -40,17 +46,82 @@ class LapSessionHeadlineScoresTest {
     }
 
     @Test
-    fun `session detail wires headline only from derived session evidence`() {
+    fun `legacy session without any evidence falls back to its persisted session best`() {
+        val scores = deriveSessionHeadlineScores(
+            derivedBestLapMs = null,
+            persistedSessionBestLapMs = 151_074L,
+            hasAnyLapEvidence = false,
+            lapEvidenceLoaded = true,
+            sectorTable = null,
+        )
+
+        assertEquals(151_074L, scores.sessionBestLapMs)
+    }
+
+    @Test
+    fun `existing evidence forbids persisted fallback when derived best is absent`() {
+        val scores = deriveSessionHeadlineScores(
+            derivedBestLapMs = null,
+            persistedSessionBestLapMs = 151_074L,
+            hasAnyLapEvidence = true,
+            lapEvidenceLoaded = true,
+            sectorTable = null,
+        )
+
+        assertNull(scores.sessionBestLapMs)
+    }
+
+    @Test
+    fun `legacy session without persisted best keeps headline absent`() {
+        val scores = deriveSessionHeadlineScores(
+            derivedBestLapMs = null,
+            persistedSessionBestLapMs = null,
+            hasAnyLapEvidence = false,
+            lapEvidenceLoaded = true,
+            sectorTable = null,
+        )
+
+        assertNull(scores.sessionBestLapMs)
+    }
+
+    @Test
+    fun `legacy session ignores nonpositive persisted best`() {
+        val scores = deriveSessionHeadlineScores(
+            derivedBestLapMs = null,
+            persistedSessionBestLapMs = 0L,
+            hasAnyLapEvidence = false,
+            lapEvidenceLoaded = true,
+            sectorTable = null,
+        )
+
+        assertNull(scores.sessionBestLapMs)
+    }
+
+    @Test
+    fun `unloaded evidence never enables legacy fallback`() {
+        val scores = deriveSessionHeadlineScores(
+            derivedBestLapMs = null,
+            persistedSessionBestLapMs = 151_074L,
+            hasAnyLapEvidence = false,
+            lapEvidenceLoaded = false,
+            sectorTable = null,
+        )
+
+        assertNull(scores.sessionBestLapMs)
+    }
+
+    @Test
+    fun `session detail wires guarded legacy fallback from the same session`() {
         val source = readSource(SCREEN_PATH)
 
-        assertTrue(source.contains("sessionBestLapMs = derived.bestLapMs"))
+        assertTrue(source.contains("derivedBestLapMs = derived.bestLapMs"))
+        assertTrue(source.contains("persistedSessionBestLapMs = session?.bestLapMs"))
+        assertTrue(source.contains("hasAnyLapEvidence = evidenceByLap.isNotEmpty()"))
+        assertTrue(source.contains("lapEvidenceLoaded = lapEvidenceLoaded"))
         assertTrue(source.contains("sectorTable = table"))
         assertTrue(source.contains("R.string.detail_session_best"))
         assertTrue(source.contains("R.string.detail_theoretical_best"))
-        assertFalse(
-            "Session detail must not display persisted or historical best as its current-session headline",
-            source.contains("session?.bestLapMs") || source.contains("session.bestLapMs"),
-        )
+        assertFalse(source.contains("bestLapForCurrentTrack"))
     }
 
     private fun readSource(relativePath: String): String {

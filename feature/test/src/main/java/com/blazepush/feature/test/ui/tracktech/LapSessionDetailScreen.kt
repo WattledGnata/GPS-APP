@@ -97,6 +97,7 @@ fun LapSessionDetailScreen(
     var crossings by remember { mutableStateOf<List<TelemetryCrossingEvent>>(emptyList()) }
     var videoStats by remember { mutableStateOf(SessionVideoStats(0, 0, 0L)) }
     var evidenceByLap by remember { mutableStateOf<Map<Int, LapEvidence>>(emptyMap()) }
+    var lapEvidenceLoaded by remember(sessionId) { mutableStateOf(false) }
 
     // video-storage-cleanup round：成绩页单删视频（保留成绩）。删后 bump refreshTick 重载 session。
     var refreshTick by remember { mutableStateOf(0) }
@@ -106,10 +107,12 @@ fun LapSessionDetailScreen(
     val currentTrack by sessionViewModel.currentSelectedTrack.collectAsState()
 
     LaunchedEffect(sessionId, refreshTick) {
+        lapEvidenceLoaded = false
         session = telemetryRepository.getSession(sessionId)
         crossings = telemetryRepository.getCrossings(sessionId)
         videoStats = telemetryRepository.getSessionVideoStats(sessionId)
         evidenceByLap = telemetryRepository.getLapEvidenceForSession(sessionId)
+        lapEvidenceLoaded = true
         // persist-session-summary-fields round 起：topSpeedKmh 直接读 entity.topSpeedKmh，
         // 不再每次进入 detail 屏全扫 binary（endSession 时已派生持久化）
     }
@@ -205,9 +208,18 @@ fun LapSessionDetailScreen(
         val table = remember(crossings, comparisonLapNumbers) {
             computeLapSectorTable(crossings, comparisonLapNumbers)
         }
-        val headlineScores = remember(derived.bestLapMs, table) {
+        val headlineScores = remember(
+            derived.bestLapMs,
+            session?.bestLapMs,
+            evidenceByLap,
+            lapEvidenceLoaded,
+            table,
+        ) {
             deriveSessionHeadlineScores(
-                sessionBestLapMs = derived.bestLapMs,
+                derivedBestLapMs = derived.bestLapMs,
+                persistedSessionBestLapMs = session?.bestLapMs,
+                hasAnyLapEvidence = evidenceByLap.isNotEmpty(),
+                lapEvidenceLoaded = lapEvidenceLoaded,
                 sectorTable = table,
             )
         }
@@ -888,8 +900,9 @@ internal data class DetailMetrics(
 )
 
 /**
- * Session 详情首屏唯一成绩输入。调用方只能传入当前 session 派生结果：
- * - sessionBestLapMs：deriveDetailMetrics 的 PB 资格圈最小值；
+ * Session 详情首屏唯一成绩输入。调用方只能传入当前 session 的结果：
+ * - sessionBestLapMs：新数据严格采用 deriveDetailMetrics 的 PB 资格圈最小值；
+ *   仅当 evidence 已加载且整场零 evidence 时，可回退该 session 自身持久化 bestLapMs；
  * - theoreticalBestLapMs：当前 session 完整 sector splits 的逐段最优拼合。
  */
 internal data class SessionHeadlineScores(
@@ -898,10 +911,17 @@ internal data class SessionHeadlineScores(
 )
 
 internal fun deriveSessionHeadlineScores(
-    sessionBestLapMs: Long?,
+    derivedBestLapMs: Long?,
+    persistedSessionBestLapMs: Long?,
+    hasAnyLapEvidence: Boolean,
+    lapEvidenceLoaded: Boolean,
     sectorTable: LapSectorTable?,
 ): SessionHeadlineScores = SessionHeadlineScores(
-    sessionBestLapMs = sessionBestLapMs,
+    sessionBestLapMs = when {
+        !lapEvidenceLoaded -> null
+        hasAnyLapEvidence -> derivedBestLapMs
+        else -> derivedBestLapMs ?: persistedSessionBestLapMs?.takeIf { it > 0L }
+    },
     theoreticalBestLapMs = sectorTable?.theoreticalTotalMs,
 )
 
