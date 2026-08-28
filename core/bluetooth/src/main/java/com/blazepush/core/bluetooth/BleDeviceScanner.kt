@@ -12,10 +12,13 @@ import android.os.ParcelUuid
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
@@ -49,6 +52,7 @@ class BleDeviceScanner(
 
     // 设备去重缓存
     private val deviceCache = mutableMapOf<String, ScannedDevice>()
+    private var scanTimeoutJob: Job? = null
 
     /**
      * 开始扫描BLE设备
@@ -80,9 +84,19 @@ class BleDeviceScanner(
                 // 扫描所有BLE设备，然后在回调中过滤
                 scanner.startScan(null, scanSettings, scanCallback)
 
+                scanTimeoutJob?.cancel()
+                scanTimeoutJob = scope.launch {
+                    delay(SCAN_DURATION_MS)
+                    scanTimeoutJob = null
+                    Log.d(TAG, "扫描超时，自动停止")
+                    stopScan()
+                }
+
                 Log.d(TAG, "开始扫描BLE设备")
             } catch (e: Exception) {
                 Log.e(TAG, "扫描失败", e)
+                scanTimeoutJob?.cancel()
+                scanTimeoutJob = null
                 _isScanning.value = false
             }
         } ?: run {
@@ -95,18 +109,21 @@ class BleDeviceScanner(
      * 停止扫描
      */
     override fun stopScan() {
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = null
         if (!_isScanning.value) {
             return
         }
 
-        bluetoothLeScanner?.let { scanner ->
-            try {
+        try {
+            bluetoothLeScanner?.let { scanner ->
                 scanner.stopScan(scanCallback)
-                _isScanning.value = false
-                Log.d(TAG, "停止扫描")
-            } catch (e: Exception) {
-                Log.e(TAG, "停止扫描失败", e)
             }
+            Log.d(TAG, "停止扫描")
+        } catch (e: Exception) {
+            Log.e(TAG, "停止扫描失败", e)
+        } finally {
+            _isScanning.value = false
         }
     }
 
@@ -174,6 +191,8 @@ class BleDeviceScanner(
 
         override fun onScanFailed(errorCode: Int) {
             Log.e(TAG, "扫描失败: 错误代码 $errorCode")
+            scanTimeoutJob?.cancel()
+            scanTimeoutJob = null
             _isScanning.value = false
         }
     }

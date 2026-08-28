@@ -44,11 +44,28 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blazepush.core.bluetooth.ScannedDevice
+import com.blazepush.core.data.model.displayName
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 
-enum class ScanSheetState { Scanning, Found, Empty, Connecting, Failed }
+enum class ScanSheetState { Connected, Scanning, Found, Empty, Connecting, Failed }
+
+internal fun deriveScanSheetState(
+    connectionState: ConnectionState,
+    isScanning: Boolean,
+    hasScanResults: Boolean,
+    attemptedConnect: Boolean,
+    hasScannedOnce: Boolean,
+): ScanSheetState = when {
+    connectionState == ConnectionState.CONNECTED -> ScanSheetState.Connected
+    connectionState == ConnectionState.CONNECTING -> ScanSheetState.Connecting
+    attemptedConnect && connectionState == ConnectionState.DISCONNECTED -> ScanSheetState.Failed
+    hasScanResults -> ScanSheetState.Found
+    isScanning -> ScanSheetState.Scanning
+    hasScannedOnce -> ScanSheetState.Empty
+    else -> ScanSheetState.Empty
+}
 
 private enum class DeviceLabel(val color: Color) {
     Recommended(TrackTechColors.Purple),
@@ -83,6 +100,8 @@ fun BleScanBottomSheet(
     val isScanning by gpsViewModel.isScanning.collectAsState()
     val scanResults by gpsViewModel.scanResults.collectAsState()
     val connectionState by gpsViewModel.connectionState.collectAsState()
+    val connectedDeviceName by gpsViewModel.connectedDeviceName.collectAsState()
+    val connectedDeviceAddress by gpsViewModel.connectedDeviceAddress.collectAsState()
     // ble-device-memory（design Decision 7）：join 已保存设备——别名优先显示 + Last connected 标识
     val savedDevices by gpsViewModel.savedDevices.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -92,6 +111,16 @@ fun BleScanBottomSheet(
             .maxByOrNull { it.lastConnectedAtMs!! }
             ?.address
     }
+    val deviceFallback = stringResource(R.string.scan_device_fallback)
+    val connectedDisplayName = connectedDeviceAddress
+        ?.let(savedByAddress::get)
+        ?.displayName
+        ?: connectedDeviceName
+        ?: connectedDeviceAddress
+        ?: deviceFallback
+    val discoveredDevices = remember(scanResults, connectedDeviceAddress) {
+        scanResults.filterNot { it.address == connectedDeviceAddress }
+    }
 
     var selectedDevice by remember { mutableStateOf<ScannedDevice?>(null) }
     var attemptedConnectAddress by remember { mutableStateOf<String?>(null) }
@@ -99,18 +128,16 @@ fun BleScanBottomSheet(
 
     if (isScanning) hasScannedOnce = true
 
-    val state: ScanSheetState = remember(
-        isScanning, scanResults, connectionState, attemptedConnectAddress, hasScannedOnce,
+    val state = remember(
+        isScanning, discoveredDevices, connectionState, attemptedConnectAddress, hasScannedOnce,
     ) {
-        when {
-            connectionState == ConnectionState.CONNECTING -> ScanSheetState.Connecting
-            attemptedConnectAddress != null && connectionState == ConnectionState.DISCONNECTED ->
-                ScanSheetState.Failed
-            isScanning && scanResults.isEmpty() -> ScanSheetState.Scanning
-            scanResults.isNotEmpty() -> ScanSheetState.Found
-            !isScanning && scanResults.isEmpty() && hasScannedOnce -> ScanSheetState.Empty
-            else -> ScanSheetState.Scanning
-        }
+        deriveScanSheetState(
+            connectionState = connectionState,
+            isScanning = isScanning,
+            hasScanResults = discoveredDevices.isNotEmpty(),
+            attemptedConnect = attemptedConnectAddress != null,
+            hasScannedOnce = hasScannedOnce,
+        )
     }
 
     ModalBottomSheet(
@@ -152,7 +179,7 @@ fun BleScanBottomSheet(
                 }
             }
 
-            Subtitle(state = state, foundCount = scanResults.size, connectingTo = selectedDevice?.name)
+            Subtitle(state = state, foundCount = discoveredDevices.size, connectingTo = selectedDevice?.name)
 
             Box(
                 modifier = Modifier
@@ -162,7 +189,12 @@ fun BleScanBottomSheet(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(scanResults) { device ->
+                    if (connectionState == ConnectionState.CONNECTED) {
+                        item(key = "connected-device") {
+                            ConnectedDeviceRow(displayName = connectedDisplayName)
+                        }
+                    }
+                    items(discoveredDevices, key = { it.address }) { device ->
                         DeviceRow(
                             device = device,
                             selected = selectedDevice?.address == device.address,
@@ -182,13 +214,19 @@ fun BleScanBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PrimaryActionPanel(
-                    title = if (state == ScanSheetState.Failed) {
-                        stringResource(R.string.action_retry)
-                    } else {
-                        stringResource(R.string.action_connect)
+                    title = when (state) {
+                        ScanSheetState.Connected -> stringResource(R.string.state_connected)
+                        ScanSheetState.Failed -> stringResource(R.string.action_retry)
+                        else -> stringResource(R.string.action_connect)
                     },
-                    subtitle = selectedDevice?.name ?: stringResource(R.string.action_select_device),
-                    enabled = selectedDevice != null && connectionState != ConnectionState.CONNECTING,
+                    subtitle = if (state == ScanSheetState.Connected) {
+                        connectedDisplayName
+                    } else {
+                        selectedDevice?.name ?: stringResource(R.string.action_select_device)
+                    },
+                    enabled = state != ScanSheetState.Connected &&
+                        selectedDevice != null &&
+                        connectionState != ConnectionState.CONNECTING,
                     onClick = {
                         selectedDevice?.let {
                             attemptedConnectAddress = it.address
@@ -199,26 +237,28 @@ fun BleScanBottomSheet(
                 )
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isScanning, onClick = onScanAgain)
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.BluetoothSearching,
-                    contentDescription = null,
-                    tint = if (isScanning) TrackTechColors.TextMuted else TrackTechColors.Purple,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = stringResource(R.string.action_scan_again),
-                    style = TrackTechTypography.UiTextLabel,
-                    color = if (isScanning) TrackTechColors.TextMuted else TrackTechColors.Purple,
-                )
+            if (state != ScanSheetState.Connected) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isScanning, onClick = onScanAgain)
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.BluetoothSearching,
+                        contentDescription = null,
+                        tint = if (isScanning) TrackTechColors.TextMuted else TrackTechColors.Purple,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.action_scan_again),
+                        style = TrackTechTypography.UiTextLabel,
+                        color = if (isScanning) TrackTechColors.TextMuted else TrackTechColors.Purple,
+                    )
+                }
             }
 
             Row(
@@ -245,6 +285,7 @@ fun BleScanBottomSheet(
 @Composable
 private fun Subtitle(state: ScanSheetState, foundCount: Int, connectingTo: String?) {
     val (text, accent) = when (state) {
+        ScanSheetState.Connected -> stringResource(R.string.label_connected_device) to TrackTechColors.Green
         ScanSheetState.Scanning -> stringResource(R.string.scan_searching) to TrackTechColors.Cyan
         ScanSheetState.Found -> stringResource(R.string.scan_found, foundCount) to TrackTechColors.Cyan
         ScanSheetState.Empty -> stringResource(R.string.scan_empty) to TrackTechColors.TextSecondary
@@ -255,7 +296,15 @@ private fun Subtitle(state: ScanSheetState, foundCount: Int, connectingTo: Strin
         ScanSheetState.Failed -> stringResource(R.string.scan_connection_failed) to TrackTechColors.Red
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (state == ScanSheetState.Scanning || state == ScanSheetState.Connecting) {
+        if (state == ScanSheetState.Connected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+        } else if (state == ScanSheetState.Scanning || state == ScanSheetState.Connecting) {
             CircularProgressIndicator(
                 modifier = Modifier.size(14.dp),
                 color = accent,
@@ -272,6 +321,43 @@ private fun Subtitle(state: ScanSheetState, foundCount: Int, connectingTo: Strin
             Spacer(Modifier.width(8.dp))
         }
         Text(text = text, style = TrackTechTypography.UiTextSmall, color = accent)
+    }
+}
+
+@Composable
+private fun ConnectedDeviceRow(displayName: String) {
+    val shape = CutCornerPanelShape(cutSize = 8.dp, cutCorners = cutCornersAll)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(TrackTechColors.SurfaceDark, shape)
+            .border(1.dp, TrackTechColors.Green, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = null,
+            tint = TrackTechColors.Green,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = displayName,
+                style = TrackTechTypography.UiTextLabel,
+                color = TrackTechColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.size(2.dp))
+            Text(
+                text = stringResource(R.string.state_connected),
+                style = TrackTechTypography.UiTextSmall,
+                color = TrackTechColors.Green,
+            )
+        }
     }
 }
 

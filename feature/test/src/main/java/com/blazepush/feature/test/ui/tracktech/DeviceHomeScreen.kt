@@ -153,15 +153,21 @@ fun DeviceHomeScreen(
     }
 
     val requestScan: () -> Unit = {
-        val missingPermissions = requiredBluetoothPermissions.filter {
-            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missingPermissions.isEmpty()) {
-            startScanNow()
+        if (connectionState == ConnectionState.CONNECTED) {
+            pendingScanAfterPermission = false
+            showSheet = true
+            gpsViewModel.stopScan()
         } else {
-            pendingScanAfterPermission = true
-            pendingPermissionRequest = missingPermissions
-            bluetoothPermissionLauncher.launch(missingPermissions.toTypedArray())
+            val missingPermissions = requiredBluetoothPermissions.filter {
+                ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missingPermissions.isEmpty()) {
+                startScanNow()
+            } else {
+                pendingScanAfterPermission = true
+                pendingPermissionRequest = missingPermissions
+                bluetoothPermissionLauncher.launch(missingPermissions.toTypedArray())
+            }
         }
     }
 
