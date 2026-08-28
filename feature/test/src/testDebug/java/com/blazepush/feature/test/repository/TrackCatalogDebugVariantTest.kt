@@ -6,6 +6,8 @@
 //      + `add-preset-track-xic` design D4（XIC 进 mainPresets，所有 variant 可见）。
 package com.blazepush.feature.test.repository
 
+import kotlin.math.cos
+import kotlin.math.hypot
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -43,5 +45,19 @@ class TrackCatalogDebugVariantTest {
             ),
             ids,
         )
+    }
+
+    @Test
+    fun boyuLoopStartFinishGate_is120MetersAndKeepsOriginalCenter() {
+        val gate = requireNotNull(PresetTrackCatalog().getTrack("preset-boyu-loop")).startFinishGate
+        val centerLatitude = (gate.line.start.latitude + gate.line.end.latitude) / 2.0
+        val centerLongitude = (gate.line.start.longitude + gate.line.end.longitude) / 2.0
+        val northMeters = (gate.line.end.latitude - gate.line.start.latitude) * 111_320.0
+        val eastMeters = (gate.line.end.longitude - gate.line.start.longitude) *
+            111_320.0 * cos(Math.toRadians(centerLatitude))
+
+        assertEquals(120.0, hypot(northMeters, eastMeters), 0.2)
+        assertEquals(30.3997726667, centerLatitude, 1e-12)
+        assertEquals(104.06147, centerLongitude, 1e-12)
     }
 }

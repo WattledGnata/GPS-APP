@@ -127,8 +127,8 @@ private val boyuLoopTrack: Track = Track(
         name = "起终点",
         type = TimingGateType.StartFinish,
         line = GeoLine(
-            start = GeoPoint(30.3997726667, 104.0617311259),
-            end = GeoPoint(30.3997726667, 104.0612088741)
+            start = GeoPoint(30.399772666700000, 104.062094900763398),
+            end = GeoPoint(30.399772666700000, 104.060845099236602)
         ),
         passDirection = GeoVector(x = -0.000450450450, y = 0.000000000000),
         sequenceIndex = 0,

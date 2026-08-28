@@ -51,11 +51,12 @@ private val mainPresets: List<Track> = listOf(
             // 起终点对齐官方 MYLAPS 龙门架（align-tfic-start-finish）：原虚拟线在官方计时
             // 线圈后方约 55m，导致圈速系统性偏快 ~0.14s。沿前进方向(passDirection)前移 55m
             // 后，2026-06-19 真机 session 142605bb 全 17 个可比圈对官方偏差均值 0.000±0.034s
-            // （σ 最小点）。passDirection / 线宽(50m)不变；referencePath 不动。
-            // 基于单 session 标定，后续多 session 可微调。
+            // （σ 最小点）。passDirection / 中心点不变；referencePath 不动。
+            // 2026-08-25 widen-preset-start-finish-gates：沿原门线方向关于中心对称扩到
+            // 120m，覆盖主直道旁 P 区通道并保留原官方计时平面。
             line = GeoLine(
-                start = GeoPoint(30.495674664699337, 104.4333934545891),
-                end = GeoPoint(30.495698171686513, 104.43287290301339)
+                start = GeoPoint(30.495658209950751, 104.433757837537897),
+                end = GeoPoint(30.495714626435099, 104.432508520064587)
             ),
             passDirection = GeoVector(x = -0.0002602757878550089, y = -0.000023506987175358924),
             sequenceIndex = 0,
@@ -136,8 +137,8 @@ private val mainPresets: List<Track> = listOf(
             name = "起点",
             type = TimingGateType.StartFinish,
             line = GeoLine(
-                start = GeoPoint(24.6544286231580, 118.3156752761548),
-                end = GeoPoint(24.6549747101753, 118.3152387238452)
+                start = GeoPoint(24.654265617262570, 118.315805586156472),
+                end = GeoPoint(24.655137716070730, 118.315108413843546)
             ),
             passDirection = GeoVector(x = 0.0002225331396, y = 0.0001469463131),
             sequenceIndex = 0,
@@ -325,8 +326,8 @@ private val mainPresets: List<Track> = listOf(
             name = "起终点",
             type = TimingGateType.StartFinish,
             line = GeoLine(
-                start = GeoPoint(29.762591563248883, 121.86376365210256),
-                end = GeoPoint(29.762521059719795, 121.86453637870201)
+                start = GeoPoint(29.762612650936333, 121.863532528679016),
+                end = GeoPoint(29.762499972032344, 121.864767502125559)
             ),
             passDirection = GeoVector(
                 x = -0.0006707962710479513,
@@ -535,8 +536,8 @@ private val mainPresets: List<Track> = listOf(
             name = "起终点",
             type = TimingGateType.StartFinish,
             line = GeoLine(
-                start = GeoPoint(39.38262471396142, 116.99312745213942),
-                end = GeoPoint(39.38329189061571, 116.99324876518770)
+                start = GeoPoint(39.382424560965134, 116.993091058224934),
+                end = GeoPoint(39.383492043611994, 116.993285159102186)
             ),
             passDirection = GeoVector(
                 x = 0.00003618500624961702,

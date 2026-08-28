@@ -31,10 +31,10 @@ class NingboPresetTrackTest {
         val startFinish = track.startFinishGate
         assertEquals(TimingGateType.StartFinish, startFinish.type)
         assertEquals(0, startFinish.sequenceIndex)
-        assertEquals(29.762591563248883, startFinish.line.start.latitude, 1e-12)
-        assertEquals(121.86376365210256, startFinish.line.start.longitude, 1e-12)
-        assertEquals(29.762521059719795, startFinish.line.end.latitude, 1e-12)
-        assertEquals(121.86453637870201, startFinish.line.end.longitude, 1e-12)
+        assertEquals(29.762612650936333, startFinish.line.start.latitude, 1e-12)
+        assertEquals(121.863532528679016, startFinish.line.start.longitude, 1e-12)
+        assertEquals(29.762499972032344, startFinish.line.end.latitude, 1e-12)
+        assertEquals(121.864767502125559, startFinish.line.end.longitude, 1e-12)
         assertEquals(-0.0006707962710479513, startFinish.passDirection.x, 1e-15)
         assertEquals(-0.00008121683830545618, startFinish.passDirection.y, 1e-15)
 

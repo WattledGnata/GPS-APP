@@ -356,7 +356,12 @@ class TestSessionViewModelTrackLapTest {
             // layoutName 字段已被 change `enhance-track-presentation` §1.2 / §3.1 移除；
             // 来源标识由 source = TrackSource.Generated 接管（上一行已断）。
             assertTrue(summary.contains("startFinish="))
-            assertTrue(summary.contains("startFinish=30.495674664699337,104.4333934545891->30.495698171686513,104.43287290301339"))
+            assertTrue(
+                summary.contains(
+                    "startFinish=30.49565820995075,104.4337578375379->" +
+                        "30.4957146264351,104.43250852006459",
+                ),
+            )
             assertTrue(summary.contains("s1="))
             assertTrue(summary.contains("s1=30.49004451419976,104.43252709154902->30.48959781913357,104.43258157511764"))
             assertTrue(summary.contains("s2="))

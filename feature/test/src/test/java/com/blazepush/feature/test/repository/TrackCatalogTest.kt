@@ -80,10 +80,10 @@ class TrackCatalogTest {
         assertEquals(30.4945735, track.referencePath.points[12].latitude, 1e-6)
         assertEquals(104.4332358, track.referencePath.points[12].longitude, 1e-6)
 
-        assertEquals(30.495674664699337, startFinishLine.start.latitude, 1e-6)
-        assertEquals(104.4333934545891, startFinishLine.start.longitude, 1e-6)
-        assertEquals(30.495698171686513, startFinishLine.end.latitude, 1e-6)
-        assertEquals(104.43287290301339, startFinishLine.end.longitude, 1e-6)
+        assertEquals(30.495658209950751, startFinishLine.start.latitude, 1e-6)
+        assertEquals(104.433757837537897, startFinishLine.start.longitude, 1e-6)
+        assertEquals(30.495714626435099, startFinishLine.end.latitude, 1e-6)
+        assertEquals(104.432508520064587, startFinishLine.end.longitude, 1e-6)
 
         assertEquals(30.49004451419976, sector1Line.start.latitude, 1e-6)
         assertEquals(104.43252709154902, sector1Line.start.longitude, 1e-6)

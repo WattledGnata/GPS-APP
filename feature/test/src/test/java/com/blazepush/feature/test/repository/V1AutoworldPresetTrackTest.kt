@@ -31,10 +31,10 @@ class V1AutoworldPresetTrackTest {
         val startFinish = track.startFinishGate
         assertEquals(TimingGateType.StartFinish, startFinish.type)
         assertEquals(0, startFinish.sequenceIndex)
-        assertEquals(39.38262471396142, startFinish.line.start.latitude, 1e-12)
-        assertEquals(116.99312745213942, startFinish.line.start.longitude, 1e-12)
-        assertEquals(39.38329189061571, startFinish.line.end.latitude, 1e-12)
-        assertEquals(116.99324876518770, startFinish.line.end.longitude, 1e-12)
+        assertEquals(39.382424560965134, startFinish.line.start.latitude, 1e-12)
+        assertEquals(116.993091058224934, startFinish.line.start.longitude, 1e-12)
+        assertEquals(39.383492043611994, startFinish.line.end.latitude, 1e-12)
+        assertEquals(116.993285159102186, startFinish.line.end.longitude, 1e-12)
         assertEquals(0.00003618500624961702, startFinish.passDirection.x, 1e-15)
         assertEquals(-0.00033311199329986985, startFinish.passDirection.y, 1e-15)
 
