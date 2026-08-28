@@ -1,0 +1,34 @@
+## Why
+
+Phase 2 视频管线导出环节（接 round 1 `camera-module-and-permission` → round 2 `camera-preview-in-laplivescreen` → round 3 `camera-recording-and-gps-sync` → round 4 `session-video-metadata-persist` → round 6 `video-overlay-realtime-playback` → `redo-video-playback-per-lap-with-blackout` + `redo-video-overlay-visual-gauges`，均已就绪）。前序 round 已把"录制 + 视频↔遥测时钟锚点 + 按圈实时叠加播放 + 模拟仪表 overlay（速度指针表 / G 球摩擦圆 / 赛道小地图 / 圈速计时）"地基铺平：用户横屏跑圈录了视频，进 session 详情屏点圈行播放图标，即可在 app 内**按圈实时回放**画面四角叠遥测 HUD。**但这套 overlay 只是播放时的 Compose 屏上合成，没有烧进任何文件 —— 用户无法把"带数据成片"导出分享给朋友 / 发社交媒体**（屏录又会带 app UI 杂边 + 不按圈裁剪 + 画质损失）。
+
+**当前 baseline（核实）**：
+
+- **按圈回放 overlay 数据链路就绪**：`VideoOverlayTelemetry.buildFrames(samples)`（`feature/test/.../usecase/VideoOverlayTelemetry.kt:84`）离线把整 session 样本预算成每帧 `OverlayFrame(absoluteTsMs, speedKmh, latG, lonG, lat, lon)`（G 值由相邻样本 speed/bearing 差分重算，binary 无 G 字段）；`resolveCurrentLap(frameWallClock, lapWindows)`（:151）判圈号 + elapsed；`computeDeltaMs(reference, …)`（:257）投影 best 圈算实时 delta。导出端直接复用这些纯函数（"算什么"复用，只换"画在哪"）。
+- **视频↔遥测时钟同步纯函数就绪**：`VideoTelemetrySync.frameWallClock(videoStartedAtWallClock, framePtsMs)`（`feature/test/.../recording/VideoTelemetrySync.kt:32`）+ `findNearestSampleIndex`（:51 二分最近邻）+ `lapPlayheadRange(lapStart, lapEnd, leadIn=3000)`（:92）+ `isWithinVideoCoverage`（:117）+ `playheadToVideoPosition`（:138）。导出端按帧 PTS → wallClock → 查样本，复用同一套。
+- **overlay 绘制层已"数学/绘制分离"（关键复用前提）**：`SpeedometerGauge`（`feature/test/.../ui/tracktech/SpeedometerGauge.kt`）/ `GForceBall`（GForceBall.kt）/ `TrackMiniMap`（TrackMiniMap.kt）三组件均把**纯数学**（`GaugeMath.speedToNeedleAngle`/`gForceToBallOffset`、`TrackMiniMapProjection.project`，均已单测）与**绘制层**分离；绘制层全部用 `DrawScope` 标准图元（`drawCircle`/`drawLine`/`drawPath`/`drawArc`）+ `nativeCanvas.drawText`（SpeedometerGauge.kt:99 已直接调 `android.graphics.Canvas`）。绘制逻辑可下沉成纯 `android.graphics.Canvas` 函数两端复用。
+- **视频源是 app 私有文件**：`CameraRecordingEngine`（`feature/test/.../recording/CameraRecordingEngine.kt:343`）录到 `filesDir/video/<ts>.mp4`（`FileOutputOptions`），`TelemetrySession.videoFilePath`/`videoStartedAtWallClock` 落 Room schema v6（`core/domain/.../TelemetryModels.kt:50-53`）。导出**读** app 私有源（无需存储权限），**写** 公共相册（MediaStore）。
+- **平台 API 齐全**：`compileSdk=34` / `minSdk=28`（`feature/test/build.gradle.kts:10-13`）下 `MediaExtractor`/`MediaCodec`（decoder+encoder）/`MediaMuxer`/`Surface`/GLES20 离屏渲染（EGL pbuffer / SurfaceTexture）+ `MediaStore.Video`（scoped storage）全部是 platform API（API 18+/21+/29+ 早于 28），**无需任何第三方库**（不引 FFmpeg / mp4parser / media3-transformer）。media3 1.3.1 已在依赖里（`feature/test/build.gradle.kts:63`），但导出走纯 platform MediaCodec/GL，不依赖 media3-transformer。
+
+**用户场景**：用户进 session 详情屏，某圈行点"导出带数据视频"（区别于现有的"播放"图标）→ app 后台逐帧离线烧录该圈视频段（解码原始帧 → GL 把视频帧 + overlay 图层合成到每个像素 → 编码新 mp4 → MediaMuxer 封装），过程中显示进度条（"导出中 47%"，可取消）；完成后新 mp4 落系统相册 Movies/，弹"已保存到相册"+ 可直接拉起系统分享。导出文件画面四角与回放一致：左上速度指针表、右上 G 球摩擦圆、左下圈速计时 + delta、右下赛道小地图当前点。**这是"成片"——任何播放器打开都自带数据图层，可分享。**
+
+## What Changes
+
+- **新增 overlay 共享绘制层**（纯 `android.graphics.Canvas` 绘制函数，`feature/test/.../overlay/OverlayCanvasPainter.kt`）：把 `SpeedometerGauge`/`GForceBall`/`TrackMiniMap` 的绘制逻辑抽成 `drawSpeedometer(canvas, cx, cy, radius, speedKmh)` / `drawGForceBall(canvas, …, latG, lonG)` / `drawTrackMiniMap(canvas, …, points, currentLat, currentLon)` / `drawLapTimePanel(canvas, …, lapNumber, elapsedMs, deltaMs)` 等纯函数（吃 `android.graphics.Canvas` + `Paint`），消费**同一套** `GaugeMath` / `TrackMiniMapProjection` 纯数学（design Decision 1）。**回放端（Compose）改为复用此共享层**（`Canvas { drawIntoCanvas { drawSpeedometer(it.nativeCanvas, …) } }`），导出端在 GL 合成的 overlay `Bitmap` 的 `Canvas` 上调同一套 → 两端 1 套绘制代码，杜绝双份维护漂移。
+- **新增 GL 离屏烧录管线**（`feature/test/.../export/VideoExportPipeline.kt` + GL helper `OverlayGlRenderer.kt` / `OverlayEglCore.kt`）：`MediaExtractor` 抽原始视频轨 → `MediaCodec` decoder 解码到 `SurfaceTexture`（GL external texture）→ GLES20 离屏渲染（先把视频帧外部纹理画满帧，再把当前帧 overlay `Bitmap`（共享绘制层产出）作为纹理叠上）→ 渲染到 encoder input `Surface` → `MediaCodec` encoder（H.264 AVC）编码 → `MediaMuxer` 封装新 mp4（含音轨直通 copy，见 design Decision 6）。
+- **按圈裁剪**：用 `lapStartWallClock - leadIn` / `lapEndWallClock`（复用 `VideoTelemetrySync.lapPlayheadRange`）算圈在视频内的起止 position（`playheadToVideoPosition`），`MediaExtractor.seekTo(startUs, SEEK_TO_PREVIOUS_SYNC)` 起、decode 到圈尾 position 止。圈头/尾超视频覆盖段（`isWithinVideoCoverage` false）的处理见 design Decision 5（一期：只导有视频覆盖的段 + 钳到覆盖边界，黑帧段不导出）。
+- **每帧 overlay 数据**：decoder 输出每帧 PTS（presentationTimeUs）→ `frameWallClock(videoStartedAtWallClock, pts/1000)` → `findNearestSampleIndex` 查 `OverlayFrame` + `resolveCurrentLap` + `computeDeltaMs`（全部复用 round 6 纯函数），算出该帧 overlay 数据 → 共享绘制层画到 overlay `Bitmap` → 上传为 GL 纹理叠帧。
+- **MediaStore 导出**：编码完成的 mp4 写 `MediaStore.Video`（`RELATIVE_PATH=Movies/BlazePush`）。Android 10+（API 29+）走 scoped storage（`MediaStore` content URI，`IS_PENDING` 两段式写入，无需任何运行时权限）；API 28（Q 以下）走 `WRITE_EXTERNAL_STORAGE` 运行时权限 + `MediaStore.Video` 兼容路径（design Decision 7）。
+- **导出执行 + 进度 UI**：导出是耗时操作（逐帧解码+GL+编码），用前台 Service + 通知进度（design Decision 4）执行，不阻塞 UI；详情屏点"导出"→ 启动导出 + 显示进度对话框（百分比 + 取消）；完成弹"已保存到相册" + 系统分享 Intent（`ACTION_SEND` video/mp4）。
+- **manifest**：app manifest 加 `WRITE_EXTERNAL_STORAGE`（`android:maxSdkVersion="28"`，仅 API 28 需要）+ 前台 Service 声明（`FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROCESSING` API 34）。
+
+**不做（§10 backlog）**：多圈拼接成一个长视频导出（一期一圈一文件）；overlay 布局/字段在导出时自定义（沿用回放固定四角）；导出分辨率/码率用户可选（一期同源分辨率 + 固定码率档，见 design Decision 8）；导出黑屏段（圈头/尾超视频覆盖段叠 overlay 的黑帧导出，一期只导有视频段，见 Decision 5 backlog）；非 LAP_SESSION（加减速测试）视频导出；HDR / 10-bit 色深 / 竖屏视频导出（一期假设横屏 H.264 8-bit）。
+
+## Impact
+
+- 改 `app/src/main/AndroidManifest.xml`（`WRITE_EXTERNAL_STORAGE maxSdkVersion=28` + 前台 Service 声明）+ `LapSessionDetailScreen.kt`（圈行加"导出"入口 + 进度对话框）；新增 `OverlayCanvasPainter.kt`（共享绘制层）+ `VideoExportPipeline.kt` + `OverlayGlRenderer.kt` + `OverlayEglCore.kt`（GL 管线）+ `VideoExportService.kt`（前台 Service）+ `VideoExportMediaStoreWriter.kt`（MediaStore 写入）+ 单测。
+- **回放端绘制改为复用共享层**：`SpeedometerGauge`/`GForceBall`/`TrackMiniMap` 的 `Canvas` 块改调 `OverlayCanvasPainter`（同视觉、行为不变）——这是**内部重构**（不改公共协议 / 不改 overlay 视觉 / 不改 round 6 纯函数签名），但属"修改现有共享 UI 组件"，apply 期 #16 自查 verify 回放端视觉零回归（真机比对回放 overlay 不变）。
+- **公共协议 0 改动**；GPS 接收链路 / binary writer / crossing / 圈速 LapTimingEngine **0 改动**（纯消费已有 reader API + 纯函数）；**Room schema 0 改动**（v6 已含 video 字段，纯读）；录制链路 `CameraRecordingEngine` **0 改动**。
+- **新增第三方依赖 = 0**（纯 platform MediaCodec/GL/MediaStore；media3 已在依赖里但导出不用 media3-transformer）。
+- **复杂度判定**：见 design Context —— 因 (a) 引入新能力（视频导出管线）(b) 修改现有共享 UI 组件（回放绘制层重构）→ 按 `Round 复杂度分级` 表特征属 **large**（GL/MediaCodec 多组件 + 共享层重构 + 前台 Service）；road-test-first 模式下（user 已授权该批）仅意味更谨慎的 CC 自审 + 密集 FileLogger 埋点，不调 Opus 子 agent（见 CLAUDE.md road-test-first 节）。是否拆分多 round 待 user/主会话拍板（见 design "待拍板"）。
+- **真机依赖**：GL 离屏渲染 + MediaCodec 编解码兼容性（厂商 ROM 差异大）+ 烧录耗时 + 内存（解码帧 + GL 纹理 + overlay Bitmap）+ MediaStore 落相册可见性 + 分享 Intent + 不同分辨率/帧率视频源必须真机验（模拟器 MediaCodec / GL 不可靠）。road-test-first 攒批路测；本 round 涉及 overlay 视觉一致性 → 小屏（vivo V2405A）gate 必走（验证导出成片 overlay 与回放一致 + 不畸变）。
