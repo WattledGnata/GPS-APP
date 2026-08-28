@@ -101,7 +101,16 @@
     <string name="live_camera_viewfinder">相机 · 取景</string>
     <string name="live_current_speed">当前车速</string>
     <string name="live_satellites">卫星</string>
+    <string name="live_satellite_count_compact">%1$d星</string>
+    <string name="live_satellite_count_unknown">--星</string>
     <string name="live_main_rate">主数据频率</string>
+    <string name="live_data_age">数据年龄</string>
+    <string name="live_gps_live">持续刷新</string>
+    <string name="live_gps_acquiring_fix">等待定位</string>
+    <string name="live_gps_stabilizing">稳定中</string>
+    <string name="live_gps_waiting_main">等待数据</string>
+    <string name="live_gps_interrupted">数据中断</string>
+    <string name="live_gps_disconnected">BLE 断开</string>
     <string name="live_delta">时差</string>
     <string name="live_current">当前圈</string>
     <string name="live_last">上一圈</string>

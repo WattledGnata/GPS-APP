@@ -33,6 +33,7 @@ fun MetricTile(
     valueColor: Color? = null,
     // 遥测数字优先完整显示；仅调用方显式设置时限制数字字号的系统放大上限。
     maxValueFontScale: Float? = null,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
 ) {
     CutCornerPanel(
         modifier = modifier.fillMaxWidth(),
@@ -40,7 +41,10 @@ fun MetricTile(
         cutCorners = cutCornersAll,
         contentPadding = 12.dp,
     ) {
-        Column(horizontalAlignment = Alignment.Start) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = horizontalAlignment,
+        ) {
             Text(
                 text = label,
                 style = TrackTechTypography.UiTextLabel,

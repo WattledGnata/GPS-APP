@@ -101,7 +101,16 @@
     <string name="live_camera_viewfinder">CAMERA · VIEWFINDER</string>
     <string name="live_current_speed">CURRENT SPEED</string>
     <string name="live_satellites">SATELLITES</string>
+    <string name="live_satellite_count_compact">%1$d sats</string>
+    <string name="live_satellite_count_unknown">-- sats</string>
     <string name="live_main_rate">MAIN RATE</string>
+    <string name="live_data_age">DATA AGE</string>
+    <string name="live_gps_live">LIVE</string>
+    <string name="live_gps_acquiring_fix">NO FIX</string>
+    <string name="live_gps_stabilizing">STABILIZING</string>
+    <string name="live_gps_waiting_main">WAITING DATA</string>
+    <string name="live_gps_interrupted">DATA LOST</string>
+    <string name="live_gps_disconnected">BLE OFFLINE</string>
     <string name="live_delta">DELTA</string>
     <string name="live_current">CURRENT</string>
     <string name="live_last">LAST</string>

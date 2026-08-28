@@ -104,6 +104,7 @@ import kotlin.math.abs
 
 private const val HOLD_DURATION_MS = 1500L
 private const val HOLD_TICK_MS = 16L
+private const val GPS_HEARTBEAT_UI_TICK_MS = 100L
 
 /**
  * 圈速 Live Session 主屏：强制横屏 + 屏幕常亮 + 拦截返回手势 + 2x2 dashboard + HOLD TO END。
@@ -148,6 +149,7 @@ fun LapLiveScreen(
     val currentMode by sessionViewModel.currentMode.collectAsState()
     val debugCaptureStats by sessionViewModel.debugCaptureStats.collectAsState()
     val lapGpsReadiness by sessionViewModel.lapGpsReadiness.collectAsState()
+    val filteredSpeedKmh by sessionViewModel.filteredSpeedKmh.collectAsState()
     val gpsDataViewModel = koinInject<GpsDataViewModel>()
     val gpsData by gpsDataViewModel.gpsData.collectAsState()
     val connectionState by gpsDataViewModel.connectionState.collectAsState()
@@ -457,6 +459,7 @@ fun LapLiveScreen(
                 debugCaptureStats = debugCaptureStats,
                 gpsData = gpsData,
                 connectionState = connectionState,
+                filteredSpeedKmh = filteredSpeedKmh,
                 onConfirmEnd = onConfirmEnd,
                 hasCamera = hasCamera,
                 recordingState = recordingState,
@@ -545,12 +548,32 @@ private fun LapHudPage(
     debugCaptureStats: DebugCaptureStats,
     gpsData: GpsData,
     connectionState: ConnectionState,
+    filteredSpeedKmh: Double,
     onConfirmEnd: () -> Unit,
     hasCamera: Boolean,
     recordingState: RecordingState,
     onStopRecording: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var heartbeatNowElapsedRealtimeMs by remember {
+        mutableLongStateOf(SystemClock.elapsedRealtime())
+    }
+    LaunchedEffect(isDebugCapture) {
+        if (!isDebugCapture) {
+            while (true) {
+                heartbeatNowElapsedRealtimeMs = SystemClock.elapsedRealtime()
+                delay(GPS_HEARTBEAT_UI_TICK_MS)
+            }
+        }
+    }
+    val heartbeat = LapGpsHeartbeatPresentationMapper.present(
+        connectionState = connectionState,
+        readiness = lapGpsReadiness,
+        gpsData = gpsData,
+        filteredSpeedKmh = filteredSpeedKmh,
+        nowElapsedRealtimeMs = heartbeatNowElapsedRealtimeMs,
+    )
+
     Box(
         modifier = modifier
             .background(TrackTechColors.Background)
@@ -567,6 +590,7 @@ private fun LapHudPage(
                 isDebugCapture = isDebugCapture,
                 connectionState = connectionState,
                 gpsData = gpsData,
+                heartbeat = heartbeat,
             )
 
             val abnormal = lapLiveState.abnormalState
@@ -586,30 +610,34 @@ private fun LapHudPage(
                         .fillMaxWidth()
                         .weight(1f),
                 )
-            } else if (isHardInterrupt) {
-                AbnormalBanner(
-                    state = abnormal!!,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                 ) {
-                    Lap2x2Dashboard(
-                        state = lapLiveState,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    if (abnormal != null) {
-                        SoftSignalHint(
-                            state = abnormal,
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 4.dp),
+                    if (isHardInterrupt) {
+                        AbnormalBanner(
+                            state = abnormal!!,
+                            modifier = Modifier.fillMaxSize(),
                         )
+                    } else {
+                        Lap2x2Dashboard(
+                            state = lapLiveState,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        LapGpsSpeedIsland(
+                            presentation = heartbeat,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                        if (abnormal != null) {
+                            SoftSignalHint(
+                                state = abnormal,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 4.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -637,6 +665,46 @@ private fun LapHudPage(
         if (hasCamera && recordingState !is RecordingState.Recording) {
             SwipeToCameraHint(
                 modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LapGpsSpeedIsland(
+    presentation: LapGpsHeartbeatPresentation,
+    modifier: Modifier = Modifier,
+) {
+    val accent = when (presentation.state) {
+        LapGpsHeartbeatState.LIVE -> TrackTechColors.Green
+        LapGpsHeartbeatState.ACQUIRING_FIX,
+        LapGpsHeartbeatState.STABILIZING,
+        LapGpsHeartbeatState.WAITING_MAIN,
+        -> TrackTechColors.Purple
+        LapGpsHeartbeatState.STALE,
+        LapGpsHeartbeatState.DISCONNECTED,
+        -> TrackTechColors.Red
+    }
+    val speedText = presentation.speedKmh?.let { "%.0f".format(Locale.US, it) } ?: "--"
+
+    CutCornerPanel(
+        modifier = modifier
+            .width(116.dp)
+            .height(72.dp),
+        cutSize = 16.dp,
+        cutCorners = cutCornersAll,
+        fillColor = TrackTechColors.SurfaceDark,
+        borderColor = accent,
+        borderWidth = 2.dp,
+        contentPadding = 6.dp,
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = speedText,
+                style = TrackTechTypography.MechanicalLarge,
+                color = if (presentation.speedKmh != null) TrackTechColors.TextPrimary else accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -933,6 +1001,7 @@ private fun LapLiveTopStrip(
     isDebugCapture: Boolean = false,
     connectionState: ConnectionState? = null,
     gpsData: GpsData? = null,
+    heartbeat: LapGpsHeartbeatPresentation? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -996,23 +1065,74 @@ private fun LapLiveTopStrip(
                 overflow = TextOverflow.Ellipsis,
             )
         } else {
-            val gpsPresentation = GpsReadinessPresentationMapper.present(
+            val status = heartbeat ?: LapGpsHeartbeatPresentationMapper.present(
+                connectionState = connectionState ?: ConnectionState.DISCONNECTED,
+                readiness = lapGpsReadiness,
+                gpsData = gpsData ?: GpsData.Empty,
+                filteredSpeedKmh = 0.0,
+                nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            )
+            val readinessPresentation = GpsReadinessPresentationMapper.present(
                 readiness = lapGpsReadiness,
                 connectionState = connectionState ?: ConnectionState.DISCONNECTED,
             )
+            val statusRes = when (status.state) {
+                LapGpsHeartbeatState.STALE,
+                LapGpsHeartbeatState.DISCONNECTED,
+                -> heartbeatStatusRes(status.state)
+                else -> readinessPresentation.shortLabelRes
+            }
+            val statusLabel = stringResource(statusRes)
+            val frequency = status.frequencyHz?.let { "%.0fHz".format(Locale.US, it) } ?: "--Hz"
+            val satellites = status.satelliteCount?.let {
+                stringResource(R.string.live_satellite_count_compact, it)
+            } ?: stringResource(R.string.live_satellite_count_unknown)
+            val age = status.ageMs?.let {
+                if (it < 1_000L) "${it}ms" else "%.1fs".format(Locale.US, it / 1_000.0)
+            } ?: "--"
+            val accent = when (status.state) {
+                LapGpsHeartbeatState.STALE,
+                LapGpsHeartbeatState.DISCONNECTED,
+                -> TrackTechColors.Red
+                else -> when (readinessPresentation.tone) {
+                    GpsReadinessTone.READY -> TrackTechColors.Green
+                    GpsReadinessTone.CONNECTING -> TrackTechColors.Purple
+                    GpsReadinessTone.WAITING -> TrackTechColors.TextMuted
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(accent),
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
-                text = stringResource(gpsPresentation.shortLabelRes),
-                style = TrackTechTypography.UiTextSmall,
-                color = if (gpsPresentation.tone == GpsReadinessTone.READY) {
-                    TrackTechColors.Green
-                } else {
-                    TrackTechColors.TextMuted
+                text = buildString {
+                    append(statusLabel)
+                    append(" · ")
+                    append(frequency)
+                    append(" · ")
+                    append(satellites)
+                    append(" · ")
+                    append(age)
                 },
+                style = TrackTechTypography.UiTextSmall,
+                color = accent,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
     }
+}
+
+private fun heartbeatStatusRes(state: LapGpsHeartbeatState): Int = when (state) {
+    LapGpsHeartbeatState.LIVE -> R.string.live_gps_live
+    LapGpsHeartbeatState.ACQUIRING_FIX -> R.string.live_gps_acquiring_fix
+    LapGpsHeartbeatState.STABILIZING -> R.string.live_gps_stabilizing
+    LapGpsHeartbeatState.WAITING_MAIN -> R.string.live_gps_waiting_main
+    LapGpsHeartbeatState.STALE -> R.string.live_gps_interrupted
+    LapGpsHeartbeatState.DISCONNECTED -> R.string.live_gps_disconnected
 }
 
 internal fun debugBleStatusText(connectionState: ConnectionState?): String = when (connectionState) {
@@ -1309,6 +1429,7 @@ private fun Lap2x2Dashboard(
                 accentColor = TrackTechColors.Cyan,
                 valueSize = MetricSize.Large,
                 valueKind = MetricKind.Score,
+                horizontalAlignment = Alignment.End,
             )
         }
         Row(
@@ -1336,6 +1457,7 @@ private fun Lap2x2Dashboard(
                 accentColor = TrackTechColors.Purple,
                 valueSize = MetricSize.Large,
                 valueKind = MetricKind.Score,
+                horizontalAlignment = Alignment.End,
             )
         }
     }
