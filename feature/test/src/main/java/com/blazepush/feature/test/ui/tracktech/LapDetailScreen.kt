@@ -1,11 +1,8 @@
 // @IgnoreFormatCheck
 package com.blazepush.feature.test.ui.tracktech
 
-import android.net.Uri
-import android.provider.OpenableColumns
+import android.content.Intent
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +24,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,6 +69,8 @@ import com.blazepush.feature.test.datastore.UserProfileRepository
 import com.blazepush.feature.test.export.LapPlaybackLoader
 import com.blazepush.feature.test.export.LapVboExportPreparation
 import com.blazepush.feature.test.export.RaceLogicVboLapExporter
+import com.blazepush.feature.test.export.RaceLogicVboSessionExporter
+import com.blazepush.feature.test.export.VboShareFileStore
 import com.blazepush.feature.test.recording.VideoTelemetrySync
 import com.blazepush.feature.test.repository.TrackCatalog
 import com.blazepush.feature.test.viewmodel.TestSessionViewModel
@@ -111,45 +112,7 @@ fun LapDetailScreen(
     var lapEvidenceLoaded by remember(sessionId, lapIndex) { mutableStateOf(false) }
     val context = LocalContext.current
     val exportScope = rememberCoroutineScope()
-    var pendingVboDocument by remember { mutableStateOf<RaceLogicVboLapExporter.Document?>(null) }
-    val vboDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
-    ) { uri: Uri? ->
-        val document = pendingVboDocument
-        pendingVboDocument = null
-        // A null URI is the normal SAF cancellation result: no error feedback.
-        if (uri != null && document != null) {
-            exportScope.launch {
-                val writeResult = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val resolver = context.contentResolver
-                        val output = resolver.openOutputStream(uri, "w")
-                            ?: error("Storage provider returned no output stream")
-                        output.bufferedWriter(Charsets.UTF_8).use { writer -> writer.write(document.text) }
-                        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
-                        } ?: document.fileName
-                    }
-                }
-                writeResult.onSuccess { actualFileName ->
-                    val message = buildString {
-                        append(context.getString(R.string.detail_vbo_export_success, actualFileName, document.exportedSampleCount))
-                        if (document.omittedSampleCount > 0) {
-                            append(context.getString(R.string.detail_vbo_export_omitted, document.omittedSampleCount))
-                        }
-                        if (!document.boundaryComplete) {
-                            append(context.getString(R.string.detail_vbo_export_incomplete_boundary))
-                        }
-                    }
-                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                }.onFailure { throwable ->
-                    FileLogger.e("LapVboExport", "write failed uri=$uri", throwable)
-                    Toast.makeText(context, R.string.detail_vbo_export_failed, Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
+    var vboShareInProgress by remember { mutableStateOf(false) }
 
     // lap-detail-triview-panel:视频面板数据(2026-06-05 二轮:改用 LapPlaybackLoader 共享
     // 加载管线——overlay 帧/圈窗口/赛道点与全屏页同源;load 失败(无视频/无覆盖)即不渲染面板)。
@@ -246,29 +209,79 @@ fun LapDetailScreen(
     }
 
     val quality = LapConfidencePolicy.evaluate(lapEvidence)
-    val startVboExport = {
+    fun openShareChooser(sharedFile: VboShareFileStore.SharedFile, title: String) {
+        val send = VboShareFileStore.createSendIntent(context, sharedFile)
+        context.startActivity(Intent.createChooser(send, title))
+    }
+
+    val shareLapVbo = {
         when (val preparation = LapVboExportPreparation.resolve(lapTelemetry, lapEvidence, lapEvidenceLoaded)) {
             LapVboExportPreparation.Loading ->
                 Toast.makeText(context, R.string.detail_vbo_export_loading, Toast.LENGTH_LONG).show()
             LapVboExportPreparation.NoTelemetry ->
                 Toast.makeText(context, R.string.detail_vbo_export_no_data, Toast.LENGTH_LONG).show()
             is LapVboExportPreparation.Ready -> {
-                when (val result = RaceLogicVboLapExporter.export(preparation.telemetry, preparation.metadata)) {
-                    is RaceLogicVboLapExporter.Result.Ready -> {
-                        pendingVboDocument = result.document
-                        vboDocumentLauncher.launch(result.document.fileName)
-                    }
-                    is RaceLogicVboLapExporter.Result.Rejected -> {
-                        val message = when (result.reason) {
-                            RaceLogicVboLapExporter.Rejection.EMPTY_SAMPLES -> R.string.detail_vbo_export_empty
-                            RaceLogicVboLapExporter.Rejection.NO_VALID_POSITION_SAMPLES ->
-                                R.string.detail_vbo_export_no_valid_position
-                            RaceLogicVboLapExporter.Rejection.NO_VALID_REQUIRED_FIELDS ->
-                                R.string.detail_vbo_export_no_valid_required_fields
+                if (!vboShareInProgress) exportScope.launch {
+                    vboShareInProgress = true
+                    try {
+                        val result = withContext(Dispatchers.IO) {
+                            RaceLogicVboLapExporter.export(preparation.telemetry, preparation.metadata)
                         }
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        when (result) {
+                            is RaceLogicVboLapExporter.Result.Ready -> {
+                                val shared = withContext(Dispatchers.IO) {
+                                    VboShareFileStore.writeText(context, result.document.fileName, result.document.text)
+                                }
+                                openShareChooser(shared, context.getString(R.string.detail_share_lap_vbo))
+                            }
+                            is RaceLogicVboLapExporter.Result.Rejected -> {
+                                val message = when (result.reason) {
+                                    RaceLogicVboLapExporter.Rejection.EMPTY_SAMPLES -> R.string.detail_vbo_export_empty
+                                    RaceLogicVboLapExporter.Rejection.NO_VALID_POSITION_SAMPLES ->
+                                        R.string.detail_vbo_export_no_valid_position
+                                    RaceLogicVboLapExporter.Rejection.NO_VALID_REQUIRED_FIELDS ->
+                                        R.string.detail_vbo_export_no_valid_required_fields
+                                }
+                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    } catch (throwable: Throwable) {
+                        FileLogger.e("LapVboShare", "share preparation failed sid=$sessionId lap=$lapIndex", throwable)
+                        Toast.makeText(context, R.string.detail_vbo_export_failed, Toast.LENGTH_LONG).show()
+                    } finally {
+                        vboShareInProgress = false
                     }
                 }
+            }
+        }
+    }
+
+    val shareSessionVbo = {
+        if (!vboShareInProgress) exportScope.launch {
+            vboShareInProgress = true
+            try {
+                val prepared = withContext(Dispatchers.IO) {
+                    val snapshot = telemetryRepository.getLapSessionExportSnapshot(sessionId)
+                        ?: error("Lap session is unavailable")
+                    trackCatalog.getAllTracks()
+                    val track = snapshot.session.trackId?.let(trackCatalog::getTrack)
+                    val displayTrack = snapshot.session.trackNameSnapshot ?: snapshot.session.trackId ?: "Track"
+                    val fileName = RaceLogicVboSessionExporter.buildFileName(displayTrack, snapshot.session.startTs)
+                    lateinit var exportResult: RaceLogicVboSessionExporter.Result
+                    val shared = VboShareFileStore.write(context, fileName) { writer ->
+                        exportResult = RaceLogicVboSessionExporter.write(snapshot, track, writer)
+                        if (exportResult is RaceLogicVboSessionExporter.Result.Rejected) {
+                            error("Session VBO rejected: ${(exportResult as RaceLogicVboSessionExporter.Result.Rejected).reason}")
+                        }
+                    }
+                    shared
+                }
+                openShareChooser(prepared, context.getString(R.string.detail_share_session_vbo))
+            } catch (throwable: Throwable) {
+                FileLogger.e("SessionVboShare", "share preparation failed sid=$sessionId", throwable)
+                Toast.makeText(context, R.string.detail_session_vbo_share_failed, Toast.LENGTH_LONG).show()
+            } finally {
+                vboShareInProgress = false
             }
         }
     }
@@ -280,7 +293,9 @@ fun LapDetailScreen(
     ) {
         LapDetailHeader(
             onBack = { navController.popBackStack() },
-            onExportVbo = startVboExport,
+            shareInProgress = vboShareInProgress,
+            onShareLapVbo = shareLapVbo,
+            onShareSessionVbo = shareSessionVbo,
         )
         val confidenceLabel = when (quality.confidence) {
             LapConfidence.Clean -> stringResource(R.string.detail_quality_clean)
@@ -527,8 +542,11 @@ internal fun deriveAccelerationG(samples: List<LapTelemetrySample>): List<LapTel
 @Composable
 private fun LapDetailHeader(
     onBack: () -> Unit,
-    onExportVbo: () -> Unit,
+    shareInProgress: Boolean,
+    onShareLapVbo: () -> Unit,
+    onShareSessionVbo: () -> Unit,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -558,22 +576,55 @@ private fun LapDetailHeader(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.weight(1f))
-        val exportShape = CutCornerPanelShape(6.dp, cutCornersAll)
-        Box(
-            modifier = Modifier
-                .clip(exportShape)
-                .border(1.dp, TrackTechColors.Cyan, exportShape)
-                .clickable(onClick = onExportVbo)
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.detail_export_vbo),
-                style = TrackTechTypography.UiTextLabel,
-                color = TrackTechColors.Cyan,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Box {
+            val exportShape = CutCornerPanelShape(6.dp, cutCornersAll)
+            Box(
+                modifier = Modifier
+                    .clip(exportShape)
+                    .border(1.dp, TrackTechColors.Cyan, exportShape)
+                    .clickable(enabled = !shareInProgress) { menuExpanded = true }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(if (shareInProgress) R.string.detail_vbo_share_preparing else R.string.detail_export_vbo),
+                    style = TrackTechTypography.UiTextLabel,
+                    color = TrackTechColors.Cyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = stringResource(R.string.detail_share_lap_vbo),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onShareLapVbo()
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = stringResource(R.string.detail_share_session_vbo),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onShareSessionVbo()
+                    },
+                )
+            }
         }
     }
 }

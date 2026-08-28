@@ -234,6 +234,65 @@ class BinaryLapTelemetryRoundTripTest {
         assertNull("activeSessionStartTs should be cleared after endSession", repo.activeSessionStartTs)
     }
 
+    @Test
+    fun `session export snapshot preserves samples outside complete lap windows`() = runTest {
+        val sessionId = repo.startSession(
+            TelemetrySessionType.LAP_SESSION,
+            trackId = "track-1",
+            trackNameSnapshot = "成都天府国际赛道",
+        )
+        val start = requireNotNull(repo.activeSessionStartTs)
+        listOf(0L, 1_000L, 2_000L, 3_000L).forEach { repo.writeSample(lapSample(it)) }
+        repo.flush()
+        repo.writeCrossing(
+            com.blazepush.core.domain.model.TelemetryCrossingEvent(
+                sessionId = sessionId,
+                lapIndex = 0,
+                crossingTimestampMs = 1_000L,
+                crossingWallClockTimestampMs = start + 1_000L,
+                speedKmh = 100.0,
+                gateId = "SF",
+                gateType = "StartFinish",
+                accepted = true,
+                reason = "",
+                directionScore = 1.0,
+            ),
+        )
+        repo.writeCrossing(
+            com.blazepush.core.domain.model.TelemetryCrossingEvent(
+                sessionId = sessionId,
+                lapIndex = 1,
+                crossingTimestampMs = 2_000L,
+                crossingWallClockTimestampMs = start + 2_000L,
+                speedKmh = 100.0,
+                gateId = "SF",
+                gateType = "StartFinish",
+                accepted = true,
+                reason = "",
+                directionScore = 1.0,
+            ),
+        )
+
+        val snapshot = requireNotNull(repo.getLapSessionExportSnapshot(sessionId))
+
+        assertEquals(listOf(0L, 1_000L, 2_000L, 3_000L), snapshot.samples.map { it.tsDeltaMs })
+        assertEquals(2, snapshot.crossings.size)
+        assertEquals("track-1", snapshot.session.trackId)
+    }
+
+    @Test
+    fun `session export snapshot keeps metadata when binary is missing`() = runTest {
+        val sessionId = repo.startSession(TelemetrySessionType.LAP_SESSION)
+        val entity = requireNotNull(fakeSessionDao.queryBySessionId(sessionId))
+        repo.flush()
+        File(entity.binaryFilePath).delete()
+
+        val snapshot = requireNotNull(repo.getLapSessionExportSnapshot(sessionId))
+
+        assertTrue(snapshot.samples.isEmpty())
+        assertEquals(sessionId, snapshot.session.sessionId)
+    }
+
     /**
      * case H（Codex review §1 修订）：源码 grep gate，防御 ViewModel 写入公式回退。
      *

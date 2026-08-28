@@ -17,13 +17,17 @@ import java.io.File
  * 这是原 KDoc 预言的"未来 UI round 引入消费时放宽"场景。故 LapSessionDetailScreen.kt 从禁止文件移到
  * 合法消费方白名单（其消费形态是 detail 屏圈列表排序 key，非 UI 显示数字）。其余 UI 显示文件仍禁止。
  *
+ * **share-lap-and-session-vbo round 放宽（2026-08-26）**：整节 VBO 导出器需要用已接受的终点线
+ * wallClock 与采样点时间配对，才能输出与详情页一致、可追溯的完整圈摘要。该字段仅作为导出配对 key，
+ * 不参与 UI 数字展示，故 RaceLogicVboSessionExporter.kt 加入合法消费方白名单。
+ *
  * 实现要点（v3 review v3 §C#2 修订）：
  * - **MUST 用 projectRoot() helper**（参 PresetTrackAssetTest.kt:26-32），禁止裸字面量相对路径
  *   （Gradle 跑 :feature:test:testDebugUnitTest 时 working dir = feature/test/，相对路径解析失败）
  * - 排除条件：(a) `/src/test/` 测试目录（避免 case 自身字符串 trip） (b) `/.worktrees/` 仓库内多 worktree 副本
  * - 三层断言：
  *   1. 下界：扫描到的 .kt 文件总数 ≥ 50（防 path 拼错或 worktree 内跑导致 0 文件假性绿）
- *   2. 命中文件必须 ⊆ 合法消费方白名单（TestSessionViewModel.kt 写入端 + LapSessionDetailScreen.kt 配对消费端）
+ *   2. 命中文件必须 ⊆ 合法消费方白名单（写入端 + 详情配对端 + 整节 VBO 导出端）
  *   3. 明示禁止文件不命中（任一命中即 fail）
  *
  * @author CC
@@ -36,7 +40,7 @@ class CrossingWallClockEscapeContractTest {
      * §6.7 case D' · 跨文件逃逸 grep gate。
      */
     @Test
-    fun `crossingWallClockTimestampMs only appears in TestSessionViewModel main src`() {
+    fun `crossingWallClockTimestampMs only appears in approved main consumers`() {
         val mainDir = File(projectRoot(), "feature/test/src/main")
         assertTrue(
             "feature/test/src/main 目录必须存在: ${mainDir.absolutePath}",
@@ -67,9 +71,11 @@ class CrossingWallClockEscapeContractTest {
         // 第 2 层断言：命中文件必须 ⊆ 合法消费方白名单（unify-lap-count-pairing-semantics round 放宽）。
         // - TestSessionViewModel.kt：写入端（crossing wallClock 来源）
         // - LapSessionDetailScreen.kt：deriveDetailMetrics 配对消费端（圈编号与 getLapTelemetry 同源 key）
+        // - RaceLogicVboSessionExporter.kt：整节 VBO 圈摘要与采样时间配对端（非 UI 展示）
         val allowedConsumers = setOf(
             "TestSessionViewModel.kt",
             "LapSessionDetailScreen.kt",
+            "RaceLogicVboSessionExporter.kt",
         )
         val escaped = hitFileNames.filterNot { it in allowedConsumers }
         assertEquals(

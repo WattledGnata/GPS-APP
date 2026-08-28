@@ -81,6 +81,14 @@ class TelemetryRepository(
         val failed: List<FailedLapSessionRecovery>,
     )
 
+    /** Immutable repository snapshot consumed by whole-session evidence exporters. */
+    data class LapSessionExportSnapshot(
+        val session: TelemetrySession,
+        val samples: List<TelemetrySample>,
+        val crossings: List<TelemetryCrossingEvent>,
+        val evidenceByLap: Map<Int, LapEvidence>,
+    )
+
     private data class PersistedLapEvidence(
         val lapCount: Int,
         val bestLapMs: Long?,
@@ -445,6 +453,27 @@ class TelemetryRepository(
 
     suspend fun getLapEvidenceForSession(sessionId: String): Map<Int, LapEvidence> =
         lapEvidenceDao?.findBySession(sessionId).orEmpty().associate { it.lapIndex to it.toDomainEvidence() }
+
+    /**
+     * Read the complete persisted LAP_SESSION evidence in one IO-bound snapshot.
+     *
+     * Unlike [getLapTelemetry], this intentionally includes samples before the first complete lap
+     * and after the last crossing. Missing/corrupt binary data is represented by an empty sample
+     * list so the export layer can return a precise rejection without crossing repository layers.
+     */
+    suspend fun getLapSessionExportSnapshot(sessionId: String): LapSessionExportSnapshot? =
+        withContext(telemetryIoDispatcher) {
+            val entity = sessionDao.queryBySessionId(sessionId) ?: return@withContext null
+            if (entity.sessionType != TelemetrySessionType.LAP_SESSION.name) return@withContext null
+            LapSessionExportSnapshot(
+                session = entity.toDomain(),
+                samples = runCatching { PerformanceTestTelemetryReader.read(entity.binaryFilePath) }
+                    .getOrDefault(emptyList()),
+                crossings = crossingDao.queryBySessionId(sessionId).map { it.toDomain() },
+                evidenceByLap = lapEvidenceDao?.findBySession(sessionId).orEmpty()
+                    .associate { it.lapIndex to it.toDomainEvidence() },
+            )
+        }
 
     private fun LapEvidenceEntity.toDomainEvidence(): LapEvidence = LapEvidence(
         version = evidenceVersion,
