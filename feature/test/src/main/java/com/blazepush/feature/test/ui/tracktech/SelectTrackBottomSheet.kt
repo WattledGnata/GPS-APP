@@ -106,7 +106,6 @@ private fun HeaderRow(title: String, onClose: () -> Unit) {
             color = TrackTechColors.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
         )
         Spacer(Modifier.weight(1f))
         CloseButton(onClose = onClose)
@@ -160,7 +159,7 @@ private fun TrackSelectionRow(
                 .size(width = 96.dp, height = 64.dp),
         )
         Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f, fill = false)) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = track.name.zh,
                 style = TrackTechTypography.RacingTitleMedium,
@@ -178,14 +177,19 @@ private fun TrackSelectionRow(
             )
         }
         Spacer(Modifier.width(8.dp))
-        if (isCurrent) {
-            Text(
-                text = "当前",
-                style = TrackTechTypography.UiTextLabel,
-                color = TrackTechColors.Green,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Box(
+            modifier = Modifier.width(48.dp),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            if (isCurrent) {
+                Text(
+                    text = "当前",
+                    style = TrackTechTypography.UiTextLabel,
+                    color = TrackTechColors.Green,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
