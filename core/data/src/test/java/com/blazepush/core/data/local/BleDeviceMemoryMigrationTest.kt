@@ -24,8 +24,8 @@ class BleDeviceMemoryMigrationTest {
         // "链尾 endVersion == @Database version"（Room runtime 配套校验的 JVM 侧等价物）。
         // 7→8 的存在性由 migrationChain_containsSevenToEight 独立守护，不受链尾更替影响。
         val last = AppDatabase.migrationChain.last()
-        assertEquals(9, last.startVersion)
-        assertEquals(10, last.endVersion)
+        assertEquals(10, last.startVersion)
+        assertEquals(11, last.endVersion)
     }
 
     @Test

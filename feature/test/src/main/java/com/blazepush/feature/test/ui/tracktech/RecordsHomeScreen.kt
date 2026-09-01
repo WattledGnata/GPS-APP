@@ -54,6 +54,7 @@ import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.data.repository.IncompleteLapSessionRecoveryCoordinator
 import com.blazepush.core.domain.model.TelemetrySession
 import com.blazepush.core.domain.model.TestResultSummary
+import com.blazepush.core.domain.model.TestTemplate
 import com.blazepush.feature.test.model.track.Track
 import com.blazepush.feature.test.FileLogger
 import com.blazepush.feature.test.R
@@ -365,9 +366,10 @@ private fun produceCurveSamples(best: TestResultSummary?): SpeedCurveData? {
     // 读 binary 是 IO；对 ~250 sample（10 秒 25 Hz）级别成本约 < 5ms，远低于一次 recomposition。
     // remember 按 dataFilePath 缓存，切换 best record 才重读。
     return remember(best.id, best.dataFilePath) {
-        val samples = PerformanceTestTelemetryReader.read(best.dataFilePath)
+        val template = TestTemplate.fromId(best.testTemplateId) ?: return@remember null
+        val samples = PerformanceTestTelemetryReader.readResultPoints(best.dataFilePath, template, best.window)
         if (samples.isEmpty()) return@remember null
-        val points = samples.map { it.tsDeltaMs / 1000f to it.speedKmh.toFloat() }
+        val points = samples.map { it.elapsedTime.toFloat() to it.speed.toFloat() }
         val maxSec = points.maxOf { it.first }.coerceAtLeast(1f)
         val maxSpeed = points.maxOf { it.second }.coerceAtLeast(100f)
         val hundredAt = points.firstOrNull { it.second >= 100f }?.first

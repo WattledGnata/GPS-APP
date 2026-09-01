@@ -268,6 +268,7 @@
     <string name="gps_details_title">GPS 详情</string>
     <string name="gps_section_signal">信号</string>
     <string name="gps_section_stream">数据流</string>
+    <string name="gps_section_time">当前时间</string>
     <string name="gps_section_position">位置</string>
     <string name="gps_section_device">设备</string>
     <string name="state_ready">已就绪</string>
@@ -285,6 +286,9 @@
     <string name="gps_label_fresh">新鲜度</string>
     <string name="gps_label_dropped">丢包</string>
     <string name="gps_label_last_packet">最后数据包</string>
+    <string name="gps_label_protocol_time">GPS 协议时间（本地时区）</string>
+    <string name="gps_time_synced">时间已同步</string>
+    <string name="gps_time_waiting_anchor">等待 UUID 4 时间锚点</string>
     <string name="gps_label_latitude">纬度</string>
     <string name="gps_label_longitude">经度</string>
     <string name="gps_label_altitude">海拔</string>

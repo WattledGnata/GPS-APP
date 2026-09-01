@@ -40,22 +40,7 @@ class TestResultRepository(
      * 保存测试结果 + 速度分段；dataFilePath 现指向 binary chunk file。
      */
     suspend fun saveResult(result: TestResult) {
-        val entity = TestRecordEntity(
-            id = result.id,
-            testTemplateId = result.template.id,
-            testType = result.template.name,
-            carModel = result.carModel,
-            deviceName = "RaceChrono GPS",
-            deviceAddress = "",
-            result = String.format("%.2f", result.totalTime),
-            timestamp = result.timestamp,
-            totalTime = result.totalTime,
-            totalDistance = result.totalDistance,
-            avgAcceleration = result.avgAcceleration,
-            maxAcceleration = result.maxAcceleration,
-            maxDeceleration = result.maxDeceleration,
-            dataFilePath = result.dataFilePath,
-        )
+        val entity = result.toRecordEntity()
         testRecordDao.insertTestRecord(entity)
 
         val segmentEntities = result.segments.map { seg ->
@@ -101,6 +86,19 @@ class TestResultRepository(
         totalTime = totalTime,
         totalDistance = totalDistance,
         dataFilePath = dataFilePath,
+        window = if (
+            windowAlgorithmVersion > 0 &&
+            windowStartSampleIndex != null && windowEndSampleIndex != null &&
+            windowStartDeltaMs != null && windowEndDeltaMs != null
+        ) {
+            com.blazepush.core.domain.model.PerformanceResultWindow(
+                windowStartSampleIndex,
+                windowEndSampleIndex,
+                windowStartDeltaMs,
+                windowEndDeltaMs,
+                windowAlgorithmVersion,
+            )
+        } else null,
     )
 
     /**
@@ -213,3 +211,25 @@ class TestResultRepository(
             Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
 }
+
+internal fun TestResult.toRecordEntity(): TestRecordEntity = TestRecordEntity(
+    id = id,
+    testTemplateId = template.id,
+    testType = template.name,
+    carModel = carModel,
+    deviceName = deviceSnapshot.displayName,
+    deviceAddress = deviceSnapshot.address,
+    result = String.format("%.2f", totalTime),
+    timestamp = timestamp,
+    totalTime = totalTime,
+    totalDistance = totalDistance,
+    avgAcceleration = avgAcceleration,
+    maxAcceleration = maxAcceleration,
+    maxDeceleration = maxDeceleration,
+    dataFilePath = dataFilePath,
+    windowStartSampleIndex = window?.startSampleIndex,
+    windowEndSampleIndex = window?.endSampleIndex,
+    windowStartDeltaMs = window?.startDeltaMs,
+    windowEndDeltaMs = window?.endDeltaMs,
+    windowAlgorithmVersion = window?.algorithmVersion ?: 0,
+)

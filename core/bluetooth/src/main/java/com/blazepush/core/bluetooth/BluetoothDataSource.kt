@@ -458,7 +458,7 @@ class BluetoothDataSource(
                         if (parseResult.isTimeSynced) {
                             TimingHandshakeState.SYNCHRONIZED
                         } else {
-                            TimingHandshakeState.WAITING_SYNCHRONIZED_MAIN
+                            TimingHandshakeState.WAITING_TIME
                         }
                     }
                     TimingHandshakeState.SYNCHRONIZED -> {
@@ -548,6 +548,7 @@ class BluetoothDataSource(
                     timingHandshakeState = timingHandshakeState,
                 )
             }
+            bleConnection?.updateTimingHandshakeState(timingHandshakeState)
         }
     }
 

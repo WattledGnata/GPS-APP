@@ -207,8 +207,8 @@ class AppDatabaseMigrationSqlTest {
         // 本测试名称保留兼容（rename 需重构，scope-boundary 暂不动），断言已更新为 4。
         // 完整的 size=4 断言见 `migrationChain contains exactly four migrations`。
         assertEquals(
-            "migrationChain must contain 8 migrations: migration2To3..migration9To10",
-            8,
+            "migrationChain must contain 9 migrations: migration2To3..migration10To11",
+            9,
             AppDatabase.migrationChain.size
         )
     }
@@ -320,8 +320,8 @@ class AppDatabaseMigrationSqlTest {
     @Test
     fun `migrationChain contains exactly four migrations`() {
         assertEquals(
-            "migrationChain must contain 8 migrations: migration2To3..migration9To10",
-            8,
+            "migrationChain must contain 9 migrations: migration2To3..migration10To11",
+            9,
             AppDatabase.migrationChain.size
         )
     }
@@ -347,8 +347,8 @@ class AppDatabaseMigrationSqlTest {
             expectedNextStart = migration.endVersion
         }
         assertEquals(
-            "migrationChain must end at v10",
-            10,
+            "migrationChain must end at v11",
+            11,
             expectedNextStart
         )
     }
@@ -365,5 +365,26 @@ class AppDatabaseMigrationSqlTest {
             assertTrue("legacy pending field must remain nullable: $sql", !sql.contains("NOT NULL"))
         }
         assertTrue(AppDatabase.migration9To10Sql.none { it.contains("DROP TABLE") || it.contains("DELETE FROM") })
+    }
+
+    @Test
+    fun `migration10To11 adds nullable window boundaries and version zero`() {
+        assertEquals(10, AppDatabase.migration10To11.startVersion)
+        assertEquals(11, AppDatabase.migration10To11.endVersion)
+        assertEquals(5, AppDatabase.migration10To11Sql.size)
+        for (column in listOf(
+            "windowStartSampleIndex",
+            "windowEndSampleIndex",
+            "windowStartDeltaMs",
+            "windowEndDeltaMs",
+        )) {
+            val sql = AppDatabase.migration10To11Sql.single { it.contains("ADD COLUMN $column") }
+            assertTrue("legacy boundary must remain nullable: $sql", !sql.contains("NOT NULL"))
+        }
+        assertTrue(
+            AppDatabase.migration10To11Sql.single { it.contains("windowAlgorithmVersion") }
+                .contains("NOT NULL DEFAULT 0"),
+        )
+        assertTrue(AppDatabase.migration10To11Sql.none { it.contains("DROP TABLE") || it.contains("DELETE FROM") })
     }
 }

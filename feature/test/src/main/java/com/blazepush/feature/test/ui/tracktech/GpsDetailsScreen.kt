@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +50,9 @@ import com.blazepush.core.domain.model.QualityLevel
 import com.blazepush.feature.test.R
 import com.blazepush.feature.test.viewmodel.GpsDataViewModel
 import org.koin.compose.koinInject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun GpsDetailsScreen(
@@ -105,6 +109,9 @@ fun GpsDetailsScreen(
 
         DetailsSection(title = stringResource(R.string.gps_section_stream))
         DataStreamGrid(frequencyHz = frequencyHz, dataQuality = dataQuality)
+
+        DetailsSection(title = stringResource(R.string.gps_section_time))
+        GpsTimePanel(gpsData = gpsData)
 
         DetailsSection(title = stringResource(R.string.gps_section_position))
         PositionPanel(gpsData = gpsData)
@@ -466,6 +473,64 @@ private fun DataStreamGrid(frequencyHz: Int, dataQuality: DataQuality) {
                 dotColor = if (isFresh) TrackTechColors.Green else TrackTechColors.Red,
                 modifier = Modifier.weight(1f),
             )
+        }
+    }
+}
+
+@Composable
+private fun GpsTimePanel(gpsData: GpsData) {
+    val isTimeSynced = gpsData.isTimeSynced && gpsData.timestamp != Long.MIN_VALUE
+    val displayTime = remember(gpsData.timestamp, isTimeSynced) {
+        if (isTimeSynced) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS XXX", Locale.getDefault())
+                .format(Date(gpsData.timestamp))
+        } else {
+            "---- -- -- --:--:--.---"
+        }
+    }
+    val statusColor = if (isTimeSynced) TrackTechColors.Green else TrackTechColors.Red
+
+    CutCornerPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        cutSize = 10.dp,
+        cutCorners = cutCornersAll,
+        borderColor = statusColor.copy(alpha = 0.5f),
+        contentPadding = 16.dp,
+    ) {
+        Column {
+            Text(
+                text = stringResource(R.string.gps_label_protocol_time),
+                style = TrackTechTypography.UiTextSmall,
+                color = TrackTechColors.TextMuted,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = displayTime,
+                style = TrackTechTypography.UiTextBody,
+                color = if (isTimeSynced) TrackTechColors.Cyan else TrackTechColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .background(statusColor, CircleShape),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = if (isTimeSynced) {
+                        stringResource(R.string.gps_time_synced)
+                    } else {
+                        stringResource(R.string.gps_time_waiting_anchor)
+                    },
+                    style = TrackTechTypography.UiTextSmall,
+                    color = TrackTechColors.TextSecondary,
+                )
+            }
         }
     }
 }

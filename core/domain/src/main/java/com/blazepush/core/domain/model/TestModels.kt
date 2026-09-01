@@ -21,6 +21,35 @@ data class GpsDataPoint(
     val altitude: Double
 )
 
+/** 原始性能遥测中最终成绩窗口的可追溯边界。 */
+data class PerformanceResultWindow(
+    val startSampleIndex: Int,
+    val endSampleIndex: Int,
+    val startDeltaMs: Long,
+    val endDeltaMs: Long,
+    val algorithmVersion: Int = CURRENT_ALGORITHM_VERSION,
+) {
+    companion object {
+        const val CURRENT_ALGORITHM_VERSION = 1
+    }
+}
+
+/** 测试开始时冻结的 BLE 设备身份。 */
+data class PerformanceDeviceSnapshot(
+    val displayName: String = "",
+    val address: String = "",
+) {
+    companion object {
+        fun resolve(alias: String?, deviceName: String?, address: String?): PerformanceDeviceSnapshot {
+            val normalizedAddress = address?.trim().orEmpty()
+            val displayName = alias?.takeIf { it.isNotBlank() }?.trim()
+                ?: deviceName?.takeIf { it.isNotBlank() }?.trim()
+                ?: normalizedAddress
+            return PerformanceDeviceSnapshot(displayName = displayName, address = normalizedAddress)
+        }
+    }
+}
+
 /**
  * 速度分段数据 - 10km/h一段
  */
@@ -113,6 +142,7 @@ data class TestSession(
     val id: String,
     val template: TestTemplate,
     val carModel: String,
+    val deviceSnapshot: PerformanceDeviceSnapshot = PerformanceDeviceSnapshot(),
     var startTime: Long,  // 用 var 允许在 markStarted 时更新为触发时刻
     // 触发前2秒的滤波数据（触发时锁定传入）
     val preTriggerData: List<FilteredGpsData> = emptyList(),
@@ -193,7 +223,9 @@ data class TestResult(
     val maxDeceleration: Double = 0.0,
     val segments: List<SpeedSegment>,
     val dataPoints: List<GpsDataPoint>,
-    val dataFilePath: String        // 原始数据文件路径
+    val dataFilePath: String,       // 原始数据文件路径
+    val window: PerformanceResultWindow? = null,
+    val deviceSnapshot: PerformanceDeviceSnapshot = PerformanceDeviceSnapshot(),
 )
 
 /**
@@ -216,6 +248,7 @@ data class TestResultSummary(
     // 需要透 dataFilePath 直接读 binary dataPoints 画真实曲线 + 100 km/h 标注，避免再多走一层
     // Repository getDataPointsForResult flow 包装。值为空字符串视为无 binary。
     val dataFilePath: String = "",
+    val window: PerformanceResultWindow? = null,
 )
 
 /**

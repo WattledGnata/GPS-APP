@@ -19,9 +19,11 @@ import com.blazepush.feature.test.datastore.RecentTracksStoreApi
 import com.blazepush.core.bluetooth.BleDeviceManager
 import com.blazepush.core.data.repository.TelemetryRepository
 import com.blazepush.core.data.repository.TestResultRepository
+import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.PerformanceDeviceSnapshot
 import com.blazepush.core.domain.model.TelemetryCrossingEvent
 import com.blazepush.core.domain.model.TelemetrySample
 import com.blazepush.core.domain.model.TelemetrySessionType
@@ -1002,11 +1004,11 @@ class TestSessionViewModel(
                     val start = liveAttemptStartTs ?: filteredData.timestamp.also { liveAttemptStartTs = it }
                     _liveAttemptElapsedSeconds.value = (filteredData.timestamp - start) / 1000.0
                 }
-                val sessionStartTs = telemetryRepository.activeSessionStartTs
-                if (sessionStartTs != null) {
+                val gpsOriginTs = activeTestStartTs
+                if (gpsOriginTs != null) {
                     telemetryRepository.writeSample(
                         TelemetrySample(
-                            tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
+                            tsDeltaMs = (filteredData.timestamp - gpsOriginTs).coerceAtLeast(0L),
                             lat = filteredData.latitude,
                             lon = filteredData.longitude,
                             speedKmh = filteredData.speed,
@@ -1016,7 +1018,7 @@ class TestSessionViewModel(
                 } else {
                     FileLogger.e(
                         TAG,
-                        "processFilteredData: missing activeSessionStartTs, skip telemetry write but test pipeline continues"
+                        "processFilteredData: missing activeTestStartTs, skip telemetry write but test pipeline continues"
                     )
                 }
                 // unify-speed-judgement-source Decision 1:判停用滤波后速度(speed 字段替换),
@@ -1086,6 +1088,8 @@ class TestSessionViewModel(
             id = UUID.randomUUID().toString(),
             template = template,
             carModel = carModel,
+            deviceSnapshot = runCatching { gpsDataViewModel.snapshotConnectedDevice() }.getOrNull()
+                ?: PerformanceDeviceSnapshot(),
             startTime = filteredData.timestamp
         )
 
@@ -1106,12 +1110,11 @@ class TestSessionViewModel(
         activeTestStartTs = anchorTs
         val sessionId = telemetryRepository.startSession(TelemetrySessionType.PERFORMANCE_TEST)
         activeTestSessionId = sessionId
-        val sessionStartTs = telemetryRepository.activeSessionStartTs
-        if (sessionStartTs != null) {
-            for (frame in lockedPreTriggerBuffer) {
+        if (telemetryRepository.activeSessionStartTs != null) {
+            for (frame in seqForLive) {
                 telemetryRepository.writeSample(
                     TelemetrySample(
-                        tsDeltaMs = System.currentTimeMillis() - sessionStartTs,
+                        tsDeltaMs = (frame.timestamp - anchorTs).coerceAtLeast(0L),
                         lat = frame.latitude,
                         lon = frame.longitude,
                         speedKmh = frame.speed,
@@ -1122,7 +1125,7 @@ class TestSessionViewModel(
         } else {
             FileLogger.e(
                 TAG,
-                "startTest preTrigger backfill: missing activeSessionStartTs after startSession, skip telemetry write"
+                "startTest initial backfill: missing activeSessionStartTs after startSession, skip telemetry write"
             )
         }
 
@@ -1380,12 +1383,16 @@ class TestSessionViewModel(
                 ""
             }
             val result = calculateResultUseCase(session, binaryFilePath)
+            val persistedSampleCount = runCatching {
+                PerformanceTestTelemetryReader.read(binaryFilePath).size
+            }.getOrDefault(0)
             // fix-accel-last-crossing design Decision 5:窗口摘要日志（core/domain 无 FileLogger 依赖,锚点放 VM）
             // dnf = 计时窗口缺失（未真正过终点线/未起步）;points=窗口内/全量 反映剔除量
             FileLogger.d(
                 TAG,
                 "perfResult window: total=${"%.2f".format(result.totalTime)}s dist=${"%.1f".format(result.totalDistance)}m " +
-                    "points=${result.dataPoints.size}/${session.dataPoints.size} dnf=${result.dataPoints.isEmpty()}"
+                    "points=${result.dataPoints.size}/${session.dataPoints.size} binary=$persistedSampleCount " +
+                    "aligned=${persistedSampleCount == session.dataPoints.size} dnf=${result.dataPoints.isEmpty()}"
             )
             testResultRepository.saveResult(result)
             _testState.value = TestState.Completed(result)

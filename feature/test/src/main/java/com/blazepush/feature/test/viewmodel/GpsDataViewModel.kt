@@ -18,6 +18,7 @@ import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.DataQuality
 import com.blazepush.core.domain.model.DataStats
 import com.blazepush.core.domain.model.GpsData
+import com.blazepush.core.domain.model.PerformanceDeviceSnapshot
 import com.blazepush.core.domain.usecase.DataQualityEvaluator
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -35,6 +36,19 @@ class GpsDataViewModel(
     // ble-device-memory round：设备记忆（别名/已保存列表/记录管理）
     private val bluetoothDeviceRepository: BluetoothDeviceRepository,
 ) : ViewModel() {
+
+    /** 查询持久化记录并冻结当前连接设备身份，避免依赖 StateFlow 是否已有 UI 订阅。 */
+    suspend fun snapshotConnectedDevice(): PerformanceDeviceSnapshot {
+        val address = connectedDeviceAddress.value
+        val saved = address?.let { target ->
+            bluetoothDeviceRepository.getSavedDevices().firstOrNull { it.address == target }
+        }
+        return PerformanceDeviceSnapshot.resolve(
+            alias = saved?.alias,
+            deviceName = saved?.name ?: connectedDeviceName.value,
+            address = address,
+        )
+    }
 
     // GPS数据流（直接使用repository的数据）
     val gpsData: StateFlow<GpsData> = gpsDataRepository.gpsDataFlow

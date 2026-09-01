@@ -243,38 +243,25 @@ class BinaryPerftestTelemetryRoundTripTest {
     /**
      * case E：源码 grep gate 时钟域单源自检（与 spec.md Scenario 5 对齐）。
      * 在 TestSessionViewModel.kt 内 grep：
-     *   (1) `filteredData.timestamp - (anchorTs|activeTestStartTs)` 命中数 == 0（修复后归零）
-     *   (2) `frame.timestamp - anchorTs` 命中数 == 0（修复后归零）
-     *   正向 (3) `currentTimeMillis() - sessionStartTs` 命中数 == 4
-     *     （A round bridgeGpsToLapTiming + 本 round startTest preTrigger + 本 round processFilteredData
-     *      + 2026-08-02 Debug Capture telemetry 写样本路径）
+     * 性能测试必须用 GPS 相对时间，圈速/Debug Capture 仍保留 wall clock。
      */
     @Test
     fun `case E - clock domain single-source grep gate in TestSessionViewModel`() {
         val source = locateTestSessionViewModelFile().readText()
 
-        val forbiddenPattern1 = Regex("""filteredData\.timestamp\s*-\s*(anchorTs|activeTestStartTs)""")
+        val forbiddenPattern1 = Regex("""filteredData\.timestamp\s*-\s*gpsOriginTs""")
         val forbiddenPattern2 = Regex("""frame\.timestamp\s*-\s*anchorTs""")
         val matches1 = forbiddenPattern1.findAll(source).map { it.value }.toList()
         val matches2 = forbiddenPattern2.findAll(source).map { it.value }.toList()
-        assertEquals(
-            "禁止的协议时间减法 (filteredData.timestamp - anchorTs/activeTestStartTs)：${matches1.joinToString()}",
-            0,
-            matches1.size,
-        )
-        assertEquals(
-            "禁止的协议时间减法 (frame.timestamp - anchorTs)：${matches2.joinToString()}",
-            0,
-            matches2.size,
-        )
+        assertEquals("运行帧必须使用 GPS 相对时间：${matches1.joinToString()}", 1, matches1.size)
+        assertEquals("初始帧必须使用 GPS 相对时间：${matches2.joinToString()}", 1, matches2.size)
 
         val correctPattern = Regex("""System\.currentTimeMillis\(\)\s*-\s*sessionStartTs""")
         val correctMatches = correctPattern.findAll(source).map { it.value }.toList()
         assertEquals(
-            "正向 anchor 同源公式应命中 4 处（A round bridgeGpsToLapTiming + 本 round startTest preTrigger 回填 + " +
-                "本 round processFilteredData + 2026-08-02 Debug Capture telemetry 写样本路径）；" +
+            "wall clock 公式只应保留圈速与 Debug Capture 两处；" +
                 "实际命中：${correctMatches.size}",
-            4,
+            2,
             correctMatches.size,
         )
     }
@@ -283,7 +270,7 @@ class BinaryPerftestTelemetryRoundTripTest {
      * case F：跨文件 grep gate 防漏改 + 防扫错路径假性绿（与 spec.md Scenario 6 对齐）。
      * 用 helper 上溯到 feature/test/src/main/java，递归 .kt 文件 grep
      * `tsDeltaMs = X.timestamp - Y` 形态：
-     *   (a) 命中数 == 0（无任何文件用协议时间形态）
+     *   (a) 恰好命中性能测试运行帧和初始帧两处
      *   (b) 扫到的 .kt 文件总数 ≥ 30（防扫错路径假性绿）
      * MUST 排除 src/test 子树。
      * 注（ble-device-memory round 修正，对齐 CrossingWallClockEscapeContractTest:48-50 已验证结论）：
@@ -304,15 +291,12 @@ class BinaryPerftestTelemetryRoundTripTest {
             ktFiles.size >= 30,
         )
 
-        val forbiddenPattern = Regex("""tsDeltaMs\s*=\s*[a-zA-Z_]+\.timestamp\s*-""")
+        val forbiddenPattern = Regex("""tsDeltaMs\s*=\s*\(?[a-zA-Z_]+\.timestamp\s*-""")
         val violations = ktFiles.flatMap { f ->
             forbiddenPattern.findAll(f.readText()).map { "${f.relativeTo(mainJavaRoot)}: ${it.value}" }
         }
-        assertEquals(
-            "禁止的 tsDeltaMs = X.timestamp - Y 形态命中（修复后应 0）：\n${violations.joinToString("\n")}",
-            0,
-            violations.size,
-        )
+        assertEquals("性能测试 GPS 相对时间应恰好命中两处：\n${violations.joinToString("\n")}", 2, violations.size)
+        assertTrue(violations.all { it.startsWith("com/blazepush/feature/test/viewmodel/TestSessionViewModel.kt") })
     }
 
     /**
@@ -364,9 +348,9 @@ class BinaryPerftestTelemetryRoundTripTest {
 
         // 形态 A (processFilteredData)
         val pfdRange = functionRange("private suspend fun processFilteredData")
-        val p1 = firstLineIn(pfdRange) { it.contains("val sessionStartTs = telemetryRepository.activeSessionStartTs") }
-        val p2 = firstLineIn(pfdRange) { it.contains("if (sessionStartTs != null)") }
-        val p3 = firstLineIn(pfdRange) { it.contains("\"processFilteredData: missing activeSessionStartTs") }
+        val p1 = firstLineIn(pfdRange) { it.contains("val gpsOriginTs = activeTestStartTs") }
+        val p2 = firstLineIn(pfdRange) { it.contains("if (gpsOriginTs != null)") }
+        val p3 = firstLineIn(pfdRange) { it.contains("\"processFilteredData: missing activeTestStartTs") }
         // fix-perftest-case-g-shape-drift(2026-06-07):P4 锚点同步 unify-speed-judgement-source
         // round(02cfb94)Decision 1——判停改用滤波后速度(raw.copy(speed = filteredData.speed)),
         // 与成绩窗口同源。M round 锁的 anchor fallback 语义(P1-P3)不受影响;新锚点同时锁住
@@ -383,10 +367,10 @@ class BinaryPerftestTelemetryRoundTripTest {
 
         // 形态 B (startTest preTrigger 回填)
         val stRange = functionRange("private suspend fun startTest")
-        val q1 = firstLineIn(stRange) { it.contains("val sessionStartTs = telemetryRepository.activeSessionStartTs") }
-        val q2 = firstLineIn(stRange) { it.contains("if (sessionStartTs != null)") }
-        val q3 = firstLineIn(stRange) { it.contains("for (frame in lockedPreTriggerBuffer)") }
-        val q4 = firstLineIn(stRange) { it.contains("\"startTest preTrigger backfill: missing activeSessionStartTs") }
+        val q1 = firstLineIn(stRange) { it.contains("if (telemetryRepository.activeSessionStartTs != null)") }
+        val q2 = q1
+        val q3 = firstLineIn(stRange) { it.contains("for (frame in seqForLive)") }
+        val q4 = firstLineIn(stRange) { it.contains("\"startTest initial backfill: missing activeSessionStartTs") }
 
         assertTrue("startTest 形态 B: q1 未命中", q1 >= 0)
         assertTrue("startTest 形态 B: q2 未命中", q2 >= 0)
@@ -395,7 +379,7 @@ class BinaryPerftestTelemetryRoundTripTest {
 
         // 形态 C - 本 round scope 收紧的 FileLogger.e 命中数（排除 A round bridgeGpsToLapTiming）
         val scopedPattern = Regex(
-            """FileLogger\.e\([\s\S]*?"(processFilteredData|startTest preTrigger backfill)[\s\S]*?missing activeSessionStartTs""",
+            """FileLogger\.e\([\s\S]*?"(processFilteredData|startTest initial backfill)[\s\S]*?missing active(TestStartTs|SessionStartTs)""",
         )
         val scopedMatches = scopedPattern.findAll(source).map { it.value }.toList()
         assertEquals(

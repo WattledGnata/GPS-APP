@@ -36,7 +36,7 @@ import com.blazepush.core.data.local.entity.VideoSegmentEntity
         VideoSegmentEntity::class,
         LapEvidenceEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 /**
@@ -413,6 +413,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        internal val migration10To11Sql: List<String> = listOf(
+            "ALTER TABLE test_records ADD COLUMN windowStartSampleIndex INTEGER",
+            "ALTER TABLE test_records ADD COLUMN windowEndSampleIndex INTEGER",
+            "ALTER TABLE test_records ADD COLUMN windowStartDeltaMs INTEGER",
+            "ALTER TABLE test_records ADD COLUMN windowEndDeltaMs INTEGER",
+            "ALTER TABLE test_records ADD COLUMN windowAlgorithmVersion INTEGER NOT NULL DEFAULT 0",
+        )
+
+        val migration10To11: Migration = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                migration10To11Sql.forEach { db.execSQL(it) }
+            }
+        }
+
         /**
          * 完整迁移链（v2→v10），供 AppModule Room builder 和 JVM 单测使用。
          * v1 由 AppModule 的 destructiveMigrationFrom(1) 兜底（pre-A56 开发期 v1 schema，旧包名，无 release 用户）。
@@ -431,6 +445,7 @@ abstract class AppDatabase : RoomDatabase() {
             migration7To8,
             migration8To9,
             migration9To10,
+            migration10To11,
         )
     }
 }

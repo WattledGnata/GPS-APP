@@ -36,10 +36,15 @@ import androidx.compose.ui.unit.dp
 import com.blazepush.core.data.local.binary.PerformanceTestTelemetryReader
 import com.blazepush.core.data.local.entity.TestRecordEntity
 import com.blazepush.core.domain.model.GpsDataPoint
+import com.blazepush.core.domain.model.PerformanceResultWindow
 import com.blazepush.core.domain.model.SpeedSegment
 import com.blazepush.core.domain.model.TestTemplate
+import com.blazepush.core.domain.usecase.AccelerationSmoother
+import com.blazepush.core.domain.usecase.GRAVITY_MS2
+import com.blazepush.core.domain.usecase.TimedSpeedSample
 import com.blazepush.feature.test.R
 import com.blazepush.feature.test.ui.components.GForceChart
+import com.blazepush.feature.test.ui.components.GForceChartMode
 import com.blazepush.feature.test.ui.components.SpeedChart
 import com.blazepush.feature.test.viewmodel.TestHistoryViewModel
 import org.koin.androidx.compose.koinViewModel
@@ -87,37 +92,46 @@ fun PerformanceResultScreen(
             return
         }
 
-        val dataPoints = remember(record.dataFilePath) {
-            PerformanceTestTelemetryReader.read(record.dataFilePath).map { sample ->
-                GpsDataPoint(
-                    elapsedTime = sample.tsDeltaMs / 1000.0,
-                    speed = sample.speedKmh,
-                    latitude = sample.lat,
-                    longitude = sample.lon,
-                    altitude = 0.0,
+        val template = TestTemplate.fromId(record.testTemplateId)
+        val persistedWindow = remember(record) { record.toPerformanceResultWindow() }
+        val dataPoints = remember(record.dataFilePath, template, persistedWindow) {
+            if (template == null) emptyList()
+            else PerformanceTestTelemetryReader.readResultPoints(record.dataFilePath, template, persistedWindow)
+        }
+        val displayRecord = remember(record, dataPoints) {
+            if (dataPoints.size < 2) record else {
+                val metrics = deriveWindowAccelerationMetrics(dataPoints)
+                record.copy(
+                    avgAcceleration = metrics.avgG,
+                    maxAcceleration = metrics.maxAccelerationG,
+                    maxDeceleration = metrics.maxDecelerationG,
                 )
             }
         }
-
-        val template = TestTemplate.fromId(record.testTemplateId)
         val segments = remember(dataPoints, template) {
             if (dataPoints.isEmpty() || template == null) emptyList()
             else calculateSegmentsFromPoints(dataPoints, template)
         }
         // PEAK G 按 testTemplateId 二选一（acc → maxAcceleration、brake → maxDeceleration），
         // V1 brake 记录（maxDeceleration == 0）走 "—" 降级；MetricRow 与 GForceChart Y 轴共用此值。
-        val peakG = derivePeakG(record, template)
+        val peakG = derivePeakG(displayRecord, template)
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { HeroSection(record = record, template = template) }
-            item { MetricRow(record = record, template = template, peakG = peakG) }
+            item { HeroSection(record = displayRecord, template = template) }
+            item { MetricRow(record = displayRecord, template = template, peakG = peakG) }
             if (dataPoints.isNotEmpty()) {
-                item { SpeedCurveCard(dataPoints = dataPoints) }
-                item { GForceCurveCard(dataPoints = dataPoints, maxAcceleration = peakG.gForceChartMaxG) }
+                item { SpeedCurveCard(dataPoints = dataPoints, template = template) }
+                item {
+                    GForceCurveCard(
+                        dataPoints = dataPoints,
+                        maxAcceleration = peakG.gForceChartMaxG,
+                        template = template,
+                    )
+                }
             }
             item { SpeedSegmentsHeader() }
             if (segments.isEmpty()) {
@@ -259,7 +273,7 @@ private fun MetricRow(
 }
 
 @Composable
-private fun SpeedCurveCard(dataPoints: List<GpsDataPoint>) {
+private fun SpeedCurveCard(dataPoints: List<GpsDataPoint>, template: TestTemplate?) {
     CutCornerPanel(
         modifier = Modifier.fillMaxWidth(),
         cutSize = 8.dp,
@@ -278,15 +292,51 @@ private fun SpeedCurveCard(dataPoints: List<GpsDataPoint>) {
                 dataPoints = dataPoints,
                 modifier = Modifier.fillMaxWidth(),
                 wrapInCard = false,
+                templateMaxSpeedKmh = template?.let { maxOf(it.startSpeed, it.endSpeed).toDouble() },
             )
         }
     }
 }
 
+private fun TestRecordEntity.toPerformanceResultWindow(): PerformanceResultWindow? {
+    val startIndex = windowStartSampleIndex ?: return null
+    val endIndex = windowEndSampleIndex ?: return null
+    val startDelta = windowStartDeltaMs ?: return null
+    val endDelta = windowEndDeltaMs ?: return null
+    if (windowAlgorithmVersion <= 0) return null
+    return PerformanceResultWindow(
+        startSampleIndex = startIndex,
+        endSampleIndex = endIndex,
+        startDeltaMs = startDelta,
+        endDeltaMs = endDelta,
+        algorithmVersion = windowAlgorithmVersion,
+    )
+}
+
+internal data class WindowAccelerationMetrics(
+    val avgG: Double,
+    val maxAccelerationG: Double,
+    val maxDecelerationG: Double,
+)
+
+internal fun deriveWindowAccelerationMetrics(dataPoints: List<GpsDataPoint>): WindowAccelerationMetrics {
+    val accelerations = AccelerationSmoother.compute(
+        dataPoints.map { TimedSpeedSample(Math.round(it.elapsedTime * 1000.0), it.speed) },
+    )
+    return WindowAccelerationMetrics(
+        avgG = accelerations.map { kotlin.math.abs(it) }.averageOrZero() / GRAVITY_MS2,
+        maxAccelerationG = accelerations.filter { it > 0.0 }.maxOrNull()?.div(GRAVITY_MS2) ?: 0.0,
+        maxDecelerationG = accelerations.filter { it < 0.0 }.minOrNull()?.let { -it / GRAVITY_MS2 } ?: 0.0,
+    )
+}
+
+private fun List<Double>.averageOrZero(): Double = if (isEmpty()) 0.0 else average()
+
 @Composable
 private fun GForceCurveCard(
     dataPoints: List<GpsDataPoint>,
     maxAcceleration: Double,
+    template: TestTemplate?,
 ) {
     CutCornerPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -307,6 +357,11 @@ private fun GForceCurveCard(
                 maxAcceleration = maxAcceleration,
                 modifier = Modifier.fillMaxWidth(),
                 wrapInCard = false,
+                mode = when (template) {
+                    TestTemplate.Acceleration0To100 -> GForceChartMode.ACCELERATION
+                    TestTemplate.Braking100To0 -> GForceChartMode.BRAKING
+                    else -> GForceChartMode.BIDIRECTIONAL
+                },
             )
         }
     }

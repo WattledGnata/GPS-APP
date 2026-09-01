@@ -24,5 +24,10 @@ data class TestRecordEntity(
      * round smooth-perftest-acceleration-curve 引入（Room v4 → v5）。
      */
     val maxDeceleration: Double = 0.0,
-    val dataFilePath: String = ""    // 原始数据文件路径
+    val dataFilePath: String = "",   // 原始数据文件路径
+    val windowStartSampleIndex: Int? = null,
+    val windowEndSampleIndex: Int? = null,
+    val windowStartDeltaMs: Long? = null,
+    val windowEndDeltaMs: Long? = null,
+    val windowAlgorithmVersion: Int = 0,
 )

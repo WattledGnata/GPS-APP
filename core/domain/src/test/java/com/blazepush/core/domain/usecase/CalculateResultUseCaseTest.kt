@@ -61,8 +61,8 @@ class CalculateResultUseCaseTest {
 
     @Test
     fun `100-0 制动 maxDeceleration 大于 0 maxAcceleration 等于 0`() {
-        // 25 帧 25Hz 单调制动：100 → 0 km/h，约 4s
-        val series = (0..24).map { i -> 100.0 - i * 4.0 }
+        // 26 帧 25Hz 单调制动：100 → 0 km/h
+        val series = (0..25).map { i -> 100.0 - i * 4.0 }
         val session = buildSession(TestTemplate.Braking100To0, series)
 
         val result = useCase(session, dataFilePath = "")
@@ -166,16 +166,16 @@ class CalculateResultUseCaseTest {
     }
 
     @Test
-    fun `R2S3 DNF 时 SG 统计量保留`() {
-        // 未破百但有真实加减速:max 加速/减速在 raw 全程计算,不随 DNF 归零
+    fun `R2S3 DNF 时不生成成绩窗口统计`() {
         val series = listOf(0.0, 20.0, 50.0, 80.0, 99.0, 60.0, 30.0, 5.0)
         val session = buildSession(TestTemplate.Acceleration0To100, series)
 
         val result = useCase(session, dataFilePath = "")
 
         assertEquals(0.0, result.totalTime, 1e-9)
-        assertTrue("DNF 仍应保留 maxAcceleration:${result.maxAcceleration}", result.maxAcceleration > 0.1)
-        assertTrue("DNF 仍应保留 maxDeceleration:${result.maxDeceleration}", result.maxDeceleration > 0.1)
+        assertEquals(0.0, result.maxAcceleration, 1e-9)
+        assertEquals(0.0, result.maxDeceleration, 1e-9)
+        assertEquals(null, result.window)
     }
 
     @Test
@@ -219,5 +219,33 @@ class CalculateResultUseCaseTest {
         val result = useCase(session, dataFilePath = "")
 
         assertTrue("窗口必须正序:totalTime=${result.totalTime}", result.totalTime > 0.0)
+    }
+
+    @Test
+    fun `最终窗口保存原始 sample 索引和精确时间偏移`() {
+        val firstAttempt = listOf(0.0, 20.0, 60.0, 90.0, 70.0, 0.0)
+        val finalAttempt = (0..11).map { it * 10.0 }
+        val session = buildSession(TestTemplate.Acceleration0To100, firstAttempt + finalAttempt)
+
+        val result = useCase(session, dataFilePath = "raw.bin")
+        val window = requireNotNull(result.window)
+
+        assertEquals(6, window.startSampleIndex)
+        assertEquals(16, window.endSampleIndex)
+        assertEquals(244L, window.startDeltaMs)
+        assertEquals(640L, window.endDeltaMs)
+        assertEquals(PerformanceResultWindowExtractor.extract(session.dataPoints, session.template)?.dataPoints, result.dataPoints)
+    }
+
+    @Test
+    fun `窗口外 G 尖峰不污染最终成绩统计`() {
+        val cleanFinal = (0..25).map { it * 4.0 }
+        val withOutsideSpike = listOf(0.0, 80.0, 0.0, 90.0, 0.0) + cleanFinal
+        val cleanResult = useCase(buildSession(TestTemplate.Acceleration0To100, cleanFinal), "")
+        val noisyResult = useCase(buildSession(TestTemplate.Acceleration0To100, withOutsideSpike), "")
+
+        assertEquals(cleanResult.maxAcceleration, noisyResult.maxAcceleration, 1e-6)
+        assertEquals(cleanResult.avgAcceleration, noisyResult.avgAcceleration, 1e-6)
+        assertEquals(cleanResult.totalTime, noisyResult.totalTime, 1e-9)
     }
 }

@@ -22,6 +22,7 @@ import com.blazepush.core.domain.model.BleHandshakeStage
 import com.blazepush.core.domain.model.BleHandshakeState
 import com.blazepush.core.domain.model.ConnectionState
 import com.blazepush.core.domain.model.GpsChannelSubscriptionState
+import com.blazepush.core.domain.model.TimingHandshakeState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 import java.util.UUID
 
 /**
@@ -125,6 +127,9 @@ class BleConnection(
     private var activeDescriptorUuid: UUID? = null
     private var batterySetupStarted = false
     private var batteryNotificationsSubscribed = false
+    private var gpsTimeRetryJob: Job? = null
+    @Volatile
+    private var timingHandshakeState = TimingHandshakeState.WAITING_MAIN
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -163,6 +168,7 @@ class BleConnection(
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                logGpsCharacteristicCapabilities(gatt)
                 // 请求更大的MTU以支持28字节数据传输
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                     val mtuRequested = gatt.requestMtu(31)
@@ -242,16 +248,7 @@ class BleConnection(
             value: ByteArray,
             status: Int
         ) {
-            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
-                val percent = if (status == BluetoothGatt.GATT_SUCCESS) {
-                    parseBatteryPercent(value)
-                } else {
-                    null
-                }
-                _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
-                    ?: BatteryCapabilityState.Failed
-                if (percent != null) Log.d(TAG, "Battery level read: $percent%")
-            }
+            handleCharacteristicRead(characteristic, value, status)
         }
 
         @Deprecated("Deprecated in API 33")
@@ -260,15 +257,34 @@ class BleConnection(
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
-                val percent = if (status == BluetoothGatt.GATT_SUCCESS) {
-                    parseBatteryPercent(characteristic.value)
-                } else {
-                    null
+            handleCharacteristicRead(characteristic, characteristic.value, status)
+        }
+
+        private fun handleCharacteristicRead(
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int,
+        ) {
+            when (characteristic.uuid) {
+                BATTERY_LEVEL_UUID -> {
+                    val percent = if (status == BluetoothGatt.GATT_SUCCESS) {
+                        parseBatteryPercent(value)
+                    } else {
+                        null
+                    }
+                    _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
+                        ?: BatteryCapabilityState.Failed
+                    if (percent != null) Log.d(TAG, "Battery level read: $percent%")
                 }
-                _batteryCapability.value = percent?.let(BatteryCapabilityState::Available)
-                    ?: BatteryCapabilityState.Failed
-                if (percent != null) Log.d(TAG, "Battery level read (deprecated): $percent%")
+                GPS_TIME_UUID -> {
+                    val hexDump = value.joinToString("") { "%02X".format(it) }
+                    writeProtocolProbeLog(
+                        "GPS Time probe read: status=$status length=${value.size} value=$hexDump",
+                    )
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        onDataReceived(characteristic.uuid, value)
+                    }
+                }
             }
         }
 
@@ -422,6 +438,84 @@ class BleConnection(
         }
 
         Log.d(TAG, "Writing descriptor for ${characteristic.uuid}")
+    }
+
+    internal fun updateTimingHandshakeState(state: TimingHandshakeState) {
+        timingHandshakeState = state
+        if (state == TimingHandshakeState.WAITING_TIME) {
+            startGpsTimeRetryLoop()
+        } else {
+            gpsTimeRetryJob?.cancel()
+            gpsTimeRetryJob = null
+        }
+    }
+
+    private fun startGpsTimeRetryLoop() {
+        if (gpsTimeRetryJob?.isActive == true) return
+        val gatt = bluetoothGatt ?: return
+        gpsTimeRetryJob = scope.launch {
+            var attempt = 0
+            while (
+                bluetoothGatt === gatt &&
+                timingHandshakeState == TimingHandshakeState.WAITING_TIME
+            ) {
+                val delayMs = when (attempt) {
+                    0 -> 1_500L
+                    1 -> 2_000L
+                    else -> 3_000L
+                }
+                delay(delayMs)
+                if (
+                    bluetoothGatt !== gatt ||
+                    timingHandshakeState != TimingHandshakeState.WAITING_TIME
+                ) {
+                    break
+                }
+                val characteristic =
+                    gatt.getService(SERVICE_UUID)?.getCharacteristic(GPS_TIME_UUID)
+                if (characteristic == null) {
+                    writeProtocolProbeLog(
+                        "GPS Time retry #${attempt + 1}: characteristic missing",
+                    )
+                    attempt++
+                    continue
+                }
+                val supportsRead =
+                    characteristic.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0
+                val started = supportsRead && gatt.readCharacteristic(characteristic)
+                writeProtocolProbeLog(
+                    "GPS Time retry #${attempt + 1}: delayMs=$delayMs " +
+                        "supportsRead=$supportsRead started=$started",
+                )
+                attempt++
+            }
+        }
+    }
+
+    private fun logGpsCharacteristicCapabilities(gatt: BluetoothGatt) {
+        val service = gatt.getService(SERVICE_UUID) ?: return
+        listOf(GPS_MAIN_UUID, GPS_TIME_UUID).forEach { uuid ->
+            val characteristic = service.getCharacteristic(uuid)
+            if (characteristic == null) {
+                writeProtocolProbeLog("GPS capability: uuid=$uuid missing")
+            } else {
+                writeProtocolProbeLog(
+                    "GPS capability: uuid=$uuid properties=0x${characteristic.properties.toString(16)} " +
+                        "read=${characteristic.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0} " +
+                        "notify=${characteristic.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0} " +
+                        "indicate=${characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0} " +
+                        "cccd=${characteristic.getDescriptor(CCCD_UUID) != null}",
+                )
+            }
+        }
+    }
+
+    private fun writeProtocolProbeLog(message: String) {
+        Log.d(TAG, message)
+        runCatching {
+            File(context.filesDir, "ble_protocol_probe.txt")
+                .appendText("${System.currentTimeMillis()} $message\n")
+        }
     }
 
     /**
@@ -588,5 +682,8 @@ class BleConnection(
         _batteryCapability.value = BatteryCapabilityState.Pending
         batterySetupStarted = false
         batteryNotificationsSubscribed = false
+        gpsTimeRetryJob?.cancel()
+        gpsTimeRetryJob = null
+        timingHandshakeState = TimingHandshakeState.WAITING_MAIN
     }
 }
