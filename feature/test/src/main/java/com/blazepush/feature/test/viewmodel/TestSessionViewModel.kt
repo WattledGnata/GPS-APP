@@ -259,7 +259,8 @@ class TestSessionViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     val recentSessionsForCurrentTrack: StateFlow<List<TelemetrySession>> = _currentSelectedTrack
         .filterNotNull()
-        .flatMapLatest { track -> telemetryRepository.getRecentSessionsForTrack(track.id, 5) }
+        // Records -> LAPS 是完整历史入口；页面已有纵向滚动，不能再用首页式的固定条数截断。
+        .flatMapLatest { track -> telemetryRepository.getRecentSessionsForTrack(track.id, Int.MAX_VALUE) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _lapRunConfig = MutableStateFlow<LapRunConfig?>(null)
